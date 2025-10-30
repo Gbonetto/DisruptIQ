@@ -1,0 +1,6 @@
+name;company_name;email;phone;category;specialties;address;city;postal_code
+Jean Dupont;Plomberie Dupont;jean.dupont@plomberie.fr;0601020304;Plomberie;"Dépannage|Rénovation";12 rue de Paris;Paris;75001
+Marie Martin;Électricité Martin;marie.martin@elec.fr;0602030405;Électricité;"Installation|Maintenance";34 avenue Victor Hugo;Lyon;69001
+Pierre Durand;Peinture Durand;pierre.durand@peinture.fr;0603040506;Peinture;"Décoration|Ravalement";56 boulevard Gambetta;Marseille;13001
+Sophie Bernard;Jardinage Bernard;sophie.bernard@jardin.fr;0604050607;Jardinage;"Entretien|Élagage";78 rue Carnot;Toulouse;31000
+Luc Petit;Menuiserie Petit;luc.petit@menuiserie.fr;0605060708;Menuiserie;"Agencement|Parquet";90 place de la République;Bordeaux;33000
