@@ -3,16 +3,20 @@ DisruptIQ - Main FastAPI Application
 Smart RAG System for Property Management
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import structlog
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.endpoints import auth, digest, email_generator, documents, chat, webhooks, admin
+from app.api.endpoints import auth, digest, email_generator, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document
+from app.services.scheduler_service import get_scheduler
 
 # Configure structured logging
 structlog.configure(
@@ -24,6 +28,9 @@ structlog.configure(
 
 logger = structlog.get_logger()
 
+# Configure rate limiter
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute", "1000/hour"])
+
 # Create FastAPI app
 app = FastAPI(
     title="DisruptIQ API",
@@ -33,10 +40,14 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
+# Add rate limiter to app state
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,41 +67,95 @@ async def startup_event():
         logger.error("database_init_failed", error=str(e))
         raise
 
+    # Initialize RAG Service (Qdrant collection)
+    try:
+        from app.services.rag_service import RAGService
+        rag_service = RAGService()
+        await rag_service.initialize()
+        logger.info("rag_service_initialized", message="Qdrant collection ready for indexing")
+    except Exception as e:
+        logger.error("rag_service_init_failed", error=str(e))
+        # Log error but don't fail startup - RAG is important but not critical for basic operations
+        logger.warning("rag_service_startup_warning", message="RAG service failed to initialize, indexing will not work until Qdrant is available")
+
+    # Initialize Redis Cache Service
+    try:
+        from app.services.cache_service import get_cache_service
+        cache_service = get_cache_service()
+        await cache_service.initialize()
+        stats = await cache_service.get_stats()
+        logger.info("cache_service_initialized", **stats)
+    except Exception as e:
+        logger.error("cache_service_init_failed", error=str(e))
+        # Log error but don't fail startup - cache is optional
+        logger.warning("cache_service_startup_warning", message="Cache service failed to initialize, will continue without caching")
+
+    # Start background scheduler for digest generation
+    try:
+        scheduler = get_scheduler()
+        scheduler.start()
+        logger.info("scheduler_initialized", message="Background digest generation enabled")
+    except Exception as e:
+        logger.error("scheduler_init_failed", error=str(e))
+        # Don't raise - scheduler is optional
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("shutting_down_disruptiq")
+
+    # Shutdown cache service
+    try:
+        from app.services.cache_service import get_cache_service
+        cache_service = get_cache_service()
+        await cache_service.close()
+        logger.info("cache_service_shutdown")
+    except Exception as e:
+        logger.error("cache_service_shutdown_failed", error=str(e))
+
+    # Shutdown scheduler
+    try:
+        scheduler = get_scheduler()
+        scheduler.shutdown()
+        logger.info("scheduler_shutdown")
+    except Exception as e:
+        logger.error("scheduler_shutdown_failed", error=str(e))
+
     # TODO: Close database connections
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return JSONResponse(
-        content={
-            "status": "healthy",
-            "service": "DisruptIQ",
-            "version": "1.0.0"
-        }
-    )
 
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
+    """Root endpoint with API information"""
     return {
-        "message": "DisruptIQ API - Smart RAG for Property Management",
-        "docs": "/api/docs",
-        "health": "/health"
+        "service": "DisruptIQ API",
+        "description": "Smart RAG System for Property Management",
+        "version": "1.0.0",
+        "endpoints": {
+            "docs": "/api/docs",
+            "redoc": "/api/redoc",
+            "health": "/health",
+            "health_detailed": "/health/detailed",
+            "metrics": "/metrics"
+        }
     }
 
 
 # Include API routers
+# Health checks first (no prefix for Kubernetes compatibility)
+app.include_router(health.router, tags=["Health & Monitoring"])
+
+# Feature routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(digest.router, prefix="/api/digest", tags=["Email Digest"])
 app.include_router(email_generator.router, prefix="/api/email", tags=["Email Generator"])
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
+app.include_router(assistant.router, prefix="/api/assistant", tags=["AI Assistant"])
+app.include_router(coproprietes.router, prefix="/api/coproprietes", tags=["Copropriétés"])
+app.include_router(coproprietaires.router, prefix="/api/coproprietaires", tags=["Copropriétaires"])
+app.include_router(cache.router, prefix="/api/cache", tags=["Cache Management"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["N8N Webhooks"])
+app.include_router(webhook_test.router, prefix="/api/webhook-test", tags=["Webhook Testing"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Administration"])

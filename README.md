@@ -10,6 +10,13 @@ DisruptIQ est un système RAG (Retrieval-Augmented Generation) intelligent conç
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-Proprietary-red.svg)]()
 
+[![CI](https://github.com/your-org/DisruptIQ_CC/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/DisruptIQ_CC/actions/workflows/ci.yml)
+[![CD](https://github.com/your-org/DisruptIQ_CC/actions/workflows/cd.yml/badge.svg)](https://github.com/your-org/DisruptIQ_CC/actions/workflows/cd.yml)
+[![Docker](https://github.com/your-org/DisruptIQ_CC/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/your-org/DisruptIQ_CC/actions/workflows/docker-publish.yml)
+[![codecov](https://codecov.io/gh/your-org/DisruptIQ_CC/branch/main/graph/badge.svg)](https://codecov.io/gh/your-org/DisruptIQ_CC)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=disruptiq_DisruptIQ_CC&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=disruptiq_DisruptIQ_CC)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=disruptiq_DisruptIQ_CC&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=disruptiq_DisruptIQ_CC)
+
 ---
 
 ## 🎯 Fonctionnalités Principales
@@ -386,14 +393,17 @@ npm test -- --coverage        # Avec coverage
 - ✅ Logs de sécurité (structlog)
 - ✅ Credentials séparés du code (.env, .gitignore)
 - ✅ OAuth 2.0 Gmail
+- ✅ Rate Limiting (SlowAPI - 100/min, 1000/hour)
+- ✅ SQL Injection protection (validated SQL queries)
+- ✅ CI/CD Pipeline (GitHub Actions)
+- ✅ Automated security scanning (Trivy)
 
 ### À Implémenter (Production)
 
 - 🔄 JWT Authentication complète
-- 🔄 Rate Limiting
 - 🔄 HTTPS/SSL
 - 🔄 Encrypted secrets (Vault)
-- 🔄 Audit logs
+- 🔄 Enhanced audit logs
 - 🔄 RBAC (Role-Based Access Control)
 
 ---

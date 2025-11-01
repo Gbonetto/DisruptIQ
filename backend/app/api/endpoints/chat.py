@@ -3,13 +3,14 @@ Chat Interface Endpoints
 RAG-based question answering
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import structlog
 
 from app.services.rag_service import RAGService
 from app.services.llm_service import LLMService
+from app.core.dependencies import get_llm_service, get_rag_service
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -36,7 +37,9 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/ask", response_model=ChatResponse)
-async def ask_question(request: ChatRequest):
+async def ask_question(
+    request: ChatRequest
+):
     """
     Ask a question with RAG context
 
@@ -48,17 +51,24 @@ async def ask_question(request: ChatRequest):
             {"role": "assistant", "content": "Bonjour, comment puis-je vous aider?"}
         ]
     }
+
+    Performance optimizations:
+    - Reuses singleton LLM and RAG services (no re-initialization)
+    - Single RAG search for both context and sources (eliminates double search)
     """
     try:
-        rag_service = RAGService()
-        llm_service = LLMService()
+        rag_service = get_rag_service()
+        llm_service = get_llm_service()
 
-        # Get relevant context from vector DB
+        # Single RAG search for both context and sources (OPTIMIZATION: eliminates double search)
         logger.info("searching_context", question=request.message[:50])
-        context = await rag_service.get_context_for_question(
-            question=request.message,
-            top_k=3
-        )
+        sources = await rag_service.search(request.message, limit=3)
+
+        # Build context from search results
+        context = "\n\n".join([
+            f"Document: {src.get('metadata', {}).get('title', 'Sans titre')}\n{src.get('text', '')}"
+            for src in sources
+        ])
 
         # Get answer from LLM
         logger.info("generating_answer")
@@ -67,9 +77,6 @@ async def ask_question(request: ChatRequest):
             context=context,
             conversation_history=[msg.dict() for msg in request.conversation_history]
         )
-
-        # Get sources
-        sources = await rag_service.search(request.message, limit=3)
 
         logger.info("question_answered", question=request.message[:50])
 

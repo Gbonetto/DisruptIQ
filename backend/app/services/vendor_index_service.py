@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone
 
-from app.models.vendor import Vendor
+from app.models.professionnel import Vendor  # Vendor est un alias de Professionnel
 from app.services.rag_service import RAGService
 
 logger = structlog.get_logger()

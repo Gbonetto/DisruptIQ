@@ -59,11 +59,18 @@ services:
       N8N_WEBHOOK_BASE_URL: ${N8N_WEBHOOK_BASE_URL}
       N8N_WEBHOOK_AUTH_TOKEN: ${N8N_WEBHOOK_AUTH_TOKEN}
       SECRET_KEY: ${SECRET_KEY}
+      GMAIL_CREDENTIALS_PATH: ${GMAIL_CREDENTIALS_PATH}
+      GMAIL_TOKEN_PATH: ${GMAIL_TOKEN_PATH}
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
     volumes:
       - ./backend:/app
       - ./credentials:/app/credentials
     ports:
       - "8000:8000"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     depends_on:
       postgres:
         condition: service_healthy

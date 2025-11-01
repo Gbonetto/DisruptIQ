@@ -2,25 +2,29 @@
 Admin Panel Endpoints
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from pydantic import BaseModel
 from typing import List
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import structlog
 import csv
 import io
 
 from app.core.database import get_db
-from app.models.vendor import Vendor
+from app.models.professionnel import Vendor  # Vendor est un alias de Professionnel
 from app.models.email import Email
 from app.models.document import Document
 from app.models.user import User
 from app.schemas.vendor import VendorCreate, VendorResponse
 from app.services.vendor_index_service import VendorIndexService
+from app.services.cache_service import get_cache_service, cached, invalidates_cache
 
 router = APIRouter()
 logger = structlog.get_logger()
+limiter = Limiter(key_func=get_remote_address)
 
 
 class SystemStats(BaseModel):
@@ -31,7 +35,14 @@ class SystemStats(BaseModel):
     total_users: int
 
 
+class NotificationCounts(BaseModel):
+    """Notification counts for navigation badges"""
+    urgent_emails: int
+    vendors_not_indexed: int
+
+
 @router.get("/stats", response_model=SystemStats)
+@cached(prefix="admin:stats", ttl=60)  # Cache for 1 minute
 async def get_system_stats(db: AsyncSession = Depends(get_db)):
     """Get system statistics"""
     # Count all entities from database
@@ -218,6 +229,12 @@ async def import_vendors_csv(
                 # Don't fail the whole import if indexing fails
                 index_errors = vendors_created + len(vendors_to_reindex)
 
+        # Invalidate caches after import
+        cache_service = get_cache_service()
+        await cache_service.clear_pattern("admin:stats*")
+        await cache_service.clear_pattern("vendor:*")
+        logger.info("cache_invalidated_after_import")
+
         return {
             "status": "success",
             "vendors_created": vendors_created,
@@ -260,113 +277,6 @@ async def list_vendors(
     vendors = result.scalars().all()
 
     return vendors
-
-
-@router.post("/vendors", response_model=VendorResponse)
-async def create_vendor(vendor: VendorCreate):
-    """Create a new vendor"""
-    # TODO: Save to database
-    return {
-        **vendor.dict(),
-        "id": 1,
-        "rating": 0.0,
-        "total_jobs": 0,
-        "last_contacted": None,
-        "created_at": "2024-10-30T00:00:00Z"
-    }
-
-
-@router.put("/vendors/{vendor_id}", response_model=VendorResponse)
-async def update_vendor(vendor_id: int, vendor: VendorCreate):
-    """Update a vendor"""
-    # TODO: Update in database
-    return {
-        **vendor.dict(),
-        "id": vendor_id,
-        "rating": 0.0,
-        "total_jobs": 0,
-        "last_contacted": None,
-        "created_at": "2024-10-30T00:00:00Z"
-    }
-
-
-@router.delete("/vendors/{vendor_id}")
-async def delete_vendor(vendor_id: int):
-    """Delete a vendor"""
-    # TODO: Delete from database
-    return {
-        "message": "Vendor deleted",
-        "vendor_id": vendor_id
-    }
-
-
-@router.get("/n8n/config")
-async def get_n8n_config():
-    """Get N8N configuration"""
-    # TODO: Return from config (masked)
-    return {
-        "base_url": "configured",
-        "status": "connected"
-    }
-
-
-@router.post("/n8n/test")
-async def test_n8n_connection():
-    """Test N8N connection"""
-    # TODO: Ping N8N
-    return {
-        "status": "success",
-        "message": "N8N connection successful"
-    }
-
-
-@router.post("/vendors/reindex")
-async def reindex_all_vendors(db: AsyncSession = Depends(get_db)):
-    """
-    Reindex all vendors in Qdrant for RAG search
-
-    This endpoint indexes all vendors from the database into Qdrant,
-    allowing the AI assistant to search and retrieve vendor information.
-
-    Use this if:
-    - The assistant cannot find vendors
-    - After bulk imports
-    - After database migrations
-    """
-    try:
-        logger.info("manual_reindex_requested")
-
-        index_service = VendorIndexService()
-        result = await index_service.reindex_all_vendors(db)
-
-        if result['status'] == 'success':
-            logger.info(
-                "reindex_complete",
-                total=result['total'],
-                indexed=result['indexed'],
-                failed=result['failed']
-            )
-
-            return {
-                "status": "success",
-                "message": f"Indexed {result['indexed']} vendors successfully",
-                "total_vendors": result['total'],
-                "indexed": result['indexed'],
-                "failed": result['failed'],
-                "errors": result.get('errors', [])
-            }
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Reindexing failed: {result.get('message', 'Unknown error')}"
-            )
-
-    except Exception as e:
-        logger.error("reindex_endpoint_failed", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to reindex vendors: {str(e)}"
-        )
 
 
 @router.delete("/vendors/all")
@@ -431,6 +341,114 @@ async def delete_all_vendors(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete vendors: {str(e)}"
+        )
+
+
+@router.post("/vendors", response_model=VendorResponse)
+async def create_vendor(vendor: VendorCreate):
+    """Create a new vendor"""
+    # TODO: Save to database
+    return {
+        **vendor.dict(),
+        "id": 1,
+        "rating": 0.0,
+        "total_jobs": 0,
+        "last_contacted": None,
+        "created_at": "2024-10-30T00:00:00Z"
+    }
+
+
+@router.put("/vendors/{vendor_id}", response_model=VendorResponse)
+async def update_vendor(vendor_id: int, vendor: VendorCreate):
+    """Update a vendor"""
+    # TODO: Update in database
+    return {
+        **vendor.dict(),
+        "id": vendor_id,
+        "rating": 0.0,
+        "total_jobs": 0,
+        "last_contacted": None,
+        "created_at": "2024-10-30T00:00:00Z"
+    }
+
+
+@router.delete("/vendors/{vendor_id}")
+async def delete_vendor(vendor_id: int):
+    """Delete a vendor"""
+    # TODO: Delete from database
+    return {
+        "message": "Vendor deleted",
+        "vendor_id": vendor_id
+    }
+
+
+@router.get("/n8n/config")
+async def get_n8n_config():
+    """Get N8N configuration"""
+    # TODO: Return from config (masked)
+    return {
+        "base_url": "configured",
+        "status": "connected"
+    }
+
+
+@router.post("/n8n/test")
+async def test_n8n_connection():
+    """Test N8N connection"""
+    # TODO: Ping N8N
+    return {
+        "status": "success",
+        "message": "N8N connection successful"
+    }
+
+
+@router.post("/vendors/reindex")
+@limiter.limit("5/hour")  # Very strict limit for reindexing operations
+async def reindex_all_vendors(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Reindex all vendors in Qdrant for RAG search
+
+    This endpoint indexes all vendors from the database into Qdrant,
+    allowing the AI assistant to search and retrieve vendor information.
+
+    Use this if:
+    - The assistant cannot find vendors
+    - After bulk imports
+    - After database migrations
+    """
+    try:
+        logger.info("manual_reindex_requested")
+
+        index_service = VendorIndexService()
+        result = await index_service.reindex_all_vendors(db)
+
+        if result['status'] == 'success':
+            logger.info(
+                "reindex_complete",
+                total=result['total'],
+                indexed=result['indexed'],
+                failed=result['failed']
+            )
+
+            return {
+                "status": "success",
+                "message": f"Indexed {result['indexed']} vendors successfully",
+                "total_vendors": result['total'],
+                "indexed": result['indexed'],
+                "failed": result['failed'],
+                "errors": result.get('errors', [])
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Reindexing failed: {result.get('message', 'Unknown error')}"
+            )
+
+    except Exception as e:
+        logger.error("reindex_endpoint_failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reindex vendors: {str(e)}"
         )
 
 
@@ -527,6 +545,43 @@ async def delete_all_emails(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete emails: {str(e)}"
+        )
+
+
+@router.get("/notifications", response_model=NotificationCounts)
+async def get_notification_counts(db: AsyncSession = Depends(get_db)):
+    """
+    Get notification counts for navigation badges
+
+    Returns:
+        - urgent_emails: Count of urgent unread emails
+        - vendors_not_indexed: Count of vendors not indexed in Qdrant
+    """
+    try:
+        # Count urgent emails (urgency = "urgent")
+        urgent_emails = await db.scalar(
+            select(func.count())
+            .select_from(Email)
+            .where(Email.urgency == "urgent")
+        )
+
+        # Count vendors not indexed in Qdrant
+        vendors_not_indexed = await db.scalar(
+            select(func.count())
+            .select_from(Vendor)
+            .where(Vendor.is_indexed == False)
+        )
+
+        return {
+            "urgent_emails": urgent_emails or 0,
+            "vendors_not_indexed": vendors_not_indexed or 0
+        }
+
+    except Exception as e:
+        logger.error("get_notification_counts_failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get notification counts: {str(e)}"
         )
 
 

@@ -38,6 +38,11 @@ class Email(Base):
     attachments = Column(JSON, default=list)  # List of attachment info
     llm_analysis = Column(JSON)  # LLM analysis result
 
+    # Relations vers entités (FK seront ajoutées dans migration Alembic)
+    professionnel_id = Column(Integer, index=True)  # FK vers professionnels.id
+    copropriete_id = Column(Integer, index=True)    # FK vers coproprietes.id
+    coproprietaire_id = Column(Integer, index=True)  # FK vers coproprietaires.id
+
     # Status
     processed = Column(Boolean, default=False)
     included_in_digest = Column(Boolean, default=False)

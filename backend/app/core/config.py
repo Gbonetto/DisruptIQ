@@ -18,13 +18,31 @@ class Settings(BaseSettings):
 
     # API
     API_PREFIX: str = "/api"
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:3003"
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Parse CORS_ORIGINS string into list"""
+        if isinstance(self.CORS_ORIGINS, str):
+            return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
+        return self.CORS_ORIGINS
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://disruptiq:disruptiq@postgres:5432/disruptiq"
 
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
+    REDIS_ENABLED: bool = True
+
+    @property
+    def redis_url(self) -> str:
+        """Get Redis URL"""
+        return self.REDIS_URL
+
+    @property
+    def redis_enabled(self) -> bool:
+        """Check if Redis caching is enabled"""
+        return self.REDIS_ENABLED
 
     # Qdrant Vector Database
     QDRANT_URL: str = "http://qdrant:6333"
@@ -42,10 +60,14 @@ class Settings(BaseSettings):
     # Gmail API
     GMAIL_CREDENTIALS_PATH: str = "./credentials/gmail_credentials.json"
     GMAIL_TOKEN_PATH: str = "./credentials/gmail_token.json"
-    GMAIL_SCOPES: List[str] = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.send'
-    ]
+    GMAIL_SCOPES: str = "https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.modify"
+
+    @property
+    def gmail_scopes_list(self) -> List[str]:
+        """Parse GMAIL_SCOPES string into list"""
+        if isinstance(self.GMAIL_SCOPES, str):
+            return [scope.strip() for scope in self.GMAIL_SCOPES.split(",")]
+        return self.GMAIL_SCOPES
 
     # N8N Webhooks
     N8N_WEBHOOK_BASE_URL: str = ""
@@ -65,6 +87,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # Ignore extra fields in .env
 
 
 settings = Settings()

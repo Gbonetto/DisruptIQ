@@ -33,9 +33,14 @@ class Document(Base):
     # Vector database reference
     qdrant_id = Column(String, index=True)  # Reference to Qdrant vector
 
-    # Related entities
-    vendor_id = Column(Integer, index=True)
-    property_id = Column(String, index=True)
+    # Related entities (anciennes colonnes - conservées pour migration)
+    vendor_id = Column(Integer, index=True)  # DEPRECATED - utiliser professionnel_id
+    property_id = Column(String, index=True)  # DEPRECATED - utiliser copropriete_id
+
+    # Nouvelles relations vers entités (FK seront ajoutées dans migration Alembic)
+    professionnel_id = Column(Integer, index=True)  # FK vers professionnels.id
+    copropriete_id = Column(Integer, index=True)    # FK vers coproprietes.id
+    coproprietaire_id = Column(Integer, index=True)  # FK vers coproprietaires.id
 
     # Document-specific data (for invoices, contracts, etc.)
     document_metadata = Column(JSON, default=dict)  # Flexible metadata storage

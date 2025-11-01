@@ -2,6 +2,18 @@
 
 Bienvenue dans la documentation complète de DisruptIQ - Système RAG intelligent pour la gestion immobilière.
 
+---
+
+## 🔍 Navigation Rapide
+
+### 📑 [**INDEX COMPLET DE LA DOCUMENTATION**](./INDEX.md)
+→ **Nouveau!** Index détaillé de tous les documents avec guides de navigation par profil (Utilisateur, Développeur, Product Owner, Support)
+
+### 🎯 [**AUDIT V1 - État du Projet**](./V1_COMPLETION_AUDIT.md)
+→ **Score: 85/100** - Rapport complet sur toutes les fonctionnalités V1 (✅ Production Ready)
+
+---
+
 ## 📖 Table des Matières
 
 ### 🚀 Démarrage Rapide
@@ -87,17 +99,21 @@ DisruptIQ/
 
 ---
 
-## 📊 Statut du Projet
+## 📊 Statut du Projet V1
 
 | Composant | Statut | Version | Notes |
 |-----------|--------|---------|-------|
-| Backend API | ✅ Stable | v0.9 | Production-ready |
-| Frontend | ✅ Stable | v0.9 | UI fonctionnelle |
+| Backend API | ✅ Stable | v1.0 | Production-ready |
+| Frontend | ✅ Stable | v1.0 | UI professionnelle |
 | PostgreSQL | ✅ Opérationnel | 15 | Avec migrations |
 | Qdrant | ✅ Opérationnel | 1.9 | Indexation vendors |
-| Gmail OAuth | 📄 Documenté | - | Guide disponible |
-| N8N Workflows | 🚧 En cours | - | Structure présente |
-| Tests E2E | ⏳ À venir | - | Planifié V1.5 |
+| Digest Quotidien | ✅ Automatique | v1.0 | Scheduler toutes les heures |
+| Gestion Vendors | ✅ Complet | v1.0 | Import CSV + RAG |
+| Gmail OAuth | 📄 Documenté | - | Optionnel V1 |
+| N8N Webhooks | 🟡 Partiel | - | Structure présente, tests requis |
+| Tests E2E | ⏳ À venir | - | Planifié V1.1 |
+
+**Voir** [V1_COMPLETION_AUDIT.md](./V1_COMPLETION_AUDIT.md) **pour le rapport détaillé**
 
 ---
 
@@ -120,9 +136,17 @@ Pour toute question ou problème :
 
 ## 🔄 Mises à Jour de la Documentation
 
-**Dernière mise à jour** : 30 octobre 2025
+**Dernière mise à jour** : 31 octobre 2025
 
-### Récentes Améliorations
+### Récentes Améliorations (31 octobre 2025) ⭐
+- ✅ **INDEX.md complet** - Navigation par profil et recherche par sujet
+- ✅ **V1_COMPLETION_AUDIT.md** - Audit détaillé de complétude V1 (85/100)
+- ✅ **Documentation organisée** - Dossier archive/ créé, fichiers déplacés
+- ✅ **UX_UI_DIGEST_IMPROVEMENTS.md** - Propositions améliorations UI
+- ✅ **Scheduler digest automatique** - Génération toutes les heures
+- ✅ **Filtrage spam** - 16+ patterns automatiques
+
+### Améliorations Précédentes (30 octobre 2025)
 - ✅ Guide Gmail OAuth complet
 - ✅ Guide implémentation Phase 1
 - ✅ Architecture documentation organisée
@@ -130,5 +154,12 @@ Pour toute question ou problème :
 - ✅ Guides de tests complets
 
 ---
+
+## 🎯 Pour Commencer
+
+**Nouveau sur le projet?** Suivez ce parcours:
+1. Lisez [INDEX.md](./INDEX.md) pour comprendre la structure de la documentation
+2. Consultez [V1_COMPLETION_AUDIT.md](./V1_COMPLETION_AUDIT.md) pour l'état du projet
+3. Lancez l'application avec [QUICK_START.md](./guides/QUICK_START.md)
 
 **📌 Note** : Cette documentation est vivante et mise à jour régulièrement. Si vous trouvez une information obsolète, n'hésitez pas à la signaler.

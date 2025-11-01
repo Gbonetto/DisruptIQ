@@ -78,7 +78,7 @@ class EmailProcessor:
             # Load existing token
             creds = Credentials.from_authorized_user_file(
                 settings.GMAIL_TOKEN_PATH,
-                settings.GMAIL_SCOPES
+                settings.gmail_scopes_list
             )
 
             # Refresh if expired (but don't try interactive auth)
@@ -165,23 +165,44 @@ class EmailProcessor:
                 logger.info("no_unread_emails_found")
                 return []
 
-            # Fetch full message details concurrently (batch)
-            tasks = [self._get_email_details(msg['id']) for msg in messages]
-            email_results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Fetch full message details in small batches to avoid overwhelming Docker networking
+            BATCH_SIZE = 5  # Process 5 emails at a time
+            emails = []
+            total_failures = 0
 
-            # Filter out exceptions and None values
-            emails = [
-                email for email in email_results
-                if email and not isinstance(email, Exception)
-            ]
+            logger.info("fetching_email_details", total_count=len(messages), batch_size=BATCH_SIZE)
 
-            # Log any failures
-            failures = [
-                email for email in email_results
-                if isinstance(email, Exception)
-            ]
-            if failures:
-                logger.warning("email_fetch_partial_failure", failed_count=len(failures))
+            for i in range(0, len(messages), BATCH_SIZE):
+                batch = messages[i:i + BATCH_SIZE]
+                batch_num = (i // BATCH_SIZE) + 1
+                total_batches = (len(messages) + BATCH_SIZE - 1) // BATCH_SIZE
+
+                logger.info("processing_batch", batch_num=batch_num, total_batches=total_batches, batch_size=len(batch))
+
+                # Fetch batch concurrently
+                tasks = [self._get_email_details(msg['id']) for msg in batch]
+                email_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Filter out exceptions and None values
+                batch_emails = [
+                    email for email in email_results
+                    if email and not isinstance(email, Exception)
+                ]
+                emails.extend(batch_emails)
+
+                # Count failures in this batch
+                batch_failures = sum(1 for email in email_results if isinstance(email, Exception))
+                total_failures += batch_failures
+
+                if batch_failures > 0:
+                    logger.warning("batch_partial_failure", batch_num=batch_num, failed_count=batch_failures, succeeded_count=len(batch_emails))
+
+                # Small delay between batches to avoid overwhelming connections
+                if i + BATCH_SIZE < len(messages):
+                    await asyncio.sleep(0.5)
+
+            if total_failures > 0:
+                logger.warning("email_fetch_partial_failure", failed_count=total_failures, succeeded_count=len(emails))
 
             logger.info("emails_fetched", count=len(emails), total=len(messages))
             return emails
@@ -194,10 +215,10 @@ class EmailProcessor:
             return []
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(HttpError),
-        reraise=True
+        stop=stop_after_attempt(3),  # Reduced retries (fail faster on persistent issues)
+        wait=wait_exponential(multiplier=1, min=1, max=10),  # Shorter waits (faster failure detection)
+        retry=retry_if_exception_type((HttpError, TimeoutError, OSError)),  # Retry on more error types
+        reraise=False  # Don't raise - just skip problematic emails
     )
     async def _get_email_details(self, message_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -252,15 +273,15 @@ class EmailProcessor:
             logger.error("email_details_error", message_id=message_id, error=str(e))
             return None
 
-    def _parse_email_date(self, date_str: str) -> str:
-        """Parse email date string to ISO format"""
+    def _parse_email_date(self, date_str: str) -> datetime:
+        """Parse email date string to datetime object"""
         try:
             from email.utils import parsedate_to_datetime
             dt = parsedate_to_datetime(date_str)
-            return dt.isoformat()
+            return dt
         except Exception as e:
             logger.error("date_parse_error", date_str=date_str, error=str(e))
-            return datetime.now().isoformat()
+            return datetime.now()
 
     def _extract_body(self, payload: Dict) -> str:
         """Extract email body from payload"""
@@ -298,18 +319,126 @@ class EmailProcessor:
 
         return attachments
 
+    def _is_promotional_email(self, sender: str, subject: str) -> bool:
+        """
+        Filter promotional/spam emails based on sender and subject patterns
+
+        Args:
+            sender: Email sender address
+            subject: Email subject
+
+        Returns:
+            True if email is promotional/spam, False otherwise
+        """
+        # Normalize sender to lowercase for comparison
+        sender_lower = sender.lower()
+        subject_lower = subject.lower()
+
+        # Common promotional email patterns
+        spam_patterns = [
+            'noreply@',
+            'no-reply@',
+            'no_reply@',
+            'info@',
+            'marketing@',
+            'newsletter@',
+            'notification@',
+            'notifications@',
+            'do-not-reply@',
+            'donotreply@',
+            'support@',  # Often automated support emails
+            'updates@',
+            'news@',
+            'promo@',
+            'promotions@',
+            'hello@',  # Often marketing emails
+            'hi@',
+            'contact@',  # Often automated contact forms
+        ]
+
+        # Additional patterns in subject
+        subject_spam_keywords = [
+            'unsubscribe',
+            'désabonner',
+            'newsletter',
+            'promotional',
+            'advertisement',
+            'publicité',
+            'offre spéciale',
+            'special offer',
+            'limited time',
+            'act now',
+        ]
+
+        # Check sender patterns
+        for pattern in spam_patterns:
+            if pattern in sender_lower:
+                logger.debug("email_filtered_promotional", sender=sender, pattern=pattern)
+                return True
+
+        # Check subject keywords (less aggressive filtering)
+        spam_keyword_count = sum(1 for keyword in subject_spam_keywords if keyword in subject_lower)
+        if spam_keyword_count >= 2:  # At least 2 spam keywords in subject
+            logger.debug("email_filtered_promotional", subject=subject, matches=spam_keyword_count)
+            return True
+
+        return False
+
+    async def _classify_single_email(self, email: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Classify a single email (helper for parallel processing)
+
+        Args:
+            email: Email dictionary
+
+        Returns:
+            Email with 'urgency' field added
+        """
+        try:
+            urgency = await self.llm_service.classify_email_urgency(
+                subject=email['subject'],
+                sender=email['sender'],
+                body=email['body'],
+                snippet=email['snippet']
+            )
+
+            email['urgency'] = urgency
+
+            logger.info(
+                "email_classified",
+                subject=email['subject'],
+                urgency=urgency
+            )
+
+        except Exception as e:
+            logger.error(
+                "classification_error",
+                subject=email['subject'],
+                error=str(e)
+            )
+            # Default to routine if classification fails
+            email['urgency'] = 'routine'
+
+        return email
+
     async def classify_emails(
         self,
         emails: List[Dict[str, Any]]
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Classify emails by urgency using LLM
+        Classify emails by urgency using LLM (PARALLEL processing for speed)
+        Filters out promotional/spam emails automatically
 
         Args:
             emails: List of email dictionaries
 
         Returns:
-            Dictionary with emails grouped by urgency
+            Dictionary with emails grouped by urgency (promotional emails excluded)
+
+        Performance optimizations:
+        - Parallel LLM classification with asyncio.gather
+        - Semaphore to limit concurrent API calls (10 max)
+        - Pre-filtering of promotional emails before LLM calls
         """
         classified = {
             'urgent': [],
@@ -317,33 +446,58 @@ class EmailProcessor:
             'routine': []
         }
 
-        for email in emails:
-            try:
-                urgency = await self.llm_service.classify_email_urgency(
-                    subject=email['subject'],
-                    sender=email['sender'],
-                    body=email['body'],
-                    snippet=email['snippet']
-                )
+        # Filter out promotional/spam emails BEFORE LLM classification
+        filtered_count = 0
+        emails_to_classify = []
 
-                email['urgency'] = urgency
+        for email in emails:
+            # Skip promotional/spam emails
+            if self._is_promotional_email(email['sender'], email['subject']):
+                filtered_count += 1
+                logger.info(
+                    "email_filtered_promotional",
+                    subject=email['subject'],
+                    sender=email['sender']
+                )
+                continue
+
+            emails_to_classify.append(email)
+
+        if filtered_count > 0:
+            logger.info("emails_filtered_total", count=filtered_count)
+
+        # PARALLEL classification with semaphore to limit concurrency
+        if emails_to_classify:
+            # Create semaphore to limit concurrent LLM calls (avoid rate limits)
+            semaphore = asyncio.Semaphore(10)
+
+            async def classify_with_semaphore(email):
+                async with semaphore:
+                    return await self._classify_single_email(email)
+
+            # Classify all emails in parallel (OPTIMIZATION)
+            logger.info("parallel_classification_started", count=len(emails_to_classify))
+            classified_emails = await asyncio.gather(
+                *[classify_with_semaphore(email) for email in emails_to_classify],
+                return_exceptions=True
+            )
+
+            # Group by urgency
+            for email in classified_emails:
+                if isinstance(email, Exception):
+                    logger.error("classification_exception", error=str(email))
+                    continue
+
+                urgency = email.get('urgency', 'routine')
                 classified[urgency].append(email)
 
-                logger.info(
-                    "email_classified",
-                    subject=email['subject'],
-                    urgency=urgency
-                )
-
-            except Exception as e:
-                logger.error(
-                    "classification_error",
-                    subject=email['subject'],
-                    error=str(e)
-                )
-                # Default to routine if classification fails
-                email['urgency'] = 'routine'
-                classified['routine'].append(email)
+            logger.info(
+                "parallel_classification_completed",
+                total=len(emails_to_classify),
+                urgent=len(classified['urgent']),
+                important=len(classified['important']),
+                routine=len(classified['routine'])
+            )
 
         return classified
 

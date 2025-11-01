@@ -70,11 +70,33 @@ def main():
             print("   Please log in and grant access to DisruptIQ\n")
 
             try:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(credentials_path),
-                    SCOPES,
-                    redirect_uri='http://localhost:8080/'
-                )
+                # Read credentials to detect type (web vs installed)
+                with open(credentials_path, 'r') as f:
+                    creds_data = json.load(f)
+
+                # Support both "web" and "installed" credential types
+                if "web" in creds_data:
+                    print("📝 Detected 'web' type credentials (adapting for local use)")
+                    client_config = {
+                        "installed": {
+                            "client_id": creds_data["web"]["client_id"],
+                            "client_secret": creds_data["web"]["client_secret"],
+                            "auth_uri": creds_data["web"]["auth_uri"],
+                            "token_uri": creds_data["web"]["token_uri"],
+                            "redirect_uris": ["http://localhost:8080/"]
+                        }
+                    }
+                    flow = InstalledAppFlow.from_client_config(
+                        client_config,
+                        SCOPES
+                    )
+                else:
+                    # Standard "installed" type credentials
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        str(credentials_path),
+                        SCOPES
+                    )
+
                 creds = flow.run_local_server(
                     port=8080,
                     prompt='consent',
@@ -84,6 +106,8 @@ def main():
                 print("✅ Authorization granted!")
             except Exception as e:
                 print(f"❌ Authentication failed: {e}")
+                import traceback
+                traceback.print_exc()
                 sys.exit(1)
 
         # Save credentials for next run

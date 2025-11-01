@@ -71,14 +71,15 @@ class WebhookService:
         # Add timestamp
         payload['timestamp'] = datetime.utcnow().isoformat()
 
-        # Sign payload
-        signature = self._sign_payload(payload)
-
         headers = {
             "Content-Type": "application/json",
-            "X-Signature": signature,
-            "X-Timestamp": payload['timestamp'],
         }
+
+        # Only sign payload if auth token is configured
+        if self.auth_token:
+            signature = self._sign_payload(payload)
+            headers["X-Signature"] = signature
+            headers["X-Timestamp"] = payload['timestamp']
 
         try:
             response = await self.client.post(
@@ -92,15 +93,24 @@ class WebhookService:
             logger.info(
                 "webhook_sent",
                 endpoint=endpoint,
+                url=url,
                 status=response.status_code
             )
 
-            return response.json()
+            # Try to parse JSON response, fallback to text if not JSON
+            try:
+                return response.json()
+            except Exception:
+                return {
+                    "status": "success",
+                    "response_text": response.text
+                }
 
         except httpx.HTTPError as e:
             logger.error(
                 "webhook_error",
                 endpoint=endpoint,
+                url=url,
                 error=str(e)
             )
             raise
