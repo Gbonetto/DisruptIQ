@@ -26,10 +26,9 @@ export function Dashboard({ digest, loading, onRefresh, lastUpdated }: Dashboard
     const toastId = toast.loading('Notification des voisins en cours...')
     try {
       await webhookApi.notifyNeighbors({
-        subject: email.subject,
-        sender: email.sender,
-        body: email.snippet || email.body,
-        urgency: email.urgency
+        title: email.subject || 'Notification',
+        message: email.snippet || email.body || '',
+        urgency: email.urgency === 'urgent' ? 'high' : email.urgency === 'important' ? 'medium' : 'low'
       })
       toast.success('✅ Voisins notifiés avec succès!', { id: toastId })
     } catch (error: any) {
@@ -38,26 +37,22 @@ export function Dashboard({ digest, loading, onRefresh, lastUpdated }: Dashboard
     }
   }
 
-  const handleArchiveDocument = async (email: any) => {
+  const handleArchiveDocument = async (_email: any) => {
     const toastId = toast.loading('Archivage du document...')
     try {
-      await webhookApi.archiveDocument({
-        subject: email.subject,
-        attachments: email.attachments || []
-      })
-      toast.success('✅ Document archivé avec succès!', { id: toastId })
+      // TODO: Implement with correct document_id from email attachments
+      toast.info('Fonctionnalité en développement', { id: toastId })
     } catch (error: any) {
       console.error('Archive document failed:', error)
       toast.error(`Erreur: ${error?.response?.data?.detail || 'Échec de l\'archivage'}`, { id: toastId })
     }
   }
 
-  const handleSendToVendors = async (email: any) => {
+  const handleSendToVendors = async (_email: any) => {
     const toastId = toast.loading('Envoi aux fournisseurs...')
     try {
       // TODO: Implement vendor email sending with correct data structure
-      await webhookApi.sendVendorEmails([])
-      toast.success('✅ Emails envoyés aux fournisseurs!', { id: toastId })
+      toast.info('Fonctionnalité en développement', { id: toastId })
     } catch (error: any) {
       console.error('Send to vendors failed:', error)
       toast.error(`Erreur: ${error?.response?.data?.detail || 'Échec de l\'envoi'}`, { id: toastId })
