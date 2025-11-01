@@ -43,16 +43,16 @@ export function AdminPage() {
 
   // Get unique categories for filter dropdown
   const categories = useMemo<string[]>(() => {
-    if (!vendors) return []
-    const uniqueCategories = new Set<string>(vendors.map((v: any) => v.category).filter(Boolean))
+    if (!vendors?.vendors) return []
+    const uniqueCategories = new Set<string>(vendors.vendors.map((v: any) => v.category).filter(Boolean))
     return Array.from(uniqueCategories).sort()
   }, [vendors])
 
   // Filter vendors based on search and filters
   const filteredVendors = useMemo(() => {
-    if (!vendors) return []
+    if (!vendors?.vendors) return []
 
-    return vendors.filter((vendor: any) => {
+    return vendors.vendors.filter((vendor: any) => {
       // Search filter (name, email, company, category)
       const searchLower = debouncedSearchTerm.toLowerCase()
       const matchesSearch = !searchLower ||
@@ -99,7 +99,7 @@ export function AdminPage() {
       console.log('Reindex successful:', response.data)
 
       toast.success(
-        `Réindexation terminée! ${response.data.indexed} fournisseur(s) indexé(s)${response.data.failed > 0 ? ` · ${response.data.failed} erreur(s)` : ''}`,
+        `Réindexation terminée! ${response.data.reindexed_count} fournisseur(s) indexé(s)`,
         { id: toastId, duration: 5000 }
       )
 
@@ -132,26 +132,14 @@ export function AdminPage() {
 
           // Build detailed success message
           let message = `Import réussi!\n\n`
-          message += `✅ ${response.data.vendors_created} fournisseur(s) créé(s)\n`
+          message += `✅ ${response.data.imported_count} fournisseur(s) importé(s)\n`
 
-          if (response.data.vendors_skipped > 0) {
-            message += `⏭️ ${response.data.vendors_skipped} fournisseur(s) ignoré(s) (déjà existant et indexé)\n`
+          if (response.data.failed_count > 0) {
+            message += `⚠️ ${response.data.failed_count} erreur(s) d'import\n`
           }
 
-          if (response.data.vendors_reindexed > 0) {
-            message += `🔄 ${response.data.vendors_reindexed} fournisseur(s) réindexé(s) (existait mais pas dans Qdrant)\n`
-          }
-
-          if (response.data.vendors_indexed !== undefined) {
-            message += `🔍 ${response.data.vendors_indexed} fournisseur(s) indexé(s) pour l'assistant\n`
-          }
-
-          if (response.data.index_errors > 0) {
-            message += `⚠️ ${response.data.index_errors} erreur(s) d'indexation\n`
-          }
-
-          if (response.data.error_count > 0) {
-            message += `\n⚠️ ${response.data.error_count} erreur(s) d'import détectée(s)`
+          if (response.data.errors && response.data.errors.length > 0) {
+            message += `\nPremières erreurs:\n${response.data.errors.slice(0, 3).join('\n')}`
           }
 
           toast.success(message, {
@@ -185,7 +173,7 @@ export function AdminPage() {
       console.log('Delete vendors successful:', response.data)
 
       toast.success(
-        `✅ ${response.data.postgres_deleted || 0} fournisseur(s) supprimé(s)\n🗄️ PostgreSQL et Qdrant vidés`,
+        `✅ ${response.data.deleted_count} fournisseur(s) supprimé(s)\n🗄️ PostgreSQL et Qdrant vidés`,
         { id: toastId, duration: 5000, style: { whiteSpace: 'pre-line' } }
       )
 
@@ -212,7 +200,7 @@ export function AdminPage() {
       console.log('Delete documents successful:', response.data)
 
       toast.success(
-        `✅ ${response.data.postgres_deleted || 0} document(s) supprimé(s)\n🗄️ Base de données vidée`,
+        `✅ ${response.data.deleted_count} document(s) supprimé(s)\n🗄️ Base de données vidée`,
         { id: toastId, duration: 5000, style: { whiteSpace: 'pre-line' } }
       )
 
@@ -239,7 +227,7 @@ export function AdminPage() {
       console.log('Delete emails successful:', response.data)
 
       toast.success(
-        `✅ ${response.data.postgres_deleted || 0} email(s) supprimé(s)\n🗄️ Base de données vidée`,
+        `✅ ${response.data.deleted_count} email(s) supprimé(s)\n🗄️ Base de données vidée`,
         { id: toastId, duration: 5000, style: { whiteSpace: 'pre-line' } }
       )
 
@@ -265,20 +253,10 @@ export function AdminPage() {
       const response = await adminApi.resetAllData()
       console.log('Reset all data successful:', response.data)
 
-      const details = response.data.details || {}
-      let message = `🔥 Réinitialisation complète terminée!\n\n`
-
-      if (details.vendors?.postgres_deleted) {
-        message += `✅ ${details.vendors.postgres_deleted} fournisseur(s) supprimé(s)\n`
-      }
-      if (details.documents?.postgres_deleted) {
-        message += `✅ ${details.documents.postgres_deleted} document(s) supprimé(s)\n`
-      }
-      if (details.emails?.postgres_deleted) {
-        message += `✅ ${details.emails.postgres_deleted} email(s) supprimé(s)\n`
-      }
-
-      toast.success(message, { id: toastId, duration: 6000, style: { whiteSpace: 'pre-line' } })
+      toast.success(
+        `🔥 Réinitialisation complète terminée!\n\n${response.data.message}`,
+        { id: toastId, duration: 6000, style: { whiteSpace: 'pre-line' } }
+      )
 
       setResetAllDialog(false)
       setTimeout(() => window.location.reload(), 2000)
@@ -344,7 +322,7 @@ export function AdminPage() {
             <Database className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.total_users || 1}</div>
+            <div className="text-2xl font-bold">1</div>
           </CardContent>
         </Card>
       </div>
@@ -409,13 +387,13 @@ export function AdminPage() {
             </div>
 
             {/* Results count */}
-            {vendors && vendors.length > 0 && (
+            {vendors?.vendors && vendors.vendors.length > 0 && (
               <div className="text-sm text-muted-foreground">
-                {filteredVendors.length === vendors.length ? (
-                  <span>{vendors.length} fournisseur(s) total</span>
+                {filteredVendors.length === vendors.vendors.length ? (
+                  <span>{vendors.vendors.length} fournisseur(s) total</span>
                 ) : (
                   <span>
-                    {filteredVendors.length} sur {vendors.length} fournisseur(s)
+                    {filteredVendors.length} sur {vendors.vendors.length} fournisseur(s)
                   </span>
                 )}
               </div>
@@ -475,7 +453,7 @@ export function AdminPage() {
                     ) : (
                       <tr>
                         <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
-                          {vendors && vendors.length > 0
+                          {vendors?.vendors && vendors.vendors.length > 0
                             ? 'Aucun résultat pour cette recherche.'
                             : 'Aucun fournisseur. Importez un fichier CSV pour commencer.'}
                         </td>

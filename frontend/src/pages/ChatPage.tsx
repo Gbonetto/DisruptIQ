@@ -31,7 +31,7 @@ export function ChatPage() {
 
       const assistantMessage: Message = {
         role: 'assistant',
-        content: result.message,
+        content: result.response,
       }
       setMessages(prev => [...prev, assistantMessage])
     } catch (error) {
@@ -64,7 +64,7 @@ export function ChatPage() {
                 <div className="space-y-2">
                   <p className="text-sm font-semibold mb-3">Suggestions :</p>
                   <div className="flex flex-wrap gap-2 justify-center">
-                    {suggestions.suggestions?.map((sug: any) => (
+                    {suggestions?.map((sug: any) => (
                       <Badge
                         key={sug.id}
                         variant="outline"
