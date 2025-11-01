@@ -4,8 +4,10 @@ Manages environment variables and settings
 """
 
 from pydantic_settings import BaseSettings
+from pydantic import field_validator, ValidationError
 from typing import List
 import os
+import sys
 
 
 class Settings(BaseSettings):
@@ -61,6 +63,7 @@ class Settings(BaseSettings):
     GMAIL_CREDENTIALS_PATH: str = "./credentials/gmail_credentials.json"
     GMAIL_TOKEN_PATH: str = "./credentials/gmail_token.json"
     GMAIL_SCOPES: str = "https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.modify"
+    GMAIL_TIMEOUT: int = 30  # Timeout pour les appels Gmail API (secondes)
 
     @property
     def gmail_scopes_list(self) -> List[str]:
@@ -79,6 +82,32 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+
+    @field_validator('SECRET_KEY')
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        """Validate that SECRET_KEY is not using default value in production"""
+        # Si DEBUG=False (production) et SECRET_KEY est la valeur par défaut, échouer
+        is_production = os.getenv('DEBUG', 'False').lower() != 'true'
+        is_default_key = v == "your-secret-key-change-in-production"
+
+        if is_production and is_default_key:
+            print("\n" + "="*80)
+            print("❌ CRITICAL SECURITY ERROR")
+            print("="*80)
+            print("SECRET_KEY must be changed in production!")
+            print("Current value: 'your-secret-key-change-in-production' (default)")
+            print("\nTo fix:")
+            print("1. Generate a secure key: python -c 'import secrets; print(secrets.token_urlsafe(32))'")
+            print("2. Set SECRET_KEY in your .env file")
+            print("3. Restart the application")
+            print("="*80 + "\n")
+            sys.exit(1)
+
+        if len(v) < 32 and is_production:
+            print("\n⚠️  WARNING: SECRET_KEY should be at least 32 characters long for security\n")
+
+        return v
 
     # Document Processing
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB

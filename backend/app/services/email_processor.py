@@ -38,22 +38,39 @@ class EmailProcessor:
         self.gmail_service = None
         self._initialize_gmail()
 
-    async def _run_sync(self, func, *args, **kwargs):
+    async def _run_sync(self, func, *args, timeout: Optional[float] = None, **kwargs):
         """
         Run synchronous Gmail API calls in thread pool to avoid blocking event loop.
 
         Args:
             func: Synchronous function to execute
             *args, **kwargs: Function arguments
+            timeout: Timeout in seconds (defaults to settings.GMAIL_TIMEOUT)
 
         Returns:
             Function result
+
+        Raises:
+            asyncio.TimeoutError: If operation exceeds timeout
         """
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            partial(func, *args, **kwargs)
-        )
+        timeout_value = timeout if timeout is not None else settings.GMAIL_TIMEOUT
+
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    partial(func, *args, **kwargs)
+                ),
+                timeout=timeout_value
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "gmail_api_timeout",
+                func_name=getattr(func, '__name__', str(func)),
+                timeout=timeout_value
+            )
+            raise
 
     def _initialize_gmail(self):
         """
