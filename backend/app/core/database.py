@@ -44,3 +44,12 @@ async def init_db():
     """Initialize database tables"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def close_db():
+    """
+    Close all database connections gracefully
+    Should be called on application shutdown
+    """
+    await engine.dispose()
+    # Dispose of the engine's connection pool

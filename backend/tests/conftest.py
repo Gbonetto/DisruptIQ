@@ -7,11 +7,14 @@ import asyncio
 import os
 from typing import AsyncGenerator, Generator
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 import pytest_asyncio
+from faker import Faker
+from freezegun import freeze_time
 from httpx import AsyncClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
@@ -20,7 +23,7 @@ from app.main import app
 from app.core.database import Base, get_db
 from app.core.config import settings
 from app.models.email import Email, EmailUrgency
-from app.models.vendor import Vendor
+from app.models.professionnel import Professionnel
 
 
 # Test database URL (in-memory SQLite for speed)
@@ -146,16 +149,18 @@ def sample_promotional_email_data() -> dict:
 
 @pytest.fixture
 def sample_vendor_data() -> dict:
-    """Sample vendor data for testing"""
+    """Sample professional/vendor data for testing"""
     return {
-        "name": "Test Vendor Corp",
+        "name": "Test Professional",
+        "company_name": "Test Company",
         "email": "contact@testvendor.com",
         "phone": "+1-555-0123",
-        "address": "123 Test Street, Test City, TC 12345",
-        "category": "Technology",
-        "description": "A test vendor for unit testing",
-        "website": "https://testvendor.com",
-        "is_active": True,
+        "address": "123 Test Street",
+        "city": "Paris",
+        "postal_code": "75001",
+        "category": "plombier",
+        "description": "A test professional for unit testing",
+        "statut": "active",
     }
 
 
@@ -189,18 +194,18 @@ async def create_test_email(async_session: AsyncSession):
 @pytest_asyncio.fixture
 async def create_test_vendor(async_session: AsyncSession):
     """
-    Factory fixture to create test vendors in database
+    Factory fixture to create test professionals/vendors in database
     """
-    async def _create_vendor(**kwargs) -> Vendor:
+    async def _create_vendor(**kwargs) -> Professionnel:
         defaults = {
-            "name": f"Test Vendor {datetime.now().timestamp()}",
+            "name": f"Test Professional {datetime.now().timestamp()}",
             "email": f"vendor_{datetime.now().timestamp()}@test.com",
-            "category": "Technology",
-            "is_active": True,
+            "category": "plombier",
+            "statut": "active",
         }
         defaults.update(kwargs)
 
-        vendor = Vendor(**defaults)
+        vendor = Professionnel(**defaults)
         async_session.add(vendor)
         await async_session.commit()
         await async_session.refresh(vendor)
@@ -322,6 +327,265 @@ def setup_test_env(monkeypatch):
 
     for key, value in test_env.items():
         monkeypatch.setenv(key, value)
+
+
+# ==================== Enhanced Test Fixtures (Phase 4) ====================
+
+
+@pytest.fixture
+def mock_llm_service():
+    """
+    Mock LLM service with configurable responses for different test scenarios.
+    Returns a mock that can be configured to return specific responses.
+    """
+    mock = AsyncMock()
+
+    # Default email classification response
+    async def default_classify_email(subject: str, body: str, sender: str = ""):
+        if "urgent" in subject.lower() or "emergency" in body.lower():
+            return "urgent"
+        elif "important" in subject.lower():
+            return "important"
+        return "routine"
+
+    # Default email generation response
+    async def default_generate_email(prompt: str, context: dict = None):
+        return {
+            "subject": "Test Generated Email",
+            "body": f"This is a test email generated for: {prompt}",
+            "confidence": 0.95
+        }
+
+    # Default document extraction response
+    async def default_extract_document_info(text: str):
+        return {
+            "type": "document",
+            "summary": "Test document summary",
+            "entities": []
+        }
+
+    # Default Q&A response
+    async def default_answer_question(question: str, context: str = "", history: list = None):
+        if not context:
+            return "I don't have enough context to answer this question."
+        return f"Answer based on context: {context[:50]}..."
+
+    # Configure mock methods
+    mock.classify_email_urgency = AsyncMock(side_effect=default_classify_email)
+    mock.generate_email = AsyncMock(side_effect=default_generate_email)
+    mock.extract_document_info = AsyncMock(side_effect=default_extract_document_info)
+    mock.answer_question = AsyncMock(side_effect=default_answer_question)
+    mock.get_embeddings = AsyncMock(return_value=[[0.1] * 1536])  # Mock 1536-dim embedding
+
+    # Mock chat model for direct LLM calls
+    mock.chat_model = AsyncMock()
+    mock.chat_model.ainvoke = AsyncMock()
+
+    return mock
+
+
+@pytest_asyncio.fixture
+async def sql_test_db(async_session: AsyncSession):
+    """
+    Populate test database with DisruptIQ schema tables and sample data.
+    Creates the necessary tables for SQL agent testing.
+    """
+    # Create professionnels table
+    await async_session.execute(text("""
+        CREATE TABLE IF NOT EXISTS professionnels (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR(255),
+            company_name VARCHAR(255),
+            email VARCHAR(255) UNIQUE,
+            phone VARCHAR(50),
+            siret VARCHAR(14),
+            description TEXT,
+            statut VARCHAR(20) DEFAULT 'active',
+            category VARCHAR(100),
+            address TEXT,
+            city VARCHAR(100),
+            postal_code VARCHAR(10),
+            rating REAL,
+            total_jobs INTEGER DEFAULT 0,
+            is_indexed BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+
+    # Create coproprietes table
+    await async_session.execute(text("""
+        CREATE TABLE IF NOT EXISTS coproprietes (
+            id INTEGER PRIMARY KEY,
+            nom VARCHAR(255),
+            adresse TEXT,
+            ville VARCHAR(100),
+            code_postal VARCHAR(10),
+            nombre_lots INTEGER,
+            nombre_batiments INTEGER,
+            annee_construction INTEGER,
+            syndic VARCHAR(255),
+            type_copropriete VARCHAR(50),
+            surface_totale REAL,
+            is_indexed BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+
+    # Create coproprietaires table
+    await async_session.execute(text("""
+        CREATE TABLE IF NOT EXISTS coproprietaires (
+            id INTEGER PRIMARY KEY,
+            nom VARCHAR(255),
+            prenom VARCHAR(255),
+            email VARCHAR(255),
+            telephone VARCHAR(50),
+            telephone_mobile VARCHAR(50),
+            copropriete_id INTEGER,
+            numero_lot VARCHAR(50),
+            type_lot VARCHAR(50),
+            etage INTEGER,
+            surface REAL,
+            statut VARCHAR(50),
+            statut_special VARCHAR(50),
+            est_resident BOOLEAN DEFAULT TRUE,
+            tantiemes INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (copropriete_id) REFERENCES coproprietes(id)
+        )
+    """))
+
+    # Insert sample data for testing
+    await async_session.execute(text("""
+        INSERT INTO professionnels (name, company_name, email, category, city, postal_code, is_indexed)
+        VALUES
+            ('Jean Plombier', 'Plomberie Jean', 'jean@plomberie.fr', 'plombier', 'Paris', '75013', TRUE),
+            ('Marie Électricienne', 'Électricité Marie', 'marie@elec.fr', 'électricien', 'Paris', '75014', TRUE),
+            ('Pierre Peintre', 'Peinture Pierre', 'pierre@peinture.fr', 'peintre', 'Lyon', '69001', FALSE)
+    """))
+
+    await async_session.execute(text("""
+        INSERT INTO coproprietes (nom, adresse, ville, code_postal, nombre_lots, type_copropriete, is_indexed)
+        VALUES
+            ('Les Mimosas', '10 Rue des Fleurs', 'Paris', '75013', 50, 'résidentiel', TRUE),
+            ('Résidence du Parc', '25 Avenue Verte', 'Lyon', '69001', 30, 'résidentiel', TRUE)
+    """))
+
+    await async_session.execute(text("""
+        INSERT INTO coproprietaires (nom, prenom, email, copropriete_id, numero_lot, statut, est_resident)
+        VALUES
+            ('Dupont', 'Jacques', 'j.dupont@email.fr', 1, 'A12', 'propriétaire', TRUE),
+            ('Martin', 'Sophie', 's.martin@email.fr', 1, 'B34', 'propriétaire', FALSE),
+            ('Bernard', 'Luc', 'l.bernard@email.fr', 2, '101', 'locataire', TRUE)
+    """))
+
+    await async_session.commit()
+    return async_session
+
+
+@pytest.fixture
+def fake_email_generator():
+    """
+    Generate realistic fake emails using Faker.
+    Returns a function that creates email data with customizable properties.
+    """
+    faker = Faker('fr_FR')  # French locale for DisruptIQ
+
+    def generate_email(
+        urgency: str = "routine",
+        is_promotional: bool = False,
+        has_attachments: bool = False,
+        category: str = "general"
+    ) -> dict:
+        """Generate a fake email with specified properties"""
+
+        # Subject templates based on urgency
+        urgent_subjects = [
+            f"URGENT: {faker.catch_phrase()}",
+            f"EMERGENCY: {faker.bs()}",
+            "Intervention immédiate requise",
+            "Problème critique à résoudre"
+        ]
+
+        important_subjects = [
+            f"Important: {faker.catch_phrase()}",
+            f"À traiter: {faker.bs()}",
+            "Réunion importante",
+            "Document à signer"
+        ]
+
+        routine_subjects = [
+            faker.catch_phrase(),
+            f"Info: {faker.bs()}",
+            "Mise à jour",
+            "Confirmation"
+        ]
+
+        promo_subjects = [
+            f"🎉 Offre spéciale: {faker.word()}",
+            "Ne manquez pas cette opportunité!",
+            f"Promo exclusive: {faker.word()}",
+            "Votre code promo inside"
+        ]
+
+        # Select subject based on type
+        if is_promotional:
+            subject = faker.random.choice(promo_subjects)
+            sender = f"noreply@{faker.domain_name()}"
+        else:
+            if urgency == "urgent":
+                subject = faker.random.choice(urgent_subjects)
+            elif urgency == "important":
+                subject = faker.random.choice(important_subjects)
+            else:
+                subject = faker.random.choice(routine_subjects)
+            sender = faker.email()
+
+        # Generate body
+        body = "\n\n".join([faker.paragraph(nb_sentences=3) for _ in range(2)])
+
+        # Add promotional keywords if needed
+        if is_promotional:
+            body += "\n\n" + "Cliquez ici pour en profiter! Désabonnez-vous ici."
+
+        # Generate attachments
+        attachments = []
+        if has_attachments:
+            attachments = [
+                {
+                    "filename": f"{faker.word()}.pdf",
+                    "mime_type": "application/pdf",
+                    "size": faker.random_int(min=1000, max=500000)
+                }
+                for _ in range(faker.random_int(min=1, max=3))
+            ]
+
+        return {
+            "message_id": faker.uuid4(),
+            "thread_id": faker.uuid4(),
+            "sender": sender,
+            "subject": subject,
+            "body": body,
+            "snippet": body[:100] + "...",
+            "received_at": faker.date_time_between(start_date="-7d", end_date="now"),
+            "attachments": attachments,
+            "category": category
+        }
+
+    return generate_email
+
+
+@pytest.fixture
+def frozen_time():
+    """
+    Freeze time for consistent timestamp testing.
+    Returns a context manager that freezes time to a specific datetime.
+
+    Usage:
+        with frozen_time("2025-11-01 12:00:00"):
+            # Time is frozen at 2025-11-01 12:00:00
+            assert datetime.now() == datetime(2025, 11, 1, 12, 0, 0)
+    """
+    return freeze_time
 
 
 # ==================== Cleanup Fixtures ====================

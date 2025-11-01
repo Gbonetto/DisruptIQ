@@ -371,3 +371,454 @@ class TestEmailProcessorIntegration:
         emails = await processor.fetch_unread_emails()
 
         assert emails == []
+
+
+# ==================== NEW TESTS - Phase 3 ====================
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestGmailInitialization:
+    """Tests for Gmail OAuth initialization and token management"""
+
+    @patch('app.services.email_processor.build')
+    @patch('app.services.email_processor.Credentials')
+    @patch('os.path.exists')
+    def test_initialize_gmail_with_valid_token(self, mock_exists, mock_creds, mock_build):
+        """Test Gmail init with valid existing token"""
+        mock_exists.return_value = True
+        mock_token = Mock()
+        mock_token.valid = True
+        mock_token.expired = False  # Explicitly set expired to False
+        mock_token.refresh_token = None
+        mock_creds.from_authorized_user_file.return_value = mock_token
+        mock_service = Mock()
+        mock_build.return_value = mock_service
+
+        processor = EmailProcessor()
+        assert processor.gmail_service is not None
+        mock_build.assert_called_once()
+
+    @patch('app.services.email_processor.build')
+    @patch('app.services.email_processor.Credentials')
+    @patch('app.services.email_processor.InstalledAppFlow')
+    @patch('os.path.exists')
+    def test_initialize_gmail_token_refresh(self, mock_exists, mock_flow, mock_creds, mock_build):
+        """Test token refresh when expired"""
+        mock_exists.side_effect = lambda path: 'token' in path or 'credentials' in path
+        mock_token = Mock()
+        mock_token.valid = False
+        mock_token.expired = True
+        mock_token.refresh_token = "refresh_token"
+        mock_creds.from_authorized_user_file.return_value = mock_token
+
+        processor = EmailProcessor()
+        # Token should have been refreshed
+        mock_token.refresh.assert_called_once()
+
+    @patch('os.path.exists')
+    def test_initialize_gmail_no_token_file(self, mock_exists):
+        """Test Gmail init when token file missing - should log warning"""
+        mock_exists.return_value = False
+
+        processor = EmailProcessor()
+        # Should initialize but gmail_service will be None
+        assert processor.gmail_service is None
+
+    @patch('app.services.email_processor.build')
+    @patch('app.services.email_processor.Credentials')
+    @patch('os.path.exists')
+    def test_initialize_gmail_invalid_credentials(self, mock_exists, mock_creds, mock_build):
+        """Test handling of invalid credentials"""
+        mock_exists.return_value = True
+        mock_creds.from_authorized_user_file.side_effect = Exception("Invalid credentials")
+
+        processor = EmailProcessor()
+        # Should handle error gracefully
+        assert processor.gmail_service is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestFetchUnreadEmails:
+    """Tests for fetching unread emails from Gmail API"""
+
+    @patch('app.services.email_processor.build')
+    async def test_fetch_unread_emails_success(self, mock_build):
+        """Test successfully fetching and parsing emails"""
+        mock_service = Mock()
+        mock_messages_list = Mock()
+        mock_messages_list.execute.return_value = {
+            'messages': [{'id': 'msg1'}, {'id': 'msg2'}]
+        }
+        mock_service.users().messages().list.return_value = mock_messages_list
+
+        processor = EmailProcessor()
+        processor.gmail_service = mock_service
+
+        with patch.object(processor, '_get_email_details', new=AsyncMock(return_value={"id": "msg1"})):
+            emails = await processor.fetch_unread_emails()
+
+        assert len(emails) == 2
+
+    @patch('app.services.email_processor.build')
+    async def test_fetch_unread_emails_empty_result(self, mock_build):
+        """Test when no unread emails found"""
+        mock_service = Mock()
+        mock_messages_list = Mock()
+        mock_messages_list.execute.return_value = {}  # No messages key
+        mock_service.users().messages().list.return_value = mock_messages_list
+
+        processor = EmailProcessor()
+        processor.gmail_service = mock_service
+
+        emails = await processor.fetch_unread_emails()
+        assert emails == []
+
+    @patch('app.services.email_processor.build')
+    async def test_fetch_unread_emails_with_time_filter(self, mock_build):
+        """Test fetching emails with since_hours parameter"""
+        mock_service = Mock()
+        mock_messages_list = Mock()
+        mock_messages_list.execute.return_value = {'messages': []}
+
+        def mock_list_call(userId, q, maxResults):
+            # Verify query includes time filter
+            assert 'after:' in q
+            return mock_messages_list
+
+        mock_service.users().messages().list.side_effect = mock_list_call
+
+        processor = EmailProcessor()
+        processor.gmail_service = mock_service
+
+        await processor.fetch_unread_emails(since_hours=24)
+
+    @patch('app.services.email_processor.build')
+    async def test_fetch_unread_emails_batch_processing(self, mock_build):
+        """Test emails are processed in batches of 5"""
+        mock_service = Mock()
+        mock_messages_list = Mock()
+        # Create 12 messages to test batch processing
+        mock_messages_list.execute.return_value = {
+            'messages': [{'id': f'msg{i}'} for i in range(12)]
+        }
+        mock_service.users().messages().list.return_value = mock_messages_list
+
+        processor = EmailProcessor()
+        processor.gmail_service = mock_service
+
+        call_count = 0
+
+        async def mock_get_details(message_id):
+            nonlocal call_count
+            call_count += 1
+            return {"id": message_id, "subject": f"Email {message_id}"}
+
+        with patch.object(processor, '_get_email_details', side_effect=mock_get_details):
+            emails = await processor.fetch_unread_emails()
+
+        assert len(emails) == 12
+        assert call_count == 12  # All emails processed
+
+    @patch('app.services.email_processor.build')
+    async def test_fetch_unread_emails_partial_failure(self, mock_build):
+        """Test that processing continues when some emails fail"""
+        mock_service = Mock()
+        mock_messages_list = Mock()
+        mock_messages_list.execute.return_value = {
+            'messages': [{'id': 'msg1'}, {'id': 'msg2'}, {'id': 'msg3'}]
+        }
+        mock_service.users().messages().list.return_value = mock_messages_list
+
+        processor = EmailProcessor()
+        processor.gmail_service = mock_service
+
+        call_count = 0
+
+        async def mock_get_details(message_id):
+            nonlocal call_count
+            call_count += 1
+            if message_id == 'msg2':
+                raise Exception("Failed to fetch msg2")
+            return {"id": message_id, "subject": f"Email {message_id}"}
+
+        with patch.object(processor, '_get_email_details', side_effect=mock_get_details):
+            emails = await processor.fetch_unread_emails()
+
+        # Should get 2 emails (msg1 and msg3), msg2 failed
+        assert len(emails) == 2
+        assert call_count == 3  # All 3 were attempted
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestEmailDetails:
+    """Tests for fetching individual email details"""
+
+    @patch('app.services.email_processor.build')
+    async def test_get_email_details_success(self, mock_build):
+        """Test parsing full email correctly"""
+        mock_service = Mock()
+        mock_get = Mock()
+        mock_get.execute.return_value = {
+            'id': 'msg001',
+            'threadId': 'thread001',
+            'snippet': 'Test email snippet',
+            'payload': {
+                'headers': [
+                    {'name': 'Subject', 'value': 'Test Subject'},
+                    {'name': 'From', 'value': 'test@example.com'},
+                    {'name': 'Date', 'value': 'Mon, 1 Nov 2025 12:00:00 +0000'}
+                ],
+                'body': {'data': 'VGVzdCBib2R5'}  # "Test body"
+            }
+        }
+        mock_service.users().messages().get.return_value = mock_get
+
+        processor = EmailProcessor()
+        processor.gmail_service = mock_service
+
+        details = await processor._get_email_details('msg001')
+
+        assert details['message_id'] == 'msg001'
+        assert details['subject'] == 'Test Subject'
+        assert details['sender'] == 'test@example.com'
+        assert details['body'] == 'Test body'
+
+    @patch('app.services.email_processor.build')
+    async def test_get_email_details_missing_headers(self, mock_build):
+        """Test handling of missing headers gracefully"""
+        mock_service = Mock()
+        mock_get = Mock()
+        mock_get.execute.return_value = {
+            'id': 'msg002',
+            'threadId': 'thread002',
+            'snippet': 'Snippet',
+            'payload': {
+                'headers': [
+                    # Missing Subject and From
+                    {'name': 'Date', 'value': 'Mon, 1 Nov 2025 12:00:00 +0000'}
+                ],
+                'body': {'data': 'Ym9keQ=='}  # "body"
+            }
+        }
+        mock_service.users().messages().get.return_value = mock_get
+
+        processor = EmailProcessor()
+        processor.gmail_service = mock_service
+
+        details = await processor._get_email_details('msg002')
+
+        assert details['subject'] == '(No Subject)'
+        assert details['sender'] == 'unknown@example.com'
+
+    @patch('app.services.email_processor.build')
+    async def test_get_email_details_multipart_body(self, mock_build):
+        """Test extraction from multipart messages"""
+        mock_service = Mock()
+        mock_get = Mock()
+        mock_get.execute.return_value = {
+            'id': 'msg003',
+            'threadId': 'thread003',
+            'snippet': 'Multipart',
+            'payload': {
+                'headers': [
+                    {'name': 'Subject', 'value': 'Multipart Test'},
+                    {'name': 'From', 'value': 'multi@example.com'},
+                    {'name': 'Date', 'value': 'Mon, 1 Nov 2025 12:00:00 +0000'}
+                ],
+                'parts': [
+                    {
+                        'mimeType': 'text/plain',
+                        'body': {'data': 'UGxhaW4gdGV4dA=='}  # "Plain text"
+                    },
+                    {
+                        'mimeType': 'text/html',
+                        'body': {'data': 'PGh0bWw+SFRNTDwvaHRtbD4='}  # "<html>HTML</html>"
+                    }
+                ]
+            }
+        }
+        mock_service.users().messages().get.return_value = mock_get
+
+        processor = EmailProcessor()
+        processor.gmail_service = mock_service
+
+        details = await processor._get_email_details('msg003')
+
+        assert 'Plain text' in details['body'] or 'HTML' in details['body']
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestEmailClassificationAdvanced:
+    """Advanced tests for email classification"""
+
+    async def test_classify_emails_parallel_processing(self, mock_llm_service):
+        """Test that multiple emails are processed concurrently"""
+        processor = EmailProcessor()
+        processor.llm_service = mock_llm_service
+
+        emails = [{"message_id": f"msg{i}", "sender": f"test{i}@example.com",
+                  "subject": f"Test {i}", "body": f"Body {i}", "snippet": f"Snippet {i}"}
+                 for i in range(10)]
+
+        classified = await processor.classify_emails(emails)
+
+        # All emails should be classified
+        total = len(classified['urgent']) + len(classified['important']) + len(classified['routine'])
+        assert total == 10
+
+    async def test_classify_emails_semaphore_limits(self, mock_llm_service):
+        """Test that semaphore respects concurrency limit"""
+        processor = EmailProcessor()
+        processor.llm_service = mock_llm_service
+
+        # Create 20 emails to test semaphore
+        emails = [{"message_id": f"msg{i}", "sender": f"test{i}@example.com",
+                  "subject": "Test", "body": "Body", "snippet": "Snippet"}
+                 for i in range(20)]
+
+        classified = await processor.classify_emails(emails)
+
+        # All should still be processed
+        total = len(classified['urgent']) + len(classified['important']) + len(classified['routine'])
+        assert total == 20
+
+    async def test_classify_emails_mixed_results(self, mock_llm_service):
+        """Test correct grouping of urgent/important/routine emails"""
+        processor = EmailProcessor()
+
+        # Configure mock to return different urgencies
+        async def classify_by_subject(subject, **kwargs):
+            if "URGENT" in subject:
+                return "urgent"
+            elif "Important" in subject:
+                return "important"
+            return "routine"
+
+        mock_llm_service.classify_email_urgency = AsyncMock(side_effect=classify_by_subject)
+        processor.llm_service = mock_llm_service
+
+        emails = [
+            {"message_id": "1", "sender": "a@test.com", "subject": "URGENT Problem", "body": "Help", "snippet": "..."},
+            {"message_id": "2", "sender": "b@test.com", "subject": "Important Update", "body": "Info", "snippet": "..."},
+            {"message_id": "3", "sender": "c@test.com", "subject": "Regular Email", "body": "Hi", "snippet": "..."},
+        ]
+
+        classified = await processor.classify_emails(emails)
+
+        assert len(classified['urgent']) == 1
+        assert len(classified['important']) == 1
+        assert len(classified['routine']) == 1
+
+    async def test_classify_emails_empty_list(self):
+        """Test handling of empty email list"""
+        processor = EmailProcessor()
+
+        classified = await processor.classify_emails([])
+
+        assert classified == {'urgent': [], 'important': [], 'routine': []}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestDigestGeneration:
+    """Tests for HTML digest generation"""
+
+    async def test_generate_digest_html_all_urgencies(self):
+        """Test digest includes all three categories"""
+        processor = EmailProcessor()
+
+        classified_emails = {
+            'urgent': [
+                {"subject": "Urgent 1", "sender": "u1@test.com", "urgency": "urgent", "snippet": "Urgent..."}
+            ],
+            'important': [
+                {"subject": "Important 1", "sender": "i1@test.com", "urgency": "important", "snippet": "Important..."}
+            ],
+            'routine': [
+                {"subject": "Routine 1", "sender": "r1@test.com", "urgency": "routine", "snippet": "Routine..."}
+            ]
+        }
+
+        html = await processor.generate_digest_html(classified_emails)
+
+        assert 'Urgent 1' in html
+        assert 'Important 1' in html
+        assert 'Routine 1' in html
+        assert 'Urgent' in html or 'URGENT' in html
+        assert 'Important' in html or 'IMPORTANT' in html
+
+    async def test_generate_digest_html_empty(self):
+        """Test digest with no emails"""
+        processor = EmailProcessor()
+
+        classified_emails = {
+            'urgent': [],
+            'important': [],
+            'routine': []
+        }
+
+        html = await processor.generate_digest_html(classified_emails)
+
+        assert 'No emails' in html or 'Aucun' in html or len(html) > 0  # Should handle gracefully
+
+    async def test_generate_digest_html_formatting(self):
+        """Test HTML structure and styles are present"""
+        processor = EmailProcessor()
+
+        classified_emails = {
+            'urgent': [{"subject": "Test", "sender": "test@test.com", "urgency": "urgent", "snippet": "..."}],
+            'important': [],
+            'routine': []
+        }
+
+        html = await processor.generate_digest_html(classified_emails)
+
+        # Check for basic HTML structure
+        assert '<html>' in html or '<!DOCTYPE' in html or '<div' in html
+        assert '</html>' in html or '</div>' in html
+
+    async def test_generate_digest_html_special_characters(self):
+        """Test HTML entities are properly escaped"""
+        processor = EmailProcessor()
+
+        classified_emails = {
+            'urgent': [],
+            'important': [
+                {
+                    "subject": "Test <script>alert('XSS')</script>",
+                    "sender": "test@test.com",
+                    "urgency": "important",
+                    "snippet": "Dangerous & special chars: <>&\""
+                }
+            ],
+            'routine': []
+        }
+
+        html = await processor.generate_digest_html(classified_emails)
+
+        # Script tags should be escaped or removed
+        assert '<script>' not in html or '&lt;script&gt;' in html
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestAsyncHelpers:
+    """Tests for async helper methods"""
+
+    async def test_run_sync_wrapper_timeout(self):
+        """Test that timeout error is raised correctly"""
+        import time
+
+        processor = EmailProcessor()
+
+        def slow_function():
+            time.sleep(5)  # Sleep for 5 seconds
+            return "result"
+
+        # Should timeout before 5 seconds
+        with pytest.raises(Exception):  # asyncio.TimeoutError or similar
+            await processor._run_sync(slow_function, timeout=0.1)

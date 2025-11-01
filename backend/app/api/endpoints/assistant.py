@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 import structlog
+import re
 
 from app.services.sql_agent_service import SQLAgentService
 from app.core.database import get_db
@@ -17,6 +18,37 @@ from app.core.database import get_db
 router = APIRouter()
 logger = structlog.get_logger()
 limiter = Limiter(key_func=get_remote_address)
+
+
+def _validate_table_name(table_name: str, allowed_tables: set) -> str:
+    """
+    Valide strictement un nom de table pour prévenir les injections SQL
+
+    Args:
+        table_name: Nom de la table à valider
+        allowed_tables: Set des tables autorisées
+
+    Returns:
+        Table name validé
+
+    Raises:
+        HTTPException: Si le nom est invalide ou non autorisé
+    """
+    # Vérifier que le nom ne contient que des caractères alphanumériques et underscore
+    if not re.match(r'^[a-z_][a-z0-9_]*$', table_name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid table name format: '{table_name}'. Only lowercase alphanumeric and underscore allowed."
+        )
+
+    # Vérifier que la table est dans la whitelist
+    if table_name not in allowed_tables:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Table '{table_name}' not found or not allowed"
+        )
+
+    return table_name
 
 
 class SQLQueryRequest(BaseModel):
@@ -178,16 +210,17 @@ async def get_table_stats(
     try:
         sql_agent = SQLAgentService()
 
-        # Validate table name
-        if table_name not in sql_agent.ALLOWED_TABLES:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Table '{table_name}' not found or not allowed"
-            )
+        # Validate table name strictly (prevents SQL injection)
+        validated_table = _validate_table_name(table_name, sql_agent.ALLOWED_TABLES)
+
+        # SÉCURISÉ: Utilisation de sqlalchemy.text() avec identifiant validé
+        # Le nom de table a été vérifié avec regex stricte (alphanumeric + underscore uniquement)
+        from sqlalchemy import text
 
         # Get total row count
+        count_query = text(f"SELECT COUNT(*) as total FROM {validated_table}")
         count_result = await sql_agent.execute_sql(
-            sql=f"SELECT COUNT(*) as total FROM {table_name}",
+            sql=str(count_query),
             db=db,
             validate=True
         )
@@ -198,8 +231,9 @@ async def get_table_stats(
 
         # Get indexed row count if is_indexed column exists
         indexed_rows = None
+        indexed_query = text(f"SELECT COUNT(*) as indexed FROM {validated_table} WHERE is_indexed = TRUE")
         indexed_result = await sql_agent.execute_sql(
-            sql=f"SELECT COUNT(*) as indexed FROM {table_name} WHERE is_indexed = TRUE",
+            sql=str(indexed_query),
             db=db,
             validate=True
         )
@@ -209,8 +243,9 @@ async def get_table_stats(
         # Get sample data if requested
         sample_data = None
         if include_sample:
+            sample_query = text(f"SELECT * FROM {validated_table} LIMIT 5")
             sample_result = await sql_agent.execute_sql(
-                sql=f"SELECT * FROM {table_name} LIMIT 5",
+                sql=str(sample_query),
                 db=db,
                 validate=True
             )

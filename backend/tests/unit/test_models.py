@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 
 from app.models.email import Email, EmailUrgency
-from app.models.vendor import Vendor
+from app.models.professionnel import Professionnel
 
 
 @pytest.mark.unit
@@ -146,11 +146,11 @@ class TestEmailModel:
 @pytest.mark.unit
 @pytest.mark.asyncio
 class TestVendorModel:
-    """Test suite for Vendor model"""
+    """Test suite for Professionnel model"""
 
     async def test_create_vendor_with_all_fields(self, async_session, sample_vendor_data):
-        """Test creating a vendor with all fields"""
-        vendor = Vendor(**sample_vendor_data)
+        """Test creating a professionnel with all fields"""
+        vendor = Professionnel(**sample_vendor_data)
         async_session.add(vendor)
         await async_session.commit()
         await async_session.refresh(vendor)
@@ -162,8 +162,8 @@ class TestVendorModel:
         assert vendor.created_at is not None
 
     async def test_vendor_unique_email(self, async_session, create_test_vendor):
-        """Test that vendor email must be unique"""
-        # Create first vendor
+        """Test that professionnel email must be unique"""
+        # Create first professionnel
         await create_test_vendor(email="unique@vendor.com")
 
         # Try to create duplicate
@@ -172,8 +172,8 @@ class TestVendorModel:
             await async_session.commit()
 
     async def test_vendor_default_values(self, async_session):
-        """Test vendor default values"""
-        vendor = Vendor(
+        """Test professionnel default values"""
+        vendor = Professionnel(
             name="Test Vendor",
             email="test@vendor.com",
             category="Technology"
@@ -188,9 +188,9 @@ class TestVendorModel:
         assert isinstance(vendor.created_at, datetime)
 
     async def test_vendor_with_tags(self, async_session):
-        """Test vendor with tags"""
+        """Test professionnel with tags"""
         tags = ["technology", "cloud", "saas"]
-        vendor = Vendor(
+        vendor = Professionnel(
             name="Tech Vendor",
             email="tech@vendor.com",
             category="Technology",
@@ -204,8 +204,8 @@ class TestVendorModel:
         assert "cloud" in vendor.tags
 
     async def test_vendor_optional_fields(self, async_session):
-        """Test vendor with optional fields null"""
-        vendor = Vendor(
+        """Test professionnel with optional fields null"""
+        vendor = Professionnel(
             name="Minimal Vendor",
             email="minimal@vendor.com",
             category="Other"

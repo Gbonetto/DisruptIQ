@@ -122,7 +122,13 @@ async def shutdown_event():
     except Exception as e:
         logger.error("scheduler_shutdown_failed", error=str(e))
 
-    # TODO: Close database connections
+    # Close database connections
+    try:
+        from app.core.database import close_db
+        await close_db()
+        logger.info("database_connections_closed")
+    except Exception as e:
+        logger.error("database_shutdown_failed", error=str(e))
 
 
 @app.get("/")

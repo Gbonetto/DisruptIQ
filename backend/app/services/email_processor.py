@@ -260,10 +260,10 @@ class EmailProcessor:
                 ).execute()
             )
 
-            # Extract headers
+            # Extract headers with default values for missing fields
             headers = message['payload']['headers']
-            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
-            sender = next((h['value'] for h in headers if h['name'] == 'From'), '')
+            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(No Subject)')
+            sender = next((h['value'] for h in headers if h['name'] == 'From'), 'unknown@example.com')
             date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
 
             # Extract body
@@ -301,10 +301,13 @@ class EmailProcessor:
             return datetime.now()
 
     def _extract_body(self, payload: Dict) -> str:
-        """Extract email body from payload"""
+        """Extract email body from payload, with HTML fallback"""
+        import re
         body = ""
+        html_body = ""
 
         if 'parts' in payload:
+            # Try to find text/plain first, keep HTML as fallback
             for part in payload['parts']:
                 if part['mimeType'] == 'text/plain':
                     if 'data' in part['body']:
@@ -312,6 +315,15 @@ class EmailProcessor:
                             part['body']['data']
                         ).decode('utf-8')
                         break
+                elif part['mimeType'] == 'text/html' and not html_body:
+                    if 'data' in part['body']:
+                        html_body = base64.urlsafe_b64decode(
+                            part['body']['data']
+                        ).decode('utf-8')
+
+            # If no plain text found, use HTML with tags stripped
+            if not body and html_body:
+                body = re.sub(r'<[^>]+>', '', html_body)
         else:
             if 'data' in payload['body']:
                 body = base64.urlsafe_b64decode(
@@ -523,14 +535,16 @@ class EmailProcessor:
         classified_emails: Dict[str, List[Dict[str, Any]]]
     ) -> str:
         """
-        Generate HTML digest from classified emails
+        Generate HTML digest from classified emails with XSS protection
 
         Args:
             classified_emails: Dictionary of emails grouped by urgency
 
         Returns:
-            HTML string
+            HTML string with escaped content
         """
+        import html
+
         urgency_colors = {
             'urgent': '#EF4444',
             'important': '#F59E0B',
@@ -543,7 +557,7 @@ class EmailProcessor:
             'routine': '🟢'
         }
 
-        html = f"""
+        html_content = f"""
         <!DOCTYPE html>
         <html>
         <head>
@@ -573,7 +587,7 @@ class EmailProcessor:
             if not emails:
                 continue
 
-            html += f"""
+            html_content += f"""
             <div class="section">
                 <div class="section-title">
                     {urgency_icons[urgency]} {urgency.upper()} ({len(emails)})
@@ -581,25 +595,30 @@ class EmailProcessor:
             """
 
             for email in emails:
-                html += f"""
+                # Escape all user-controlled content to prevent XSS
+                safe_subject = html.escape(email['subject'])
+                safe_sender = html.escape(email['sender'])
+                safe_snippet = html.escape(email['snippet'][:200])
+
+                html_content += f"""
                 <div class="email-card">
-                    <div class="email-subject">{email['subject']}</div>
-                    <div class="email-sender">De: {email['sender']}</div>
-                    <div class="email-snippet">{email['snippet'][:200]}...</div>
+                    <div class="email-subject">{safe_subject}</div>
+                    <div class="email-sender">De: {safe_sender}</div>
+                    <div class="email-snippet">{safe_snippet}...</div>
                     <span class="badge" style="background: {urgency_colors[urgency]};">
                         {urgency}
                     </span>
                 </div>
                 """
 
-            html += "</div>"
+            html_content += "</div>"
 
-        html += """
+        html_content += """
         </body>
         </html>
         """
 
-        return html
+        return html_content
 
     async def send_digest_email(self, html_content: str, recipient: str):
         """Send the digest email via Gmail API"""
