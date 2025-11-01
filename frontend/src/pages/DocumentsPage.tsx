@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { FileText, Upload, Trash2, Download, Eye, Search, Filter } from 'lucide-react';
+import { FileText, Upload, Trash2, Eye, Search, Filter } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -171,10 +171,8 @@ export const DocumentsPage: React.FC = () => {
               onChange={handleFileInput}
               accept=".pdf,.docx,.doc,.jpg,.jpeg,.png"
             />
-            <Button asChild>
-              <label htmlFor="file-upload" className="cursor-pointer">
-                Sélectionner un fichier
-              </label>
+            <Button onClick={() => document.getElementById('file-upload')?.click()}>
+              Sélectionner un fichier
             </Button>
             {uploadMutation.isPending && (
               <p className="mt-4 text-sm text-blue-600">Upload en cours...</p>

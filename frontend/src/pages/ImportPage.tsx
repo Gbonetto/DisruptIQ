@@ -195,10 +195,8 @@ Marie Martin,Électricité Martin,marie@elec.fr,0987654321,électricien,active`;
                   onChange={handleFileInput}
                   accept=".csv"
                 />
-                <Button asChild size="lg">
-                  <label htmlFor="csv-upload" className="cursor-pointer">
-                    Sélectionner un fichier CSV
-                  </label>
+                <Button size="lg" onClick={() => document.getElementById('csv-upload')?.click()}>
+                  Sélectionner un fichier CSV
                 </Button>
               </div>
             </CardContent>
