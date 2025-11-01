@@ -1,0 +1,1085 @@
+disruptiq_backend  | INFO:     Will watch for changes in these directories: ['/app']
+disruptiq_backend  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+disruptiq_backend  | INFO:     Started reloader process [1] using WatchFiles
+disruptiq_backend  | INFO:     Started server process [8]
+disruptiq_backend  | INFO:     Waiting for application startup.
+disruptiq_backend  | {"version": "1.0.0", "event": "starting_disruptiq", "timestamp": "2025-11-01T10:51:23.907705Z"}
+disruptiq_backend  | {"message": "All tables created successfully", "event": "database_initialized", "timestamp": "2025-11-01T10:51:23.961680Z"}
+disruptiq_backend  | {"event": "no_digest_recipients_configured", "timestamp": "2025-11-01T10:51:23.963830Z"}
+disruptiq_backend  | {"event": "scheduler_started_without_recipients", "timestamp": "2025-11-01T10:51:23.963910Z"}
+disruptiq_backend  | {"interval_minutes": 60, "event": "background_digest_scheduled", "timestamp": "2025-11-01T10:51:23.964286Z"}
+disruptiq_backend  | {"event": "scheduler_started_successfully", "timestamp": "2025-11-01T10:51:23.964345Z"}
+disruptiq_backend  | {"message": "Background digest generation enabled", "event": "scheduler_initialized", "timestamp": "2025-11-01T10:51:23.964760Z"}
+disruptiq_backend  | INFO:     Application startup complete.
+disruptiq_backend  | INFO:     172.20.0.1:42990 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/api/endpoints/webhook_test.py'. Reloading...
+disruptiq_backend  | INFO:     Shutting down
+disruptiq_backend  | INFO:     Waiting for application shutdown.
+disruptiq_backend  | {"event": "shutting_down_disruptiq", "timestamp": "2025-11-01T10:52:08.450738Z"}
+disruptiq_backend  | {"event": "scheduler_shutdown", "timestamp": "2025-11-01T10:52:08.450834Z"}
+disruptiq_backend  | {"event": "scheduler_shutdown", "timestamp": "2025-11-01T10:52:08.450857Z"}
+disruptiq_backend  | INFO:     Application shutdown complete.
+disruptiq_backend  | INFO:     Finished server process [8]
+disruptiq_backend  | INFO:     Started server process [29]
+disruptiq_backend  | INFO:     Waiting for application startup.
+disruptiq_backend  | {"version": "1.0.0", "event": "starting_disruptiq", "timestamp": "2025-11-01T10:52:13.067532Z"}
+disruptiq_backend  | {"message": "All tables created successfully", "event": "database_initialized", "timestamp": "2025-11-01T10:52:13.118301Z"}
+disruptiq_backend  | {"event": "no_digest_recipients_configured", "timestamp": "2025-11-01T10:52:13.121522Z"}
+disruptiq_backend  | {"event": "scheduler_started_without_recipients", "timestamp": "2025-11-01T10:52:13.121608Z"}
+disruptiq_backend  | {"interval_minutes": 60, "event": "background_digest_scheduled", "timestamp": "2025-11-01T10:52:13.122003Z"}
+disruptiq_backend  | {"event": "scheduler_started_successfully", "timestamp": "2025-11-01T10:52:13.122066Z"}
+disruptiq_backend  | {"message": "Background digest generation enabled", "event": "scheduler_initialized", "timestamp": "2025-11-01T10:52:13.122502Z"}
+disruptiq_backend  | INFO:     Application startup complete.
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/main.py'. Reloading...
+disruptiq_backend  | INFO:     Shutting down
+disruptiq_backend  | INFO:     Waiting for application shutdown.
+disruptiq_backend  | {"event": "shutting_down_disruptiq", "timestamp": "2025-11-01T10:52:28.886865Z"}
+disruptiq_backend  | {"event": "scheduler_shutdown", "timestamp": "2025-11-01T10:52:28.887017Z"}
+disruptiq_backend  | {"event": "scheduler_shutdown", "timestamp": "2025-11-01T10:52:28.887060Z"}
+disruptiq_backend  | INFO:     Application shutdown complete.
+disruptiq_backend  | INFO:     Finished server process [29]
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/main.py'. Reloading...
+disruptiq_backend  | INFO:     Started server process [49]
+disruptiq_backend  | INFO:     Waiting for application startup.
+disruptiq_backend  | {"version": "1.0.0", "event": "starting_disruptiq", "timestamp": "2025-11-01T10:52:33.032221Z"}
+disruptiq_backend  | {"message": "All tables created successfully", "event": "database_initialized", "timestamp": "2025-11-01T10:52:33.122474Z"}
+disruptiq_backend  | {"event": "no_digest_recipients_configured", "timestamp": "2025-11-01T10:52:33.126718Z"}
+disruptiq_backend  | {"event": "scheduler_started_without_recipients", "timestamp": "2025-11-01T10:52:33.126971Z"}
+disruptiq_backend  | {"interval_minutes": 60, "event": "background_digest_scheduled", "timestamp": "2025-11-01T10:52:33.127969Z"}
+disruptiq_backend  | {"event": "scheduler_started_successfully", "timestamp": "2025-11-01T10:52:33.128092Z"}
+disruptiq_backend  | {"message": "Background digest generation enabled", "event": "scheduler_initialized", "timestamp": "2025-11-01T10:52:33.129084Z"}
+disruptiq_backend  | INFO:     Application startup complete.
+disruptiq_backend  | INFO:     Started server process [69]
+disruptiq_backend  | INFO:     Waiting for application startup.
+disruptiq_backend  | {"version": "1.0.0", "event": "starting_disruptiq", "timestamp": "2025-11-01T10:52:37.114084Z"}
+disruptiq_backend  | {"message": "All tables created successfully", "event": "database_initialized", "timestamp": "2025-11-01T10:52:37.183000Z"}
+disruptiq_backend  | {"event": "no_digest_recipients_configured", "timestamp": "2025-11-01T10:52:37.186141Z"}
+disruptiq_backend  | {"event": "scheduler_started_without_recipients", "timestamp": "2025-11-01T10:52:37.186276Z"}
+disruptiq_backend  | {"interval_minutes": 60, "event": "background_digest_scheduled", "timestamp": "2025-11-01T10:52:37.186873Z"}
+disruptiq_backend  | {"event": "scheduler_started_successfully", "timestamp": "2025-11-01T10:52:37.186973Z"}
+disruptiq_backend  | {"message": "Background digest generation enabled", "event": "scheduler_initialized", "timestamp": "2025-11-01T10:52:37.187616Z"}
+disruptiq_backend  | INFO:     Application startup complete.
+disruptiq_backend  | INFO:     172.20.0.1:34490 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | INFO:     172.20.0.1:55106 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | {"count": 1, "hours": 24, "event": "fetching_latest_digest", "timestamp": "2025-11-01T10:53:15.395718Z"}
+disruptiq_backend  | {"total": 1, "urgent": 0, "important": 0, "routine": 1, "event": "latest_digest_retrieved", "timestamp": "2025-11-01T10:53:15.395870Z"}
+disruptiq_backend  | INFO:     172.20.0.1:55106 - "GET /api/digest/latest HTTP/1.1" 200 OK
+disruptiq_backend  | {"count": 1, "hours": 24, "event": "fetching_latest_digest", "timestamp": "2025-11-01T10:53:15.426010Z"}
+disruptiq_backend  | {"total": 1, "urgent": 0, "important": 0, "routine": 1, "event": "latest_digest_retrieved", "timestamp": "2025-11-01T10:53:15.426141Z"}
+disruptiq_backend  | INFO:     172.20.0.1:50906 - "GET /api/digest/latest HTTP/1.1" 200 OK
+disruptiq_backend  | INFO:     172.20.0.1:50902 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | INFO:     172.20.0.1:50906 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | INFO:     172.20.0.1:57400 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/services/webhook_service.py'. Reloading...
+disruptiq_backend  | INFO:     Shutting down
+disruptiq_backend  | INFO:     Waiting for application shutdown.
+disruptiq_backend  | {"event": "shutting_down_disruptiq", "timestamp": "2025-11-01T10:53:59.783941Z"}
+disruptiq_backend  | {"event": "scheduler_shutdown", "timestamp": "2025-11-01T10:53:59.784060Z"}
+disruptiq_backend  | {"event": "scheduler_shutdown", "timestamp": "2025-11-01T10:53:59.784103Z"}
+disruptiq_backend  | INFO:     Application shutdown complete.
+disruptiq_backend  | INFO:     Finished server process [69]
+disruptiq_backend  | Process SpawnProcess-5:
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 430, in __call__
+disruptiq_backend  |     field_value = self.prepare_field_value(field_name, field, field_value, value_is_complex)
+disruptiq_backend  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 632, in prepare_field_value
+disruptiq_backend  |     raise e
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 629, in prepare_field_value
+disruptiq_backend  |     value = self.decode_complex_value(field_name, field, value)
+disruptiq_backend  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 242, in decode_complex_value
+disruptiq_backend  |     return json.loads(value)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/__init__.py", line 346, in loads
+disruptiq_backend  |     return _default_decoder.decode(s)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 337, in decode
+disruptiq_backend  |     obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+disruptiq_backend  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 355, in raw_decode
+disruptiq_backend  |     raise JSONDecodeError("Expecting value", s, err.value) from None
+disruptiq_backend  | json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+disruptiq_backend  | 
+disruptiq_backend  | The above exception was the direct cause of the following exception:
+disruptiq_backend  | 
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+disruptiq_backend  |     self.run()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 108, in run
+disruptiq_backend  |     self._target(*self._args, **self._kwargs)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+disruptiq_backend  |     target(sockets=sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+disruptiq_backend  |     return asyncio.run(self.serve(sockets=sockets))
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+disruptiq_backend  |     return runner.run(main)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+disruptiq_backend  |     return self._loop.run_until_complete(task)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+disruptiq_backend  |     await self._serve(sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+disruptiq_backend  |     config.load()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+disruptiq_backend  |     self.loaded_app = import_from_string(self.app)
+disruptiq_backend  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+disruptiq_backend  |     module = importlib.import_module(module_str)
+disruptiq_backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+disruptiq_backend  |     return _bootstrap._gcd_import(name[level:], package, level)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+disruptiq_backend  |   File "/app/app/main.py", line 11, in <module>
+disruptiq_backend  |     from app.core.config import settings
+disruptiq_backend  |   File "/app/app/core/config.py", line 70, in <module>
+disruptiq_backend  |     settings = Settings()
+disruptiq_backend  |                ^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 145, in __init__
+disruptiq_backend  |     **__pydantic_self__._settings_build_values(
+disruptiq_backend  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 329, in _settings_build_values
+disruptiq_backend  |     source_state = source()
+disruptiq_backend  |                    ^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 852, in __call__
+disruptiq_backend  |     data: dict[str, Any] = super().__call__()
+disruptiq_backend  |                            ^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 432, in __call__
+disruptiq_backend  |     raise SettingsError(
+disruptiq_backend  | pydantic_settings.sources.SettingsError: error parsing value for field "CORS_ORIGINS" from source "DotEnvSettingsSource"
+disruptiq_backend  | INFO:     Stopping reloader process [1]
+disruptiq_backend  | INFO:     Will watch for changes in these directories: ['/app']
+disruptiq_backend  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+disruptiq_backend  | INFO:     Started reloader process [1] using WatchFiles
+disruptiq_backend  | Process SpawnProcess-1:
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 430, in __call__
+disruptiq_backend  |     field_value = self.prepare_field_value(field_name, field, field_value, value_is_complex)
+disruptiq_backend  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 632, in prepare_field_value
+disruptiq_backend  |     raise e
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 629, in prepare_field_value
+disruptiq_backend  |     value = self.decode_complex_value(field_name, field, value)
+disruptiq_backend  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 242, in decode_complex_value
+disruptiq_backend  |     return json.loads(value)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/__init__.py", line 346, in loads
+disruptiq_backend  |     return _default_decoder.decode(s)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 337, in decode
+disruptiq_backend  |     obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+disruptiq_backend  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 355, in raw_decode
+disruptiq_backend  |     raise JSONDecodeError("Expecting value", s, err.value) from None
+disruptiq_backend  | json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+disruptiq_backend  | 
+disruptiq_backend  | The above exception was the direct cause of the following exception:
+disruptiq_backend  | 
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+disruptiq_backend  |     self.run()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 108, in run
+disruptiq_backend  |     self._target(*self._args, **self._kwargs)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+disruptiq_backend  |     target(sockets=sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+disruptiq_backend  |     return asyncio.run(self.serve(sockets=sockets))
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+disruptiq_backend  |     return runner.run(main)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+disruptiq_backend  |     return self._loop.run_until_complete(task)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+disruptiq_backend  |     await self._serve(sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+disruptiq_backend  |     config.load()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+disruptiq_backend  |     self.loaded_app = import_from_string(self.app)
+disruptiq_backend  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+disruptiq_backend  |     module = importlib.import_module(module_str)
+disruptiq_backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+disruptiq_backend  |     return _bootstrap._gcd_import(name[level:], package, level)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+disruptiq_backend  |   File "/app/app/main.py", line 11, in <module>
+disruptiq_backend  |     from app.core.config import settings
+disruptiq_backend  |   File "/app/app/core/config.py", line 70, in <module>
+disruptiq_backend  |     settings = Settings()
+disruptiq_backend  |                ^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 145, in __init__
+disruptiq_backend  |     **__pydantic_self__._settings_build_values(
+disruptiq_backend  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 329, in _settings_build_values
+disruptiq_backend  |     source_state = source()
+disruptiq_backend  |                    ^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 852, in __call__
+disruptiq_backend  |     data: dict[str, Any] = super().__call__()
+disruptiq_backend  |                            ^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 432, in __call__
+disruptiq_backend  |     raise SettingsError(
+disruptiq_backend  | pydantic_settings.sources.SettingsError: error parsing value for field "CORS_ORIGINS" from source "DotEnvSettingsSource"
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/core/config.py'. Reloading...
+disruptiq_backend  | Process SpawnProcess-2:
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 430, in __call__
+disruptiq_backend  |     field_value = self.prepare_field_value(field_name, field, field_value, value_is_complex)
+disruptiq_backend  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 632, in prepare_field_value
+disruptiq_backend  |     raise e
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 629, in prepare_field_value
+disruptiq_backend  |     value = self.decode_complex_value(field_name, field, value)
+disruptiq_backend  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 242, in decode_complex_value
+disruptiq_backend  |     return json.loads(value)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/__init__.py", line 346, in loads
+disruptiq_backend  |     return _default_decoder.decode(s)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 337, in decode
+disruptiq_backend  |     obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+disruptiq_backend  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 355, in raw_decode
+disruptiq_backend  |     raise JSONDecodeError("Expecting value", s, err.value) from None
+disruptiq_backend  | json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+disruptiq_backend  | 
+disruptiq_backend  | The above exception was the direct cause of the following exception:
+disruptiq_backend  | 
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+disruptiq_backend  |     self.run()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 108, in run
+disruptiq_backend  |     self._target(*self._args, **self._kwargs)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+disruptiq_backend  |     target(sockets=sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+disruptiq_backend  |     return asyncio.run(self.serve(sockets=sockets))
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+disruptiq_backend  |     return runner.run(main)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+disruptiq_backend  |     return self._loop.run_until_complete(task)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+disruptiq_backend  |     await self._serve(sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+disruptiq_backend  |     config.load()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+disruptiq_backend  |     self.loaded_app = import_from_string(self.app)
+disruptiq_backend  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+disruptiq_backend  |     module = importlib.import_module(module_str)
+disruptiq_backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+disruptiq_backend  |     return _bootstrap._gcd_import(name[level:], package, level)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+disruptiq_backend  |   File "/app/app/main.py", line 11, in <module>
+disruptiq_backend  |     from app.core.config import settings
+disruptiq_backend  |   File "/app/app/core/config.py", line 77, in <module>
+disruptiq_backend  |     settings = Settings()
+disruptiq_backend  |                ^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 145, in __init__
+disruptiq_backend  |     **__pydantic_self__._settings_build_values(
+disruptiq_backend  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 329, in _settings_build_values
+disruptiq_backend  |     source_state = source()
+disruptiq_backend  |                    ^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 852, in __call__
+disruptiq_backend  |     data: dict[str, Any] = super().__call__()
+disruptiq_backend  |                            ^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 432, in __call__
+disruptiq_backend  |     raise SettingsError(
+disruptiq_backend  | pydantic_settings.sources.SettingsError: error parsing value for field "GMAIL_SCOPES" from source "DotEnvSettingsSource"
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/main.py'. Reloading...
+disruptiq_backend  | Process SpawnProcess-3:
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 430, in __call__
+disruptiq_backend  |     field_value = self.prepare_field_value(field_name, field, field_value, value_is_complex)
+disruptiq_backend  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 632, in prepare_field_value
+disruptiq_backend  |     raise e
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 629, in prepare_field_value
+disruptiq_backend  |     value = self.decode_complex_value(field_name, field, value)
+disruptiq_backend  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 242, in decode_complex_value
+disruptiq_backend  |     return json.loads(value)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/__init__.py", line 346, in loads
+disruptiq_backend  |     return _default_decoder.decode(s)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 337, in decode
+disruptiq_backend  |     obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+disruptiq_backend  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 355, in raw_decode
+disruptiq_backend  |     raise JSONDecodeError("Expecting value", s, err.value) from None
+disruptiq_backend  | json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+disruptiq_backend  | 
+disruptiq_backend  | The above exception was the direct cause of the following exception:
+disruptiq_backend  | 
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+disruptiq_backend  |     self.run()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 108, in run
+disruptiq_backend  |     self._target(*self._args, **self._kwargs)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+disruptiq_backend  |     target(sockets=sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+disruptiq_backend  |     return asyncio.run(self.serve(sockets=sockets))
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+disruptiq_backend  |     return runner.run(main)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+disruptiq_backend  |     return self._loop.run_until_complete(task)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+disruptiq_backend  |     await self._serve(sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+disruptiq_backend  |     config.load()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+disruptiq_backend  |     self.loaded_app = import_from_string(self.app)
+disruptiq_backend  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+disruptiq_backend  |     module = importlib.import_module(module_str)
+disruptiq_backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+disruptiq_backend  |     return _bootstrap._gcd_import(name[level:], package, level)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+disruptiq_backend  |   File "/app/app/main.py", line 11, in <module>
+disruptiq_backend  |     from app.core.config import settings
+disruptiq_backend  |   File "/app/app/core/config.py", line 77, in <module>
+disruptiq_backend  |     settings = Settings()
+disruptiq_backend  |                ^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 145, in __init__
+disruptiq_backend  |     **__pydantic_self__._settings_build_values(
+disruptiq_backend  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 329, in _settings_build_values
+disruptiq_backend  |     source_state = source()
+disruptiq_backend  |                    ^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 852, in __call__
+disruptiq_backend  |     data: dict[str, Any] = super().__call__()
+disruptiq_backend  |                            ^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 432, in __call__
+disruptiq_backend  |     raise SettingsError(
+disruptiq_backend  | pydantic_settings.sources.SettingsError: error parsing value for field "GMAIL_SCOPES" from source "DotEnvSettingsSource"
+disruptiq_backend  | INFO:     Stopping reloader process [1]
+disruptiq_backend  | INFO:     Will watch for changes in these directories: ['/app']
+disruptiq_backend  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+disruptiq_backend  | INFO:     Started reloader process [1] using WatchFiles
+disruptiq_backend  | Process SpawnProcess-1:
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 430, in __call__
+disruptiq_backend  |     field_value = self.prepare_field_value(field_name, field, field_value, value_is_complex)
+disruptiq_backend  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 632, in prepare_field_value
+disruptiq_backend  |     raise e
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 629, in prepare_field_value
+disruptiq_backend  |     value = self.decode_complex_value(field_name, field, value)
+disruptiq_backend  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 242, in decode_complex_value
+disruptiq_backend  |     return json.loads(value)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/__init__.py", line 346, in loads
+disruptiq_backend  |     return _default_decoder.decode(s)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 337, in decode
+disruptiq_backend  |     obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+disruptiq_backend  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/json/decoder.py", line 355, in raw_decode
+disruptiq_backend  |     raise JSONDecodeError("Expecting value", s, err.value) from None
+disruptiq_backend  | json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+disruptiq_backend  | 
+disruptiq_backend  | The above exception was the direct cause of the following exception:
+disruptiq_backend  | 
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+disruptiq_backend  |     self.run()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 108, in run
+disruptiq_backend  |     self._target(*self._args, **self._kwargs)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+disruptiq_backend  |     target(sockets=sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+disruptiq_backend  |     return asyncio.run(self.serve(sockets=sockets))
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+disruptiq_backend  |     return runner.run(main)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+disruptiq_backend  |     return self._loop.run_until_complete(task)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+disruptiq_backend  |     await self._serve(sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+disruptiq_backend  |     config.load()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+disruptiq_backend  |     self.loaded_app = import_from_string(self.app)
+disruptiq_backend  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+disruptiq_backend  |     module = importlib.import_module(module_str)
+disruptiq_backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+disruptiq_backend  |     return _bootstrap._gcd_import(name[level:], package, level)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+disruptiq_backend  |   File "/app/app/main.py", line 11, in <module>
+disruptiq_backend  |     from app.core.config import settings
+disruptiq_backend  |   File "/app/app/core/config.py", line 77, in <module>
+disruptiq_backend  |     settings = Settings()
+disruptiq_backend  |                ^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 145, in __init__
+disruptiq_backend  |     **__pydantic_self__._settings_build_values(
+disruptiq_backend  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 329, in _settings_build_values
+disruptiq_backend  |     source_state = source()
+disruptiq_backend  |                    ^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 852, in __call__
+disruptiq_backend  |     data: dict[str, Any] = super().__call__()
+disruptiq_backend  |                            ^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/sources.py", line 432, in __call__
+disruptiq_backend  |     raise SettingsError(
+disruptiq_backend  | pydantic_settings.sources.SettingsError: error parsing value for field "GMAIL_SCOPES" from source "DotEnvSettingsSource"
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/core/config.py'. Reloading...
+disruptiq_backend  | Process SpawnProcess-2:
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+disruptiq_backend  |     self.run()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 108, in run
+disruptiq_backend  |     self._target(*self._args, **self._kwargs)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+disruptiq_backend  |     target(sockets=sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+disruptiq_backend  |     return asyncio.run(self.serve(sockets=sockets))
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+disruptiq_backend  |     return runner.run(main)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+disruptiq_backend  |     return self._loop.run_until_complete(task)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+disruptiq_backend  |     await self._serve(sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+disruptiq_backend  |     config.load()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+disruptiq_backend  |     self.loaded_app = import_from_string(self.app)
+disruptiq_backend  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+disruptiq_backend  |     module = importlib.import_module(module_str)
+disruptiq_backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+disruptiq_backend  |     return _bootstrap._gcd_import(name[level:], package, level)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+disruptiq_backend  |   File "/app/app/main.py", line 11, in <module>
+disruptiq_backend  |     from app.core.config import settings
+disruptiq_backend  |   File "/app/app/core/config.py", line 81, in <module>
+disruptiq_backend  |     settings = Settings()
+disruptiq_backend  |                ^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 144, in __init__
+disruptiq_backend  |     super().__init__(
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic/main.py", line 193, in __init__
+disruptiq_backend  |     self.__pydantic_validator__.validate_python(data, self_instance=self)
+disruptiq_backend  | pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+disruptiq_backend  | LOG_LEVEL
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='INFO', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | LOG_FORMAT
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='json', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | ENVIRONMENT
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='development', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/services/email_processor.py'. Reloading...
+disruptiq_backend  | Process SpawnProcess-3:
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+disruptiq_backend  |     self.run()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 108, in run
+disruptiq_backend  |     self._target(*self._args, **self._kwargs)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+disruptiq_backend  |     target(sockets=sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+disruptiq_backend  |     return asyncio.run(self.serve(sockets=sockets))
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+disruptiq_backend  |     return runner.run(main)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+disruptiq_backend  |     return self._loop.run_until_complete(task)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+disruptiq_backend  |     await self._serve(sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+disruptiq_backend  |     config.load()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+disruptiq_backend  |     self.loaded_app = import_from_string(self.app)
+disruptiq_backend  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+disruptiq_backend  |     module = importlib.import_module(module_str)
+disruptiq_backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+disruptiq_backend  |     return _bootstrap._gcd_import(name[level:], package, level)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+disruptiq_backend  |   File "/app/app/main.py", line 11, in <module>
+disruptiq_backend  |     from app.core.config import settings
+disruptiq_backend  |   File "/app/app/core/config.py", line 81, in <module>
+disruptiq_backend  |     settings = Settings()
+disruptiq_backend  |                ^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 144, in __init__
+disruptiq_backend  |     super().__init__(
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic/main.py", line 193, in __init__
+disruptiq_backend  |     self.__pydantic_validator__.validate_python(data, self_instance=self)
+disruptiq_backend  | pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+disruptiq_backend  | LOG_LEVEL
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='INFO', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | LOG_FORMAT
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='json', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | ENVIRONMENT
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='development', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | INFO:     Stopping reloader process [1]
+disruptiq_backend  | INFO:     Will watch for changes in these directories: ['/app']
+disruptiq_backend  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+disruptiq_backend  | INFO:     Started reloader process [1] using WatchFiles
+disruptiq_backend  | Process SpawnProcess-1:
+disruptiq_backend  | Traceback (most recent call last):
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+disruptiq_backend  |     self.run()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/multiprocessing/process.py", line 108, in run
+disruptiq_backend  |     self._target(*self._args, **self._kwargs)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/_subprocess.py", line 80, in subprocess_started
+disruptiq_backend  |     target(sockets=sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+disruptiq_backend  |     return asyncio.run(self.serve(sockets=sockets))
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+disruptiq_backend  |     return runner.run(main)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+disruptiq_backend  |     return self._loop.run_until_complete(task)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+disruptiq_backend  |     await self._serve(sockets)
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+disruptiq_backend  |     config.load()
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+disruptiq_backend  |     self.loaded_app = import_from_string(self.app)
+disruptiq_backend  |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+disruptiq_backend  |     module = importlib.import_module(module_str)
+disruptiq_backend  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+disruptiq_backend  |     return _bootstrap._gcd_import(name[level:], package, level)
+disruptiq_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+disruptiq_backend  |   File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+disruptiq_backend  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+disruptiq_backend  |   File "/app/app/main.py", line 11, in <module>
+disruptiq_backend  |     from app.core.config import settings
+disruptiq_backend  |   File "/app/app/core/config.py", line 81, in <module>
+disruptiq_backend  |     settings = Settings()
+disruptiq_backend  |                ^^^^^^^^^^
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic_settings/main.py", line 144, in __init__
+disruptiq_backend  |     super().__init__(
+disruptiq_backend  |   File "/usr/local/lib/python3.11/site-packages/pydantic/main.py", line 193, in __init__
+disruptiq_backend  |     self.__pydantic_validator__.validate_python(data, self_instance=self)
+disruptiq_backend  | pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+disruptiq_backend  | LOG_LEVEL
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='INFO', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | LOG_FORMAT
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='json', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | ENVIRONMENT
+disruptiq_backend  |   Extra inputs are not permitted [type=extra_forbidden, input_value='development', input_type=str]
+disruptiq_backend  |     For further information visit https://errors.pydantic.dev/2.8/v/extra_forbidden
+disruptiq_backend  | WARNING:  WatchFiles detected changes in 'app/core/config.py'. Reloading...
+disruptiq_backend  | INFO:     Started server process [10]
+disruptiq_backend  | INFO:     Waiting for application startup.
+disruptiq_backend  | {"version": "1.0.0", "event": "starting_disruptiq", "timestamp": "2025-11-01T10:55:51.739916Z"}
+disruptiq_backend  | 2025-11-01 10:55:51,769 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+disruptiq_backend  | 2025-11-01 10:55:51,770 INFO sqlalchemy.engine.Engine [raw sql] ()
+disruptiq_backend  | 2025-11-01 10:55:51,771 INFO sqlalchemy.engine.Engine select current_schema()
+disruptiq_backend  | 2025-11-01 10:55:51,771 INFO sqlalchemy.engine.Engine [raw sql] ()
+disruptiq_backend  | 2025-11-01 10:55:51,773 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+disruptiq_backend  | 2025-11-01 10:55:51,773 INFO sqlalchemy.engine.Engine [raw sql] ()
+disruptiq_backend  | 2025-11-01 10:55:51,775 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 10:55:51,778 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+disruptiq_backend  | FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:51,778 INFO sqlalchemy.engine.Engine [generated in 0.00018s] ('users', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:51,783 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+disruptiq_backend  | FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:51,783 INFO sqlalchemy.engine.Engine [cached since 0.005729s ago] ('emails', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:51,784 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+disruptiq_backend  | FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:51,784 INFO sqlalchemy.engine.Engine [cached since 0.006725s ago] ('vendors', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:51,785 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+disruptiq_backend  | FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:51,785 INFO sqlalchemy.engine.Engine [cached since 0.007669s ago] ('documents', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:51,787 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_type.typname 
+disruptiq_backend  | FROM pg_catalog.pg_type JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_type.typnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_type.typname = $1::VARCHAR AND pg_catalog.pg_type_is_visible(pg_catalog.pg_type.oid) AND pg_catalog.pg_namespace.nspname != $2::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:51,788 INFO sqlalchemy.engine.Engine [generated in 0.00016s] ('emailurgency', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:51,789 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | {"message": "All tables created successfully", "event": "database_initialized", "timestamp": "2025-11-01T10:55:51.790301Z"}
+disruptiq_backend  | {"event": "no_digest_recipients_configured", "timestamp": "2025-11-01T10:55:51.793087Z"}
+disruptiq_backend  | {"event": "scheduler_started_without_recipients", "timestamp": "2025-11-01T10:55:51.793162Z"}
+disruptiq_backend  | {"interval_minutes": 60, "event": "background_digest_scheduled", "timestamp": "2025-11-01T10:55:51.793571Z"}
+disruptiq_backend  | {"event": "scheduler_started_successfully", "timestamp": "2025-11-01T10:55:51.793629Z"}
+disruptiq_backend  | {"message": "Background digest generation enabled", "event": "scheduler_initialized", "timestamp": "2025-11-01T10:55:51.794092Z"}
+disruptiq_backend  | INFO:     Application startup complete.
+disruptiq_backend  | INFO:     Stopping reloader process [1]
+disruptiq_backend  | INFO:     Will watch for changes in these directories: ['/app']
+disruptiq_backend  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+disruptiq_backend  | INFO:     Started reloader process [1] using WatchFiles
+disruptiq_backend  | INFO:     Started server process [8]
+disruptiq_backend  | INFO:     Waiting for application startup.
+disruptiq_backend  | {"version": "1.0.0", "event": "starting_disruptiq", "timestamp": "2025-11-01T10:55:56.786709Z"}
+disruptiq_backend  | 2025-11-01 10:55:56,824 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+disruptiq_backend  | 2025-11-01 10:55:56,824 INFO sqlalchemy.engine.Engine [raw sql] ()
+disruptiq_backend  | 2025-11-01 10:55:56,826 INFO sqlalchemy.engine.Engine select current_schema()
+disruptiq_backend  | 2025-11-01 10:55:56,826 INFO sqlalchemy.engine.Engine [raw sql] ()
+disruptiq_backend  | 2025-11-01 10:55:56,828 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+disruptiq_backend  | 2025-11-01 10:55:56,828 INFO sqlalchemy.engine.Engine [raw sql] ()
+disruptiq_backend  | 2025-11-01 10:55:56,830 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 10:55:56,833 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+disruptiq_backend  | FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:56,833 INFO sqlalchemy.engine.Engine [generated in 0.00029s] ('users', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:56,839 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+disruptiq_backend  | FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:56,839 INFO sqlalchemy.engine.Engine [cached since 0.00631s ago] ('emails', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:56,840 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+disruptiq_backend  | FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:56,840 INFO sqlalchemy.engine.Engine [cached since 0.007383s ago] ('vendors', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:56,841 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+disruptiq_backend  | FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_class.relname = $1::VARCHAR AND pg_catalog.pg_class.relkind = ANY (ARRAY[$2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != $7::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:56,841 INFO sqlalchemy.engine.Engine [cached since 0.008443s ago] ('documents', 'r', 'p', 'f', 'v', 'm', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:56,844 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_type.typname 
+disruptiq_backend  | FROM pg_catalog.pg_type JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_type.typnamespace 
+disruptiq_backend  | WHERE pg_catalog.pg_type.typname = $1::VARCHAR AND pg_catalog.pg_type_is_visible(pg_catalog.pg_type.oid) AND pg_catalog.pg_namespace.nspname != $2::VARCHAR
+disruptiq_backend  | 2025-11-01 10:55:56,844 INFO sqlalchemy.engine.Engine [generated in 0.00020s] ('emailurgency', 'pg_catalog')
+disruptiq_backend  | 2025-11-01 10:55:56,846 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | {"message": "All tables created successfully", "event": "database_initialized", "timestamp": "2025-11-01T10:55:56.847155Z"}
+disruptiq_backend  | {"event": "no_digest_recipients_configured", "timestamp": "2025-11-01T10:55:56.851061Z"}
+disruptiq_backend  | {"event": "scheduler_started_without_recipients", "timestamp": "2025-11-01T10:55:56.851177Z"}
+disruptiq_backend  | {"interval_minutes": 60, "event": "background_digest_scheduled", "timestamp": "2025-11-01T10:55:56.851707Z"}
+disruptiq_backend  | {"event": "scheduler_started_successfully", "timestamp": "2025-11-01T10:55:56.851799Z"}
+disruptiq_backend  | {"message": "Background digest generation enabled", "event": "scheduler_initialized", "timestamp": "2025-11-01T10:55:56.852429Z"}
+disruptiq_backend  | INFO:     Application startup complete.
+disruptiq_backend  | 2025-11-01 10:56:15,788 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 10:56:15,790 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 10:56:15,790 INFO sqlalchemy.engine.Engine [generated in 0.00035s] ('URGENT',)
+disruptiq_backend  | 2025-11-01 10:56:15,823 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 10:56:15,823 INFO sqlalchemy.engine.Engine [generated in 0.00033s] ()
+disruptiq_backend  | 2025-11-01 10:56:15,827 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:58666 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | INFO:     172.20.0.1:58668 - "POST /api/webhook-test/test/simple HTTP/1.1" 422 Unprocessable Entity
+disruptiq_backend  | {"endpoint": "/webhook/test", "url": "https://your-n8n-instance.com/webhook/test", "error": "All connection attempts failed", "event": "webhook_error", "timestamp": "2025-11-01T10:56:55.072911Z"}
+disruptiq_backend  | {"endpoint": "/webhook/test", "url": "https://your-n8n-instance.com/webhook/test", "error": "All connection attempts failed", "event": "webhook_error", "timestamp": "2025-11-01T10:57:18.168834Z"}
+disruptiq_backend  | {"endpoint": "/webhook/test", "url": "https://your-n8n-instance.com/webhook/test", "error": "All connection attempts failed", "event": "webhook_error", "timestamp": "2025-11-01T10:57:41.238623Z"}
+disruptiq_backend  | {"error": "RetryError[<Future at 0x710f0258e1d0 state=finished raised ConnectError>]", "event": "simple_webhook_test_failed", "timestamp": "2025-11-01T10:57:41.239022Z"}
+disruptiq_backend  | INFO:     172.20.0.1:33054 - "POST /api/webhook-test/test/simple HTTP/1.1" 500 Internal Server Error
+disruptiq_backend  | INFO:     172.20.0.1:54658 - "OPTIONS /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 10:57:43,794 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 10:57:43,795 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 10:57:43,795 INFO sqlalchemy.engine.Engine [cached since 88.01s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 10:57:43,797 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 10:57:43,797 INFO sqlalchemy.engine.Engine [cached since 87.98s ago] ()
+disruptiq_backend  | 2025-11-01 10:57:43,798 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:54658 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 10:58:43,793 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 10:58:43,793 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 10:58:43,793 INFO sqlalchemy.engine.Engine [cached since 148s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 10:58:43,796 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 10:58:43,796 INFO sqlalchemy.engine.Engine [cached since 148s ago] ()
+disruptiq_backend  | 2025-11-01 10:58:43,798 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:42600 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 10:58:50,142 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 10:58:50,143 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 10:58:50,143 INFO sqlalchemy.engine.Engine [cached since 154.4s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 10:58:50,144 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 10:58:50,145 INFO sqlalchemy.engine.Engine [cached since 154.3s ago] ()
+disruptiq_backend  | 2025-11-01 10:58:50,146 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:32890 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 10:59:15,800 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 10:59:15,801 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 10:59:15,801 INFO sqlalchemy.engine.Engine [cached since 180s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 10:59:15,803 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 10:59:15,803 INFO sqlalchemy.engine.Engine [cached since 180s ago] ()
+disruptiq_backend  | 2025-11-01 10:59:15,804 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:53182 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 10:59:45,792 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 10:59:45,792 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 10:59:45,792 INFO sqlalchemy.engine.Engine [cached since 210s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 10:59:45,793 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 10:59:45,793 INFO sqlalchemy.engine.Engine [cached since 210s ago] ()
+disruptiq_backend  | 2025-11-01 10:59:45,794 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:51868 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:00:43,788 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:00:43,789 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:00:43,789 INFO sqlalchemy.engine.Engine [cached since 268s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:00:43,791 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:00:43,791 INFO sqlalchemy.engine.Engine [cached since 268s ago] ()
+disruptiq_backend  | 2025-11-01 11:00:43,792 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:58448 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:01:43,801 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:01:43,802 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:01:43,802 INFO sqlalchemy.engine.Engine [cached since 328s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:01:43,805 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:01:43,805 INFO sqlalchemy.engine.Engine [cached since 328s ago] ()
+disruptiq_backend  | 2025-11-01 11:01:43,806 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:60820 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:02:43,797 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:02:43,797 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:02:43,798 INFO sqlalchemy.engine.Engine [cached since 388s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:02:43,800 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:02:43,800 INFO sqlalchemy.engine.Engine [cached since 388s ago] ()
+disruptiq_backend  | 2025-11-01 11:02:43,801 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:36650 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:03:43,785 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:03:43,786 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:03:43,786 INFO sqlalchemy.engine.Engine [cached since 448s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:03:43,787 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:03:43,787 INFO sqlalchemy.engine.Engine [cached since 448s ago] ()
+disruptiq_backend  | 2025-11-01 11:03:43,789 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:48692 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:03:54,252 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:03:54,252 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:03:54,252 INFO sqlalchemy.engine.Engine [cached since 458.5s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:03:54,254 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:03:54,255 INFO sqlalchemy.engine.Engine [cached since 458.5s ago] ()
+disruptiq_backend  | 2025-11-01 11:03:54,256 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:60862 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:04:15,781 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:04:15,781 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:04:15,781 INFO sqlalchemy.engine.Engine [cached since 480s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:04:15,782 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:04:15,782 INFO sqlalchemy.engine.Engine [cached since 480s ago] ()
+disruptiq_backend  | 2025-11-01 11:04:15,783 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:59544 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:04:45,785 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:04:45,785 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:04:45,785 INFO sqlalchemy.engine.Engine [cached since 510s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:04:45,786 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:04:45,786 INFO sqlalchemy.engine.Engine [cached since 510s ago] ()
+disruptiq_backend  | 2025-11-01 11:04:45,787 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:47544 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:05:43,788 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:05:43,788 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:05:43,788 INFO sqlalchemy.engine.Engine [cached since 568s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:05:43,791 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:05:43,791 INFO sqlalchemy.engine.Engine [cached since 568s ago] ()
+disruptiq_backend  | 2025-11-01 11:05:43,792 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:55038 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:06:43,783 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:06:43,783 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:06:43,783 INFO sqlalchemy.engine.Engine [cached since 628s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:06:43,785 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:06:43,785 INFO sqlalchemy.engine.Engine [cached since 628s ago] ()
+disruptiq_backend  | 2025-11-01 11:06:43,786 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:38440 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:07:43,792 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:07:43,792 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:07:43,792 INFO sqlalchemy.engine.Engine [cached since 688.1s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:07:43,793 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:07:43,794 INFO sqlalchemy.engine.Engine [cached since 688s ago] ()
+disruptiq_backend  | 2025-11-01 11:07:43,794 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:54398 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | INFO:     172.20.0.1:48304 - "OPTIONS /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:08:43,792 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:08:43,792 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:08:43,792 INFO sqlalchemy.engine.Engine [cached since 748.1s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:08:43,795 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:08:43,795 INFO sqlalchemy.engine.Engine [cached since 748s ago] ()
+disruptiq_backend  | 2025-11-01 11:08:43,797 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:48304 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:09:43,787 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:09:43,788 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:09:43,788 INFO sqlalchemy.engine.Engine [cached since 808.1s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:09:43,791 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:09:43,791 INFO sqlalchemy.engine.Engine [cached since 808s ago] ()
+disruptiq_backend  | 2025-11-01 11:09:43,794 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:33292 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:10:43,787 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:10:43,788 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:10:43,788 INFO sqlalchemy.engine.Engine [cached since 868.1s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:10:43,790 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:10:43,790 INFO sqlalchemy.engine.Engine [cached since 868s ago] ()
+disruptiq_backend  | 2025-11-01 11:10:43,791 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:59258 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:11:43,797 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:11:43,797 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:11:43,797 INFO sqlalchemy.engine.Engine [cached since 928.1s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:11:43,798 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:11:43,798 INFO sqlalchemy.engine.Engine [cached since 928s ago] ()
+disruptiq_backend  | 2025-11-01 11:11:43,799 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:57460 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:12:43,796 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:12:43,797 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:12:43,797 INFO sqlalchemy.engine.Engine [cached since 988.1s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:12:43,798 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:12:43,798 INFO sqlalchemy.engine.Engine [cached since 988s ago] ()
+disruptiq_backend  | 2025-11-01 11:12:43,799 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:45478 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:13:43,781 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:13:43,782 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:13:43,782 INFO sqlalchemy.engine.Engine [cached since 1048s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:13:43,783 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:13:43,783 INFO sqlalchemy.engine.Engine [cached since 1048s ago] ()
+disruptiq_backend  | 2025-11-01 11:13:43,784 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:58610 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:14:43,787 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:14:43,788 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:14:43,788 INFO sqlalchemy.engine.Engine [cached since 1108s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:14:43,790 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:14:43,790 INFO sqlalchemy.engine.Engine [cached since 1108s ago] ()
+disruptiq_backend  | 2025-11-01 11:14:43,791 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:52804 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:15:43,794 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:15:43,795 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:15:43,795 INFO sqlalchemy.engine.Engine [cached since 1168s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:15:43,797 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:15:43,797 INFO sqlalchemy.engine.Engine [cached since 1168s ago] ()
+disruptiq_backend  | 2025-11-01 11:15:43,798 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:39686 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:16:43,797 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:16:43,798 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:16:43,798 INFO sqlalchemy.engine.Engine [cached since 1228s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:16:43,801 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:16:43,801 INFO sqlalchemy.engine.Engine [cached since 1228s ago] ()
+disruptiq_backend  | 2025-11-01 11:16:43,803 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:57166 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:17:43,787 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:17:43,787 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:17:43,787 INFO sqlalchemy.engine.Engine [cached since 1288s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:17:43,790 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:17:43,790 INFO sqlalchemy.engine.Engine [cached since 1288s ago] ()
+disruptiq_backend  | 2025-11-01 11:17:43,792 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:59356 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:18:43,782 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:18:43,782 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:18:43,782 INFO sqlalchemy.engine.Engine [cached since 1348s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:18:43,785 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:18:43,785 INFO sqlalchemy.engine.Engine [cached since 1348s ago] ()
+disruptiq_backend  | 2025-11-01 11:18:43,786 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:56618 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | INFO:     172.20.0.1:38610 - "OPTIONS /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:19:43,788 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:19:43,789 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:19:43,789 INFO sqlalchemy.engine.Engine [cached since 1408s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:19:43,791 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:19:43,792 INFO sqlalchemy.engine.Engine [cached since 1408s ago] ()
+disruptiq_backend  | 2025-11-01 11:19:43,793 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:38610 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:20:43,788 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:20:43,789 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:20:43,789 INFO sqlalchemy.engine.Engine [cached since 1468s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:20:43,791 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:20:43,792 INFO sqlalchemy.engine.Engine [cached since 1468s ago] ()
+disruptiq_backend  | 2025-11-01 11:20:43,793 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:45892 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:21:43,794 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:21:43,795 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:21:43,795 INFO sqlalchemy.engine.Engine [cached since 1528s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:21:43,798 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:21:43,799 INFO sqlalchemy.engine.Engine [cached since 1528s ago] ()
+disruptiq_backend  | 2025-11-01 11:21:43,801 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:36722 - "GET /api/admin/notifications HTTP/1.1" 200 OK
+disruptiq_backend  | 2025-11-01 11:22:43,793 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+disruptiq_backend  | 2025-11-01 11:22:43,793 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM emails 
+disruptiq_backend  | WHERE emails.urgency = $1::emailurgency
+disruptiq_backend  | 2025-11-01 11:22:43,793 INFO sqlalchemy.engine.Engine [cached since 1588s ago] ('URGENT',)
+disruptiq_backend  | 2025-11-01 11:22:43,795 INFO sqlalchemy.engine.Engine SELECT count(*) AS count_1 
+disruptiq_backend  | FROM vendors 
+disruptiq_backend  | WHERE vendors.is_indexed = false
+disruptiq_backend  | 2025-11-01 11:22:43,795 INFO sqlalchemy.engine.Engine [cached since 1588s ago] ()
+disruptiq_backend  | 2025-11-01 11:22:43,795 INFO sqlalchemy.engine.Engine COMMIT
+disruptiq_backend  | INFO:     172.20.0.1:44186 - "GET /api/admin/notifications HTTP/1.1" 200 OK

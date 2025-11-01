@@ -6,7 +6,6 @@ import { ProfessionnelsPage } from './pages/ProfessionnelsPage'
 import { CopropriétésPage } from './pages/CopriprietesPage'
 import { CopropriétairesPage } from './pages/CoproprietairesPage'
 import { ImportPage } from './pages/ImportPage'
-import { EmailsPage } from './pages/EmailsPage'
 import { DocumentsPage } from './pages/DocumentsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ChatPage } from './pages/ChatPage'
@@ -62,7 +61,6 @@ function App() {
               <Route path="coproprietes" element={<CopropriétésPage />} />
               <Route path="coproprietaires" element={<CopropriétairesPage />} />
               <Route path="import" element={<ImportPage />} />
-              <Route path="emails" element={<EmailsPage />} />
               <Route path="documents" element={<DocumentsPage />} />
               <Route path="digest" element={<DigestPage />} />
               <Route path="assistant" element={<AssistantPage />} />

@@ -11,7 +11,6 @@ import {
   Building,
   UserCog,
   Upload,
-  Mail,
   FileText,
   Settings,
   Search,
@@ -86,13 +85,6 @@ const sidebarItems: SidebarItem[] = [
     label: 'Import Données',
     icon: Upload,
     href: '/admin/import',
-    group: 'tools',
-  },
-  {
-    id: 'emails',
-    label: 'Emails',
-    icon: Mail,
-    href: '/admin/emails',
     group: 'tools',
   },
   {

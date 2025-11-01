@@ -1,25 +1,31 @@
 /**
- * AssistantPage - AI Assistant interface
+ * AssistantPage - AI Assistant interface with RAG and SQL modes
  * Interact with the intelligent assistant for property management
  */
 
 import React, { useState } from 'react';
-import { Bot, Send, Loader2, Sparkles, MessageSquare, User } from 'lucide-react';
+import { Bot, Send, Loader2, Sparkles, MessageSquare, User, Database, FileSearch } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
+import { chatApi, api } from '@/lib/api';
+
+type AssistantMode = 'rag' | 'sql';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  sources?: string[];
+  sqlQuery?: string;
+  tableData?: any[];
 }
 
-const quickActions = [
+const quickActionsRAG = [
   {
     label: 'Résumer les derniers emails',
     prompt: 'Peux-tu me faire un résumé des emails importants reçus aujourd\'hui ?',
@@ -38,7 +44,27 @@ const quickActions = [
   },
 ];
 
+const quickActionsSQL = [
+  {
+    label: 'Nombre total d\'emails',
+    prompt: 'Combien d\'emails avons-nous en base de données ?',
+  },
+  {
+    label: 'Emails urgents',
+    prompt: 'Liste les 10 derniers emails urgents',
+  },
+  {
+    label: 'Professionnels actifs',
+    prompt: 'Combien de professionnels actifs avons-nous ?',
+  },
+  {
+    label: 'Documents récents',
+    prompt: 'Liste les 5 derniers documents uploadés',
+  },
+];
+
 export const AssistantPage: React.FC = () => {
+  const [mode, setMode] = useState<AssistantMode>('rag');
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -49,6 +75,7 @@ export const AssistantPage: React.FC = () => {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [conversationHistory, setConversationHistory] = useState<any[]>([]);
 
   const handleSendMessage = async () => {
     if (!input.trim()) return;
@@ -66,41 +93,73 @@ export const AssistantPage: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Create an AbortController with a 3 minute timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minutes
+      if (mode === 'rag') {
+        // RAG Mode - Use /api/chat/ask
+        const response = await chatApi.ask(userInput, conversationHistory);
 
-      const response = await fetch('http://localhost:8000/api/assistant/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userInput }),
-        signal: controller.signal,
-      });
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: response.data.response || 'Désolé, je n\'ai pas pu générer une réponse.',
+          timestamp: new Date(),
+          sources: response.data.sources || [],
+        };
 
-      clearTimeout(timeoutId);
+        setMessages((prev) => [...prev, assistantMessage]);
 
-      if (!response.ok) throw new Error('Failed to get response');
+        // Update conversation history
+        setConversationHistory(prev => [
+          ...prev,
+          { role: 'user', content: userInput },
+          { role: 'assistant', content: response.data.response },
+        ]);
 
-      const data = await response.json();
+      } else {
+        // SQL Mode - Use /api/assistant/sql-query
+        const response = await api.post('/api/assistant/sql-query', {
+          query: userInput,
+          operation_type: 'SELECT',
+        });
 
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.response || 'Désolé, je n\'ai pas pu générer une réponse.',
-        timestamp: new Date(),
-      };
+        const data = response.data;
 
-      setMessages((prev) => [...prev, assistantMessage]);
+        let content = '';
+        if (data.success) {
+          if (data.explanation) {
+            content = data.explanation + '\n\n';
+          }
+          if (data.results && data.results.length > 0) {
+            content += `📊 Résultats (${data.row_count} ligne${data.row_count > 1 ? 's' : ''})`;
+          } else {
+            content += 'Aucun résultat trouvé.';
+          }
+        } else {
+          content = data.error || 'Erreur lors de l\'exécution de la requête SQL.';
+        }
+
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content,
+          timestamp: new Date(),
+          sqlQuery: data.sql,
+          tableData: data.results || [],
+        };
+
+        setMessages((prev) => [...prev, assistantMessage]);
+      }
     } catch (error: any) {
       console.error('Error sending message:', error);
 
       let errorContent = 'Désolé, une erreur s\'est produite. Veuillez réessayer.';
-      if (error.name === 'AbortError') {
+
+      if (error.response?.data?.detail) {
+        errorContent = error.response.data.detail;
+      } else if (error.name === 'AbortError') {
         errorContent = 'La réponse a pris trop de temps. L\'assistant IA peut être temporairement indisponible.';
-        toast.error('Timeout - La requête a pris trop de temps');
-      } else {
-        toast.error('Erreur lors de la communication avec l\'assistant');
       }
+
+      toast.error('Erreur lors de la communication avec l\'assistant');
 
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -126,6 +185,23 @@ export const AssistantPage: React.FC = () => {
     }
   };
 
+  const handleModeChange = (newMode: AssistantMode) => {
+    setMode(newMode);
+    setMessages([
+      {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: newMode === 'rag'
+          ? 'Mode RAG activé. Je peux maintenant répondre à vos questions en utilisant vos documents indexés et l\'IA.'
+          : 'Mode SQL activé. Je peux maintenant interroger directement votre base de données avec des requêtes SQL naturelles.',
+        timestamp: new Date(),
+      },
+    ]);
+    setConversationHistory([]);
+  };
+
+  const quickActions = mode === 'rag' ? quickActionsRAG : quickActionsSQL;
+
   return (
     <div className="space-y-6 h-full flex flex-col">
       {/* Header */}
@@ -139,6 +215,42 @@ export const AssistantPage: React.FC = () => {
         </p>
       </div>
 
+      {/* Mode Selector */}
+      <Card className="border-purple-200 bg-purple-50">
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-purple-900 mb-1">Mode de l'assistant</p>
+              <p className="text-sm text-purple-700">
+                {mode === 'rag'
+                  ? 'Recherche dans vos documents avec l\'IA (RAG)'
+                  : 'Requêtes SQL sur votre base de données'}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant={mode === 'rag' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleModeChange('rag')}
+                className={mode === 'rag' ? 'bg-purple-600' : ''}
+              >
+                <FileSearch className="h-4 w-4 mr-2" />
+                RAG
+              </Button>
+              <Button
+                variant={mode === 'sql' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleModeChange('sql')}
+                className={mode === 'sql' ? 'bg-blue-600' : ''}
+              >
+                <Database className="h-4 w-4 mr-2" />
+                SQL
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
@@ -149,11 +261,14 @@ export const AssistantPage: React.FC = () => {
         </Card>
         <Card>
           <CardHeader className="pb-3">
-            <CardDescription>Statut</CardDescription>
+            <CardDescription>Mode actuel</CardDescription>
             <CardTitle className="text-xl">
-              <Badge variant="success" className="flex items-center gap-1 w-fit">
-                <Sparkles className="h-3 w-3" />
-                En ligne
+              <Badge
+                variant="success"
+                className={`flex items-center gap-1 w-fit ${mode === 'rag' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}
+              >
+                {mode === 'rag' ? <FileSearch className="h-3 w-3" /> : <Database className="h-3 w-3" />}
+                {mode === 'rag' ? 'RAG' : 'SQL'}
               </Badge>
             </CardTitle>
           </CardHeader>
@@ -174,7 +289,9 @@ export const AssistantPage: React.FC = () => {
             Conversation
           </CardTitle>
           <CardDescription>
-            L'assistant a accès à toutes vos données pour vous aider efficacement
+            {mode === 'rag'
+              ? 'L\'assistant utilise vos documents indexés pour répondre précisément'
+              : 'L\'assistant génère des requêtes SQL pour interroger votre base de données'}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col gap-4">
@@ -182,41 +299,95 @@ export const AssistantPage: React.FC = () => {
           <ScrollArea className="flex-1 pr-4">
             <div className="space-y-4">
               {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex gap-3 ${
-                    message.role === 'user' ? 'justify-end' : 'justify-start'
-                  }`}
-                >
-                  {message.role === 'assistant' && (
-                    <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0">
-                      <Bot className="h-4 w-4 text-purple-600" />
-                    </div>
-                  )}
+                <div key={message.id}>
                   <div
-                    className={`max-w-[80%] rounded-lg p-3 ${
-                      message.role === 'user'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-900'
+                    className={`flex gap-3 ${
+                      message.role === 'user' ? 'justify-end' : 'justify-start'
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                    <p
-                      className={`text-xs mt-1 ${
-                        message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
+                    {message.role === 'assistant' && (
+                      <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0">
+                        <Bot className="h-4 w-4 text-purple-600" />
+                      </div>
+                    )}
+                    <div
+                      className={`max-w-[80%] rounded-lg p-3 ${
+                        message.role === 'user'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-900'
                       }`}
                     >
-                      {message.timestamp.toLocaleTimeString('fr-FR', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </p>
-                  </div>
-                  {message.role === 'user' && (
-                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                      <User className="h-4 w-4 text-blue-600" />
+                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+
+                      {/* SQL Query display */}
+                      {message.sqlQuery && (
+                        <div className="mt-2 p-2 bg-gray-800 text-green-400 rounded text-xs font-mono">
+                          SQL: {message.sqlQuery}
+                        </div>
+                      )}
+
+                      {/* Table data display */}
+                      {message.tableData && message.tableData.length > 0 && (
+                        <div className="mt-2 overflow-x-auto">
+                          <table className="min-w-full text-xs border border-gray-300">
+                            <thead className="bg-gray-200">
+                              <tr>
+                                {Object.keys(message.tableData[0]).map((key) => (
+                                  <th key={key} className="px-2 py-1 border border-gray-300 text-left font-semibold">
+                                    {key}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {message.tableData.slice(0, 10).map((row, idx) => (
+                                <tr key={idx} className="hover:bg-gray-50">
+                                  {Object.values(row).map((val: any, vidx) => (
+                                    <td key={vidx} className="px-2 py-1 border border-gray-300">
+                                      {String(val)}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {message.tableData.length > 10 && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              ... et {message.tableData.length - 10} ligne(s) supplémentaire(s)
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Sources display */}
+                      {message.sources && message.sources.length > 0 && (
+                        <div className="mt-2 text-xs text-gray-600">
+                          <p className="font-semibold">Sources:</p>
+                          <ul className="list-disc list-inside">
+                            {message.sources.map((source, idx) => (
+                              <li key={idx}>{source}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <p
+                        className={`text-xs mt-1 ${
+                          message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
+                        }`}
+                      >
+                        {message.timestamp.toLocaleTimeString('fr-FR', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </p>
                     </div>
-                  )}
+                    {message.role === 'user' && (
+                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                        <User className="h-4 w-4 text-blue-600" />
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
               {isLoading && (
@@ -282,9 +453,9 @@ export const AssistantPage: React.FC = () => {
       <Card className="border-purple-200 bg-purple-50">
         <CardContent className="p-4">
           <p className="text-sm text-purple-900">
-            <strong>💡 Conseil :</strong> L'assistant peut vous aider à rechercher des professionnels,
-            analyser vos emails, générer des rapports et bien plus encore. N'hésitez pas à lui poser
-            des questions détaillées !
+            <strong>💡 Conseil :</strong> {mode === 'rag'
+              ? 'L\'assistant RAG recherche dans vos documents indexés pour vous donner des réponses précises et contextuelles.'
+              : 'L\'assistant SQL peut interroger votre base de données avec un langage naturel. Demandez des statistiques, des listes, des comptes, etc.'}
           </p>
         </CardContent>
       </Card>
