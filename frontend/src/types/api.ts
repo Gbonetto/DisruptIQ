@@ -62,6 +62,63 @@ export interface VendorEmailData {
   context?: Record<string, unknown>
 }
 
+export interface Email {
+  id: number
+  message_id: string
+  thread_id?: string
+  sender: string
+  recipient?: string
+  subject: string
+  snippet?: string
+  body?: string
+  urgency: 'urgent' | 'important' | 'routine'
+  category?: string
+  attachments: Array<{ filename: string; size: number }>
+  processed: boolean
+  included_in_digest: boolean
+  received_at?: string
+  processed_at?: string
+  created_at?: string
+}
+
+export interface EmailListResponse {
+  emails: Email[]
+  total: number
+  limit: number
+  offset: number
+  has_more: boolean
+}
+
+export interface EmailFilters {
+  limit?: number
+  offset?: number
+  urgency?: string
+  category?: string
+  search?: string
+  processed?: boolean
+  included_in_digest?: boolean
+  from_date?: string
+  to_date?: string
+}
+
+export interface EmailStatsResponse {
+  total: number
+  by_urgency: {
+    urgent: number
+    important: number
+    routine: number
+  }
+  by_status: {
+    processed: number
+    unprocessed: number
+    in_digest: number
+  }
+  by_timeframe: {
+    today: number
+    this_week: number
+  }
+}
+
 // ==================== CHAT ====================
 export interface ChatMessage {
   role: 'user' | 'assistant'

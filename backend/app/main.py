@@ -13,7 +13,7 @@ import structlog
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.endpoints import auth, digest, email_generator, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache
+from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document
 from app.services.scheduler_service import get_scheduler
@@ -156,6 +156,7 @@ app.include_router(health.router, tags=["Health & Monitoring"])
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(digest.router, prefix="/api/digest", tags=["Email Digest"])
 app.include_router(email_generator.router, prefix="/api/email", tags=["Email Generator"])
+app.include_router(emails.router, prefix="/api/emails", tags=["Email Management"])
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["AI Assistant"])
