@@ -1,14 +1,39 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { DashboardPage } from './pages/DashboardPage'
+import { ProfessionnelsPage } from './pages/ProfessionnelsPage'
+import { CopropriétésPage } from './pages/CopriprietesPage'
+import { CopropriétairesPage } from './pages/CoproprietairesPage'
+import { ImportPage } from './pages/ImportPage'
+import { EmailsPage } from './pages/EmailsPage'
+import { DocumentsPage } from './pages/DocumentsPage'
+import { SettingsPage } from './pages/SettingsPage'
 import { ChatPage } from './pages/ChatPage'
-import { AdminPage } from './pages/AdminPage'
-import { Home, MessageSquare, Settings } from 'lucide-react'
+import { DigestPage } from './pages/DigestPage'
+import { AssistantPage } from './pages/AssistantPage'
+import { AppLayout } from './components/layout/AppLayout'
+import { useEffect } from 'react'
+import { adminApi } from './lib/api'
 
 const queryClient = new QueryClient()
 
 function App() {
+  // Fetch notifications
+  const fetchNotifications = async () => {
+    try {
+      await adminApi.getNotifications()
+    } catch (error) {
+      console.error('Failed to fetch notifications:', error)
+    }
+  }
+
+  // Initial fetch and polling every 30 seconds
+  useEffect(() => {
+    fetchNotifications()
+    const interval = setInterval(fetchNotifications, 30000) // 30 seconds
+    return () => clearInterval(interval)
+  }, [])
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
@@ -22,49 +47,27 @@ function App() {
             duration={4000}
           />
 
-          {/* Navigation */}
-          <nav className="border-b">
-            <div className="container mx-auto px-4 py-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-primary-foreground font-bold">
-                    D
-                  </div>
-                  <span className="text-xl font-bold">DisruptIQ</span>
-                </div>
-
-                <div className="flex gap-4">
-                  <Link
-                    to="/"
-                    className="flex items-center gap-2 px-4 py-2 rounded-md hover:bg-accent transition-colors"
-                  >
-                    <Home className="w-4 h-4" />
-                    Dashboard
-                  </Link>
-                  <Link
-                    to="/chat"
-                    className="flex items-center gap-2 px-4 py-2 rounded-md hover:bg-accent transition-colors"
-                  >
-                    <MessageSquare className="w-4 h-4" />
-                    Assistant
-                  </Link>
-                  <Link
-                    to="/admin"
-                    className="flex items-center gap-2 px-4 py-2 rounded-md hover:bg-accent transition-colors"
-                  >
-                    <Settings className="w-4 h-4" />
-                    Admin
-                  </Link>
-                </div>
-              </div>
-            </div>
-          </nav>
-
           {/* Routes */}
           <Routes>
-            <Route path="/" element={<DashboardPage />} />
+            {/* Redirect root to admin dashboard */}
+            <Route path="/" element={<Navigate to="/admin" replace />} />
+
+            {/* Chat page (standalone, not in admin layout) */}
             <Route path="/chat" element={<ChatPage />} />
-            <Route path="/admin" element={<AdminPage />} />
+
+            {/* Admin routes with AppLayout (sidebar navigation) */}
+            <Route path="/admin" element={<AppLayout />}>
+              <Route index element={<DashboardPage />} />
+              <Route path="professionnels" element={<ProfessionnelsPage />} />
+              <Route path="coproprietes" element={<CopropriétésPage />} />
+              <Route path="coproprietaires" element={<CopropriétairesPage />} />
+              <Route path="import" element={<ImportPage />} />
+              <Route path="emails" element={<EmailsPage />} />
+              <Route path="documents" element={<DocumentsPage />} />
+              <Route path="digest" element={<DigestPage />} />
+              <Route path="assistant" element={<AssistantPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+            </Route>
           </Routes>
         </div>
       </BrowserRouter>

@@ -1,16 +1,16 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
 import { Pagination } from '@/components/ui/pagination'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useStats, useVendors } from '@/hooks/useApi'
 import { adminApi } from '@/lib/api'
-import { Upload, Users, FileText, Mail, Database, AlertCircle, RefreshCw, Search, Filter } from 'lucide-react'
+import { Upload, Users, FileText, Mail, Database, AlertCircle, RefreshCw, Search, Trash2, AlertTriangle } from 'lucide-react'
 import { useState, useMemo, useEffect } from 'react'
 import { toast } from 'sonner'
 
 export function AdminPage() {
-  const { data: stats, error: statsError, isLoading: statsLoading } = useStats()
+  const { data: stats, error: statsError } = useStats()
   const { data: vendors, error: vendorsError, isLoading: vendorsLoading } = useVendors()
   const [isReindexing, setIsReindexing] = useState(false)
 
@@ -24,6 +24,14 @@ export function AdminPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const itemsPerPage = 10
 
+  // Danger Zone - Dialog states
+  const [deleteVendorsDialog, setDeleteVendorsDialog] = useState(false)
+  const [deleteDocumentsDialog, setDeleteDocumentsDialog] = useState(false)
+  const [deleteEmailsDialog, setDeleteEmailsDialog] = useState(false)
+  const [resetAllDialog, setResetAllDialog] = useState(false)
+  const [reindexDialog, setReindexDialog] = useState(false)
+  const [isDangerActionLoading, setIsDangerActionLoading] = useState(false)
+
   // Debounce search term (300ms)
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -34,9 +42,9 @@ export function AdminPage() {
   }, [searchTerm])
 
   // Get unique categories for filter dropdown
-  const categories = useMemo(() => {
+  const categories = useMemo<string[]>(() => {
     if (!vendors) return []
-    const uniqueCategories = new Set(vendors.map((v: any) => v.category).filter(Boolean))
+    const uniqueCategories = new Set<string>(vendors.map((v: any) => v.category).filter(Boolean))
     return Array.from(uniqueCategories).sort()
   }, [vendors])
 
@@ -82,11 +90,8 @@ export function AdminPage() {
   const totalPages = Math.ceil(filteredVendors.length / itemsPerPage)
 
   const handleReindexVendors = async () => {
-    if (!confirm('Voulez-vous réindexer tous les fournisseurs dans Qdrant ? Cette opération peut prendre quelques secondes.')) {
-      return
-    }
-
     setIsReindexing(true)
+    setReindexDialog(false)
     const toastId = toast.loading('Réindexation en cours...')
 
     try {
@@ -170,6 +175,125 @@ export function AdminPage() {
     input.click()
   }
 
+  // Danger Zone - Delete handlers
+  const handleDeleteAllVendors = async () => {
+    setIsDangerActionLoading(true)
+    const toastId = toast.loading('Suppression de tous les fournisseurs...')
+
+    try {
+      const response = await adminApi.deleteAllVendors()
+      console.log('Delete vendors successful:', response.data)
+
+      toast.success(
+        `✅ ${response.data.postgres_deleted || 0} fournisseur(s) supprimé(s)\n🗄️ PostgreSQL et Qdrant vidés`,
+        { id: toastId, duration: 5000, style: { whiteSpace: 'pre-line' } }
+      )
+
+      setDeleteVendorsDialog(false)
+      setTimeout(() => window.location.reload(), 1500)
+    } catch (error: any) {
+      console.error('Delete vendors failed:', error)
+      const errorMessage = error?.response?.data?.detail || error?.message || 'Une erreur est survenue'
+      toast.error(
+        `Erreur de suppression: ${errorMessage}`,
+        { id: toastId }
+      )
+    } finally {
+      setIsDangerActionLoading(false)
+    }
+  }
+
+  const handleDeleteAllDocuments = async () => {
+    setIsDangerActionLoading(true)
+    const toastId = toast.loading('Suppression de tous les documents...')
+
+    try {
+      const response = await adminApi.deleteAllDocuments()
+      console.log('Delete documents successful:', response.data)
+
+      toast.success(
+        `✅ ${response.data.postgres_deleted || 0} document(s) supprimé(s)\n🗄️ Base de données vidée`,
+        { id: toastId, duration: 5000, style: { whiteSpace: 'pre-line' } }
+      )
+
+      setDeleteDocumentsDialog(false)
+      setTimeout(() => window.location.reload(), 1500)
+    } catch (error: any) {
+      console.error('Delete documents failed:', error)
+      const errorMessage = error?.response?.data?.detail || error?.message || 'Une erreur est survenue'
+      toast.error(
+        `Erreur de suppression: ${errorMessage}`,
+        { id: toastId }
+      )
+    } finally {
+      setIsDangerActionLoading(false)
+    }
+  }
+
+  const handleDeleteAllEmails = async () => {
+    setIsDangerActionLoading(true)
+    const toastId = toast.loading('Suppression de tous les emails...')
+
+    try {
+      const response = await adminApi.deleteAllEmails()
+      console.log('Delete emails successful:', response.data)
+
+      toast.success(
+        `✅ ${response.data.postgres_deleted || 0} email(s) supprimé(s)\n🗄️ Base de données vidée`,
+        { id: toastId, duration: 5000, style: { whiteSpace: 'pre-line' } }
+      )
+
+      setDeleteEmailsDialog(false)
+      setTimeout(() => window.location.reload(), 1500)
+    } catch (error: any) {
+      console.error('Delete emails failed:', error)
+      const errorMessage = error?.response?.data?.detail || error?.message || 'Une erreur est survenue'
+      toast.error(
+        `Erreur de suppression: ${errorMessage}`,
+        { id: toastId }
+      )
+    } finally {
+      setIsDangerActionLoading(false)
+    }
+  }
+
+  const handleResetAllData = async () => {
+    setIsDangerActionLoading(true)
+    const toastId = toast.loading('⚠️ Réinitialisation complète du système...')
+
+    try {
+      const response = await adminApi.resetAllData()
+      console.log('Reset all data successful:', response.data)
+
+      const details = response.data.details || {}
+      let message = `🔥 Réinitialisation complète terminée!\n\n`
+
+      if (details.vendors?.postgres_deleted) {
+        message += `✅ ${details.vendors.postgres_deleted} fournisseur(s) supprimé(s)\n`
+      }
+      if (details.documents?.postgres_deleted) {
+        message += `✅ ${details.documents.postgres_deleted} document(s) supprimé(s)\n`
+      }
+      if (details.emails?.postgres_deleted) {
+        message += `✅ ${details.emails.postgres_deleted} email(s) supprimé(s)\n`
+      }
+
+      toast.success(message, { id: toastId, duration: 6000, style: { whiteSpace: 'pre-line' } })
+
+      setResetAllDialog(false)
+      setTimeout(() => window.location.reload(), 2000)
+    } catch (error: any) {
+      console.error('Reset all data failed:', error)
+      const errorMessage = error?.response?.data?.detail || error?.message || 'Une erreur est survenue'
+      toast.error(
+        `Erreur de réinitialisation: ${errorMessage}`,
+        { id: toastId }
+      )
+    } finally {
+      setIsDangerActionLoading(false)
+    }
+  }
+
   return (
     <div className="container mx-auto py-6">
       <h1 className="text-3xl font-bold mb-6">Administration</h1>
@@ -238,7 +362,7 @@ export function AdminPage() {
                 Importer CSV
               </Button>
               <Button
-                onClick={handleReindexVendors}
+                onClick={() => setReindexDialog(true)}
                 variant="outline"
                 disabled={isReindexing}
               >
@@ -260,10 +384,10 @@ export function AdminPage() {
                 />
               </div>
               <div className="flex gap-2 w-full sm:w-auto">
-                <Select
+                <select
                   value={categoryFilter}
                   onChange={(e) => setCategoryFilter(e.target.value)}
-                  className="w-full sm:w-[180px]"
+                  className="w-full sm:w-[180px] h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                 >
                   <option value="all">Toutes catégories</option>
                   {categories.map((cat) => (
@@ -271,16 +395,16 @@ export function AdminPage() {
                       {cat}
                     </option>
                   ))}
-                </Select>
-                <Select
+                </select>
+                <select
                   value={indexedFilter}
                   onChange={(e) => setIndexedFilter(e.target.value)}
-                  className="w-full sm:w-[160px]"
+                  className="w-full sm:w-[160px] h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                 >
                   <option value="all">Tous statuts</option>
                   <option value="indexed">Indexés</option>
                   <option value="not_indexed">Non indexés</option>
-                </Select>
+                </select>
               </div>
             </div>
 
@@ -375,6 +499,162 @@ export function AdminPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Danger Zone */}
+      <Card className="mt-8 border-destructive">
+        <CardHeader className="bg-destructive/5">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-destructive" />
+            <CardTitle className="text-destructive">Danger Zone</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-6">
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground mb-6">
+              Ces actions sont <strong>irréversibles</strong> et supprimeront définitivement les données de la base de données. Utilisez avec précaution.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Delete All Vendors */}
+              <div className="p-4 border border-destructive/20 rounded-lg bg-destructive/5">
+                <h3 className="font-semibold mb-2 flex items-center gap-2">
+                  <Trash2 className="h-4 w-4" />
+                  Supprimer tous les fournisseurs
+                </h3>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Supprime tous les fournisseurs de PostgreSQL et Qdrant ({stats?.total_vendors || 0} fournisseur(s))
+                </p>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setDeleteVendorsDialog(true)}
+                  disabled={!stats?.total_vendors}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Supprimer les fournisseurs
+                </Button>
+              </div>
+
+              {/* Delete All Documents */}
+              <div className="p-4 border border-destructive/20 rounded-lg bg-destructive/5">
+                <h3 className="font-semibold mb-2 flex items-center gap-2">
+                  <Trash2 className="h-4 w-4" />
+                  Supprimer tous les documents
+                </h3>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Supprime tous les documents de la base de données ({stats?.total_documents || 0} document(s))
+                </p>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setDeleteDocumentsDialog(true)}
+                  disabled={!stats?.total_documents}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Supprimer les documents
+                </Button>
+              </div>
+
+              {/* Delete All Emails */}
+              <div className="p-4 border border-destructive/20 rounded-lg bg-destructive/5">
+                <h3 className="font-semibold mb-2 flex items-center gap-2">
+                  <Trash2 className="h-4 w-4" />
+                  Supprimer tous les emails
+                </h3>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Supprime tous les emails de la base de données ({stats?.total_emails || 0} email(s))
+                </p>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setDeleteEmailsDialog(true)}
+                  disabled={!stats?.total_emails}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Supprimer les emails
+                </Button>
+              </div>
+
+              {/* Reset All Data */}
+              <div className="p-4 border border-destructive rounded-lg bg-destructive/10">
+                <h3 className="font-semibold mb-2 flex items-center gap-2 text-destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  Réinitialisation complète
+                </h3>
+                <p className="text-sm text-muted-foreground mb-3">
+                  <strong>ATTENTION :</strong> Supprime TOUTES les données (vendors, documents, emails)
+                </p>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setResetAllDialog(true)}
+                  className="bg-red-600 hover:bg-red-700"
+                >
+                  <AlertTriangle className="w-4 h-4 mr-2" />
+                  Réinitialiser tout
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Confirmation Dialogs */}
+      <ConfirmDialog
+        open={deleteVendorsDialog}
+        onOpenChange={setDeleteVendorsDialog}
+        onConfirm={handleDeleteAllVendors}
+        title="Supprimer tous les fournisseurs ?"
+        description={`Vous êtes sur le point de supprimer ${stats?.total_vendors || 0} fournisseur(s) de PostgreSQL et Qdrant. Cette action est irréversible. Voulez-vous continuer ?`}
+        confirmText="Oui, supprimer"
+        cancelText="Annuler"
+        isLoading={isDangerActionLoading}
+      />
+
+      <ConfirmDialog
+        open={deleteDocumentsDialog}
+        onOpenChange={setDeleteDocumentsDialog}
+        onConfirm={handleDeleteAllDocuments}
+        title="Supprimer tous les documents ?"
+        description={`Vous êtes sur le point de supprimer ${stats?.total_documents || 0} document(s) de la base de données. Cette action est irréversible. Voulez-vous continuer ?`}
+        confirmText="Oui, supprimer"
+        cancelText="Annuler"
+        isLoading={isDangerActionLoading}
+      />
+
+      <ConfirmDialog
+        open={deleteEmailsDialog}
+        onOpenChange={setDeleteEmailsDialog}
+        onConfirm={handleDeleteAllEmails}
+        title="Supprimer tous les emails ?"
+        description={`Vous êtes sur le point de supprimer ${stats?.total_emails || 0} email(s) de la base de données. Cette action est irréversible. Voulez-vous continuer ?`}
+        confirmText="Oui, supprimer"
+        cancelText="Annuler"
+        isLoading={isDangerActionLoading}
+      />
+
+      <ConfirmDialog
+        open={resetAllDialog}
+        onOpenChange={setResetAllDialog}
+        onConfirm={handleResetAllData}
+        title="⚠️ RÉINITIALISATION COMPLÈTE ⚠️"
+        description={`ATTENTION : Vous êtes sur le point de supprimer TOUTES les données :\n\n• ${stats?.total_vendors || 0} fournisseur(s)\n• ${stats?.total_documents || 0} document(s)\n• ${stats?.total_emails || 0} email(s)\n\nCette action est IRRÉVERSIBLE et videra complètement la base de données. Êtes-vous absolument certain ?`}
+        confirmText="Oui, tout supprimer"
+        cancelText="Non, annuler"
+        isLoading={isDangerActionLoading}
+      />
+
+      <ConfirmDialog
+        open={reindexDialog}
+        onOpenChange={setReindexDialog}
+        onConfirm={handleReindexVendors}
+        title="Réindexer tous les fournisseurs ?"
+        description={`Vous êtes sur le point de réindexer tous les fournisseurs (${stats?.total_vendors || 0}) dans Qdrant. Cette opération peut prendre quelques secondes. Voulez-vous continuer ?`}
+        confirmText="Oui, réindexer"
+        cancelText="Annuler"
+        variant="default"
+        isLoading={isReindexing}
+      />
     </div>
   )
 }
