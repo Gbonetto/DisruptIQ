@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mail, Search, Filter, RefreshCw, Eye, Trash2, CheckCircle, Clock, Calendar } from 'lucide-react';
+import { Mail, Search, Filter, RefreshCw, Trash2, CheckCircle, Clock } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -79,7 +79,7 @@ export const EmailsPage: React.FC = () => {
 
   // Pagination
   const handleNextPage = () => {
-    if (emailsData?.has_more) {
+    if (emailsData?.data.has_more) {
       setFilters(prev => ({ ...prev, offset: (prev.offset || 0) + (prev.limit || 20) }));
     }
   };
