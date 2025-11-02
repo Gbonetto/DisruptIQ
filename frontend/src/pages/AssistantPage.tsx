@@ -4,16 +4,13 @@
  */
 
 import React, { useState } from 'react';
-import { Bot, Send, Loader2, Sparkles, MessageSquare, User, Database, FileSearch } from 'lucide-react';
+import { Bot, Send, Loader2, Sparkles, MessageSquare, User } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
-import { chatApi, api } from '@/lib/api';
-
-type AssistantMode = 'rag' | 'sql';
+import { chatApi } from '@/lib/api';
 
 interface Message {
   id: string;
@@ -64,12 +61,11 @@ const quickActionsSQL = [
 ];
 
 export const AssistantPage: React.FC = () => {
-  const [mode, setMode] = useState<AssistantMode>('rag');
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'assistant',
-      content: 'Bonjour ! Je suis votre assistant IA pour la gestion de copropriétés. Comment puis-je vous aider aujourd\'hui ?',
+      content: 'Bonjour ! Je suis votre assistant IA intelligent. Je peux répondre à vos questions en cherchant dans vos documents (RAG) ou en interrogeant votre base de données (SQL). Je choisis automatiquement le meilleur mode selon votre question. Comment puis-je vous aider ?',
       timestamp: new Date(),
     },
   ]);
@@ -93,62 +89,32 @@ export const AssistantPage: React.FC = () => {
     setIsLoading(true);
 
     try {
-      if (mode === 'rag') {
-        // RAG Mode - Use /api/chat/ask
-        // Backend returns: { message: string, sources: array, session_id: string }
-        const response = await chatApi.ask(userInput, conversationHistory);
+      // Use intelligent orchestrator - it automatically chooses RAG or SQL
+      // Backend returns: { message: string, sources: array, session_id: string }
+      const response = await chatApi.ask(userInput, conversationHistory);
 
-        const assistantMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: response.data.message || 'Désolé, je n\'ai pas pu générer une réponse.',
-          timestamp: new Date(),
-          sources: response.data.sources || [],
-        };
+      // Extract mode from sources metadata if available
+      const mode = response.data.sources?.[0]?.metadata?.title?.includes('SQL') ? 'sql' : 'rag';
 
-        setMessages((prev) => [...prev, assistantMessage]);
+      const assistantMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: response.data.message || 'Désolé, je n\'ai pas pu générer une réponse.',
+        timestamp: new Date(),
+        sources: mode === 'rag' ? response.data.sources : undefined,
+        sqlQuery: mode === 'sql' ? response.data.sources?.[0]?.metadata?.sql : undefined,
+        tableData: [], // Table data would need to be passed through sources if needed
+      };
 
-        // Update conversation history
-        setConversationHistory(prev => [
-          ...prev,
-          { role: 'user', content: userInput },
-          { role: 'assistant', content: response.data.message },
-        ]);
+      setMessages((prev) => [...prev, assistantMessage]);
 
-      } else {
-        // SQL Mode - Use /api/assistant/sql-query
-        const response = await api.post('/api/assistant/sql-query', {
-          query: userInput,
-          operation_type: 'SELECT',
-        });
+      // Update conversation history
+      setConversationHistory(prev => [
+        ...prev,
+        { role: 'user', content: userInput },
+        { role: 'assistant', content: response.data.message },
+      ]);
 
-        const data = response.data;
-
-        let content = '';
-        if (data.success) {
-          if (data.explanation) {
-            content = data.explanation + '\n\n';
-          }
-          if (data.results && data.results.length > 0) {
-            content += `📊 Résultats (${data.row_count} ligne${data.row_count > 1 ? 's' : ''})`;
-          } else {
-            content += 'Aucun résultat trouvé.';
-          }
-        } else {
-          content = data.error || 'Erreur lors de l\'exécution de la requête SQL.';
-        }
-
-        const assistantMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content,
-          timestamp: new Date(),
-          sqlQuery: data.sql,
-          tableData: data.results || [],
-        };
-
-        setMessages((prev) => [...prev, assistantMessage]);
-      }
     } catch (error: any) {
       console.error('Error sending message:', error);
 
@@ -186,22 +152,11 @@ export const AssistantPage: React.FC = () => {
     }
   };
 
-  const handleModeChange = (newMode: AssistantMode) => {
-    setMode(newMode);
-    setMessages([
-      {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: newMode === 'rag'
-          ? 'Mode RAG activé. Je peux maintenant répondre à vos questions en utilisant vos documents indexés et l\'IA.'
-          : 'Mode SQL activé. Je peux maintenant interroger directement votre base de données avec des requêtes SQL naturelles.',
-        timestamp: new Date(),
-      },
-    ]);
-    setConversationHistory([]);
-  };
-
-  const quickActions = mode === 'rag' ? quickActionsRAG : quickActionsSQL;
+  // Combined quick actions (mix of RAG and SQL examples)
+  const quickActions = [
+    ...quickActionsRAG.slice(0, 2),  // Take first 2 RAG actions
+    ...quickActionsSQL.slice(0, 2),  // Take first 2 SQL actions
+  ];
 
   return (
     <div className="space-y-6 h-full flex flex-col">
@@ -216,44 +171,23 @@ export const AssistantPage: React.FC = () => {
         </p>
       </div>
 
-      {/* Mode Selector */}
+      {/* Info Card */}
       <Card className="border-purple-200 bg-purple-50">
         <CardContent className="pt-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Sparkles className="h-5 w-5 text-purple-700" />
             <div>
-              <p className="font-medium text-purple-900 mb-1">Mode de l'assistant</p>
+              <p className="font-medium text-purple-900">Assistant Intelligent</p>
               <p className="text-sm text-purple-700">
-                {mode === 'rag'
-                  ? 'Recherche dans vos documents avec l\'IA (RAG)'
-                  : 'Requêtes SQL sur votre base de données'}
+                Je choisis automatiquement entre RAG (documents) et SQL (base de données) selon votre question
               </p>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant={mode === 'rag' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => handleModeChange('rag')}
-                className={mode === 'rag' ? 'bg-purple-600' : ''}
-              >
-                <FileSearch className="h-4 w-4 mr-2" />
-                RAG
-              </Button>
-              <Button
-                variant={mode === 'sql' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => handleModeChange('sql')}
-                className={mode === 'sql' ? 'bg-blue-600' : ''}
-              >
-                <Database className="h-4 w-4 mr-2" />
-                SQL
-              </Button>
             </div>
           </div>
         </CardContent>
       </Card>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
           <CardHeader className="pb-3">
             <CardDescription>Messages échangés</CardDescription>
@@ -262,22 +196,8 @@ export const AssistantPage: React.FC = () => {
         </Card>
         <Card>
           <CardHeader className="pb-3">
-            <CardDescription>Mode actuel</CardDescription>
-            <CardTitle className="text-xl">
-              <Badge
-                variant="success"
-                className={`flex items-center gap-1 w-fit ${mode === 'rag' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}
-              >
-                {mode === 'rag' ? <FileSearch className="h-3 w-3" /> : <Database className="h-3 w-3" />}
-                {mode === 'rag' ? 'RAG' : 'SQL'}
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
             <CardDescription>Modèle IA</CardDescription>
-            <CardTitle className="text-lg text-gray-600">GPT-4</CardTitle>
+            <CardTitle className="text-lg text-gray-600">GPT-4 + Orchestrator</CardTitle>
           </CardHeader>
         </Card>
       </div>
@@ -290,9 +210,7 @@ export const AssistantPage: React.FC = () => {
             Conversation
           </CardTitle>
           <CardDescription>
-            {mode === 'rag'
-              ? 'L\'assistant utilise vos documents indexés pour répondre précisément'
-              : 'L\'assistant génère des requêtes SQL pour interroger votre base de données'}
+            L'assistant choisit automatiquement entre recherche documentaire (RAG) et requêtes base de données (SQL)
           </CardDescription>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col gap-4">
@@ -456,9 +374,7 @@ export const AssistantPage: React.FC = () => {
       <Card className="border-purple-200 bg-purple-50">
         <CardContent className="p-4">
           <p className="text-sm text-purple-900">
-            <strong>💡 Conseil :</strong> {mode === 'rag'
-              ? 'L\'assistant RAG recherche dans vos documents indexés pour vous donner des réponses précises et contextuelles.'
-              : 'L\'assistant SQL peut interroger votre base de données avec un langage naturel. Demandez des statistiques, des listes, des comptes, etc.'}
+            <strong>💡 Conseil :</strong> Posez simplement votre question en langage naturel. L'assistant détermine automatiquement s'il faut chercher dans vos documents (RAG) ou interroger la base de données (SQL).
           </p>
         </CardContent>
       </Card>

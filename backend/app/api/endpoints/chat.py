@@ -1,6 +1,6 @@
 """
 Chat Interface Endpoints
-RAG-based question answering
+Intelligent orchestration between RAG and SQL modes
 """
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -10,7 +10,10 @@ import structlog
 
 from app.services.rag_service import RAGService
 from app.services.llm_service import LLMService
+from app.services.orchestrator_service import OrchestratorService
 from app.core.dependencies import get_llm_service, get_rag_service
+from app.core.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -38,53 +41,71 @@ class ChatResponse(BaseModel):
 
 @router.post("/ask", response_model=ChatResponse)
 async def ask_question(
-    request: ChatRequest
+    request: ChatRequest,
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Ask a question with RAG context
+    Ask a question with intelligent routing (RAG or SQL)
+
+    The orchestrator automatically determines if your question needs:
+    - RAG: Document search and knowledge retrieval
+    - SQL: Database queries and statistics
 
     Example:
     {
-        "message": "Qui est le plombier habituel ?",
-        "conversation_history": [
-            {"role": "user", "content": "Bonjour"},
-            {"role": "assistant", "content": "Bonjour, comment puis-je vous aider?"}
-        ]
+        "message": "Combien d'emails urgents avons-nous?",  # -> SQL
+        "conversation_history": []
+    }
+    {
+        "message": "Comment procéder pour un dégât des eaux?",  # -> RAG
+        "conversation_history": []
     }
 
     Performance optimizations:
-    - Reuses singleton LLM and RAG services (no re-initialization)
-    - Single RAG search for both context and sources (eliminates double search)
+    - Intelligent routing reduces unnecessary service calls
+    - Reuses singleton services (no re-initialization)
     """
     try:
-        rag_service = get_rag_service()
-        llm_service = get_llm_service()
+        # Use orchestrator for intelligent routing
+        orchestrator = OrchestratorService()
 
-        # Single RAG search for both context and sources (OPTIMIZATION: eliminates double search)
-        logger.info("searching_context", question=request.message[:50])
-        sources = await rag_service.search(request.message, limit=3)
+        logger.info("orchestrator_processing", question=request.message[:50])
 
-        # Build context from search results
-        context = "\n\n".join([
-            f"Document: {src.get('metadata', {}).get('title', 'Sans titre')}\n{src.get('text', '')}"
-            for src in sources
-        ])
-
-        # Get answer from LLM
-        logger.info("generating_answer")
-        answer = await llm_service.answer_question(
-            question=request.message,
-            context=context,
+        result = await orchestrator.process_query(
+            query=request.message,
+            db=db,
             conversation_history=[msg.dict() for msg in request.conversation_history]
         )
 
-        logger.info("question_answered", question=request.message[:50])
+        logger.info(
+            "orchestrator_completed",
+            question=request.message[:50],
+            mode=result.get("mode"),
+            success=result.get("success")
+        )
 
-        return {
-            "message": answer,
-            "sources": sources,
-            "session_id": request.session_id or "default"
-        }
+        # Format response based on mode
+        if result["mode"] == "sql":
+            # SQL mode: include query and results
+            return {
+                "message": result["response"],
+                "sources": [{
+                    "text": f"Mode: SQL Database Query",
+                    "metadata": {
+                        "title": "SQL Query Result",
+                        "sql": result.get("sql_query", ""),
+                        "row_count": result.get("row_count", 0)
+                    }
+                }],
+                "session_id": request.session_id or "default"
+            }
+        else:
+            # RAG mode: include document sources
+            return {
+                "message": result["response"],
+                "sources": result.get("sources", []),
+                "session_id": request.session_id or "default"
+            }
 
     except Exception as e:
         logger.error("chat_error", error=str(e))
