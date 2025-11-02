@@ -68,6 +68,53 @@ DisruptIQ est un système RAG (Retrieval-Augmented Generation) intelligent conç
 
 ---
 
+## 📁 Project Structure
+
+```
+DisruptIQ_CC/
+├── backend/                 # Backend FastAPI
+│   ├── app/
+│   │   ├── api/endpoints/  # API routes
+│   │   ├── models/         # SQLAlchemy models
+│   │   ├── services/       # Business logic
+│   │   │   └── agents/    # Multi-agent system
+│   │   └── core/          # Config & database
+│   ├── docs/              # Backend docs
+│   └── tests/             # Backend tests
+├── frontend/               # Frontend React/TypeScript
+│   ├── src/
+│   │   ├── components/    # React components
+│   │   ├── pages/        # Page components
+│   │   └── lib/          # Utilities
+│   └── public/           # Static assets
+├── nginx/                  # Nginx config (production)
+├── credentials/            # OAuth tokens (gitignored)
+├── docs/                   # Project documentation
+│   ├── architecture/      # Technical docs
+│   └── guides/           # User guides
+│       └── n8n/         # N8N workflows
+├── scripts/                # Utility scripts
+│   ├── digest-service/    # External Gmail fetcher
+│   │   ├── v1.py         # Production stable
+│   │   ├── v2.py         # Enhanced version
+│   │   └── README.md     # Digest service docs
+│   ├── dev/              # Development/test scripts
+│   └── deployment/       # Deployment scripts
+├── docker-compose.yml      # Services orchestration
+├── README.md              # This file
+├── ROADMAP.md            # Product roadmap
+└── PRD.md                # Product requirements
+```
+
+### Key Directories
+
+- **`backend/app/services/agents/`** - Multi-agent orchestrator system (SQL, RAG, OCR, Email, Workflow)
+- **`scripts/digest-service/`** - External Gmail fetcher (hybrid architecture to bypass Docker network issues)
+- **`docs/architecture/`** - Technical documentation (multi-agent system, digest architecture)
+- **`nginx/`** - Production reverse proxy config (optional, activated with `--profile production`)
+
+---
+
 ## 🏗️ Architecture Technique
 
 ### Stack Technologique
