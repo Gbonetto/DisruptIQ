@@ -42,7 +42,7 @@ import {
   Download,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import Papa from 'papaparse';
+import Papa, { ParseResult } from 'papaparse';
 
 interface ImportWizardProps {
   open: boolean;
@@ -117,16 +117,16 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({
     setFile(file);
 
     // Parse CSV
-    Papa.parse(file, {
+    Papa.parse<Record<string, string>>(file, {
       header: true,
       skipEmptyLines: true,
-      complete: (results) => {
+      complete: (results: ParseResult<Record<string, string>>) => {
         const headers = results.meta.fields || [];
         setCsvData(results.data);
         setHeaders(headers);
 
         // Auto-map columns
-        const autoMappings = headers.map((csvCol) => {
+        const autoMappings = headers.map((csvCol: string) => {
           const dbField = autoMapColumn(csvCol);
           return { csvColumn: csvCol, dbField };
         });
@@ -135,7 +135,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({
         setStep('column-mapping');
         toast.success(`${results.data.length} lignes détectées`);
       },
-      error: (error) => {
+      error: (error: Error) => {
         toast.error(`Erreur de parsing: ${error.message}`);
       },
     });

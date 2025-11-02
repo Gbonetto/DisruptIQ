@@ -129,27 +129,49 @@ export const DigestPage: React.FC = () => {
 
   // Get emails to display
   const getEmailsToDisplay = (): Email[] => {
-    if (digestData?.data?.digest?.sections) {
-      // Extract emails from digest sections
+    if (digestData?.data) {
+      // Backend returns { urgent: {count, emails}, important: {count, emails}, routine: {count, emails} }
       const allEmails: Email[] = [];
-      digestData.data.digest.sections.forEach(section => {
-        section.emails.forEach(digestEmail => {
-          // Convert DigestEmail to Email format
+
+      // Extract emails from urgent, important, and routine
+      const { urgent, important, routine } = digestData.data;
+
+      if (urgent?.emails) {
+        urgent.emails.forEach((email: any) => {
           allEmails.push({
-            id: digestEmail.id,
-            message_id: '',
-            sender: digestEmail.sender,
-            subject: digestEmail.subject,
-            snippet: digestEmail.summary,
-            urgency: digestEmail.priority as any || 'routine',
-            category: digestEmail.category,
-            attachments: [],
+            ...email,
+            urgency: 'urgent',
+            attachments: email.attachments || [],
             processed: false,
             included_in_digest: true,
-            received_at: digestEmail.received_at,
           });
         });
-      });
+      }
+
+      if (important?.emails) {
+        important.emails.forEach((email: any) => {
+          allEmails.push({
+            ...email,
+            urgency: 'important',
+            attachments: email.attachments || [],
+            processed: false,
+            included_in_digest: true,
+          });
+        });
+      }
+
+      if (routine?.emails) {
+        routine.emails.forEach((email: any) => {
+          allEmails.push({
+            ...email,
+            urgency: 'routine',
+            attachments: email.attachments || [],
+            processed: false,
+            included_in_digest: true,
+          });
+        });
+      }
+
       return allEmails;
     } else if (emailsData?.data?.emails) {
       return emailsData.data.emails;

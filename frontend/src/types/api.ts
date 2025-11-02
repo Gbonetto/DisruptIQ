@@ -4,6 +4,32 @@
  */
 
 // ==================== DIGEST ====================
+// Backend returns emails grouped by urgency level directly
+export interface DigestEmailGroup {
+  count: number
+  emails: Array<{
+    id: number
+    message_id: string
+    sender: string
+    subject: string
+    body?: string
+    urgency: string
+    received_at?: string
+    attachments?: Array<{ filename: string; size: number }>
+  }>
+}
+
+// Actual response from backend /api/digest/latest and /api/digest/generate
+export interface DigestResponse {
+  date: string
+  total_emails: number
+  urgent: DigestEmailGroup
+  important: DigestEmailGroup
+  routine: DigestEmailGroup
+  generated_at: string
+}
+
+// Legacy types (kept for compatibility if needed elsewhere)
 export interface DigestEmail {
   id: number
   subject: string
@@ -28,11 +54,6 @@ export interface Digest {
   total_emails: number
   sections: DigestSection[]
   generated_at: string
-}
-
-export interface DigestResponse {
-  digest: Digest
-  message: string
 }
 
 // ==================== EMAIL ====================
@@ -126,11 +147,17 @@ export interface ChatMessage {
   timestamp?: string
 }
 
+// Actual response from backend /api/chat/ask
 export interface ChatResponse {
-  response: string
-  confidence: number
-  sources?: string[]
-  conversation_id: string
+  message: string  // Backend returns "message" not "response"
+  sources: Array<{
+    text: string
+    metadata?: {
+      title?: string
+      [key: string]: any
+    }
+  }>
+  session_id: string  // Backend returns "session_id" not "conversation_id"
 }
 
 export interface ChatHistoryResponse {

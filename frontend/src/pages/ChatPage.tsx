@@ -31,7 +31,7 @@ export function ChatPage() {
 
       const assistantMessage: Message = {
         role: 'assistant',
-        content: result.response,
+        content: result.message,  // Backend returns "message" not "response"
       }
       setMessages(prev => [...prev, assistantMessage])
     } catch (error) {

@@ -20,7 +20,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  sources?: string[];
+  sources?: Array<{ text: string; metadata?: { title?: string; [key: string]: any } }>;
   sqlQuery?: string;
   tableData?: any[];
 }
@@ -95,12 +95,13 @@ export const AssistantPage: React.FC = () => {
     try {
       if (mode === 'rag') {
         // RAG Mode - Use /api/chat/ask
+        // Backend returns: { message: string, sources: array, session_id: string }
         const response = await chatApi.ask(userInput, conversationHistory);
 
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: response.data.response || 'Désolé, je n\'ai pas pu générer une réponse.',
+          content: response.data.message || 'Désolé, je n\'ai pas pu générer une réponse.',
           timestamp: new Date(),
           sources: response.data.sources || [],
         };
@@ -111,7 +112,7 @@ export const AssistantPage: React.FC = () => {
         setConversationHistory(prev => [
           ...prev,
           { role: 'user', content: userInput },
-          { role: 'assistant', content: response.data.response },
+          { role: 'assistant', content: response.data.message },
         ]);
 
       } else {
@@ -365,7 +366,9 @@ export const AssistantPage: React.FC = () => {
                           <p className="font-semibold">Sources:</p>
                           <ul className="list-disc list-inside">
                             {message.sources.map((source, idx) => (
-                              <li key={idx}>{source}</li>
+                              <li key={idx}>
+                                {source.metadata?.title || 'Document'}: {source.text.substring(0, 100)}...
+                              </li>
                             ))}
                           </ul>
                         </div>
