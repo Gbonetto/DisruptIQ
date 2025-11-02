@@ -268,3 +268,46 @@ Réponse:"""
         except Exception as e:
             logger.error("answer_error", error=str(e))
             return "Désolé, je n'ai pas pu répondre à votre question."
+
+    async def generate_response(
+        self,
+        prompt: str,
+        max_tokens: int = 500,
+        temperature: float = 0.7
+    ) -> str:
+        """
+        Generic text generation method
+
+        Args:
+            prompt: The input prompt
+            max_tokens: Maximum tokens in response
+            temperature: Sampling temperature
+
+        Returns:
+            Generated text response
+        """
+        try:
+            response = await self.chat_model.ainvoke(
+                [HumanMessage(content=prompt)],
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            return response.content
+
+        except Exception as e:
+            logger.error("generate_response_error", error=str(e))
+
+            # Try fallback if available
+            if self.fallback_model:
+                try:
+                    logger.info("using_anthropic_fallback")
+                    response = await self.fallback_model.ainvoke(
+                        [HumanMessage(content=prompt)],
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+                    return response.content
+                except Exception as fallback_error:
+                    logger.error("fallback_error", error=str(fallback_error))
+
+            raise Exception(f"Failed to generate response: {str(e)}")

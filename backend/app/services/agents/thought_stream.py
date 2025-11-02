@@ -1,0 +1,227 @@
+"""
+Thought Stream - Chain of Thoughts tracking for transparent AI reasoning
+Inspired by DeepSeek's reasoning display
+"""
+
+import structlog
+from typing import List, Dict, Any, Optional, AsyncGenerator
+from datetime import datetime
+from enum import Enum
+from pydantic import BaseModel
+import asyncio
+import json
+
+logger = structlog.get_logger()
+
+
+class ThoughtType(str, Enum):
+    """Types of thoughts in the reasoning chain"""
+    ANALYZING = "analyzing"  # Analyzing user request
+    CLASSIFYING = "classifying"  # Classifying intention
+    PLANNING = "planning"  # Planning which agents to call
+    EXECUTING = "executing"  # Executing agent action
+    WAITING = "waiting"  # Waiting for agent response
+    PROCESSING = "processing"  # Processing agent results
+    SYNTHESIZING = "synthesizing"  # Synthesizing final response
+    COMPLETED = "completed"  # Task completed
+    ERROR = "error"  # Error occurred
+
+
+class ThoughtEvent(BaseModel):
+    """Single thought event in the reasoning chain"""
+    id: str
+    type: ThoughtType
+    timestamp: datetime
+    agent: Optional[str] = None  # Which agent is thinking
+    title: str  # Short title (e.g., "Analyzing request")
+    content: str  # Detailed thought content
+    data: Optional[Dict[str, Any]] = None  # Additional structured data
+    progress: Optional[float] = None  # Progress 0-1 for this step
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+
+class ThoughtStream:
+    """
+    Manages the chain of thoughts for an assistant session
+
+    This class tracks all reasoning steps and broadcasts them
+    in real-time via Server-Sent Events (SSE)
+    """
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.thoughts: List[ThoughtEvent] = []
+        self.subscribers: List[asyncio.Queue] = []
+        self._event_counter = 0
+        logger.info("thought_stream_initialized", session_id=session_id)
+
+    def subscribe(self) -> asyncio.Queue:
+        """Subscribe to thought stream events"""
+        queue = asyncio.Queue()
+        self.subscribers.append(queue)
+        logger.info("subscriber_added", session_id=self.session_id, total=len(self.subscribers))
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue):
+        """Unsubscribe from thought stream"""
+        if queue in self.subscribers:
+            self.subscribers.remove(queue)
+            logger.info("subscriber_removed", session_id=self.session_id, total=len(self.subscribers))
+
+    async def add_thought(
+        self,
+        thought_type: ThoughtType,
+        title: str,
+        content: str,
+        agent: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+        progress: Optional[float] = None
+    ) -> ThoughtEvent:
+        """
+        Add a new thought to the stream and broadcast it
+
+        Args:
+            thought_type: Type of thought
+            title: Short title
+            content: Detailed content
+            agent: Agent name (if applicable)
+            data: Additional structured data
+            progress: Progress indicator (0-1)
+
+        Returns:
+            Created ThoughtEvent
+        """
+        self._event_counter += 1
+
+        event = ThoughtEvent(
+            id=f"{self.session_id}-{self._event_counter}",
+            type=thought_type,
+            timestamp=datetime.now(),
+            agent=agent,
+            title=title,
+            content=content,
+            data=data,
+            progress=progress
+        )
+
+        self.thoughts.append(event)
+
+        # Broadcast to all subscribers
+        await self._broadcast(event)
+
+        logger.debug(
+            "thought_added",
+            session_id=self.session_id,
+            type=thought_type.value,
+            agent=agent,
+            title=title
+        )
+
+        return event
+
+    async def _broadcast(self, event):
+        """
+        Broadcast event to all subscribers
+
+        Args:
+            event: ThoughtEvent or raw string (for custom SSE events)
+        """
+        for queue in self.subscribers:
+            try:
+                await queue.put(event)
+            except Exception as e:
+                logger.error("broadcast_failed", error=str(e), session_id=self.session_id)
+
+    async def stream_events(self) -> AsyncGenerator[str, None]:
+        """
+        Stream events as Server-Sent Events (SSE) format
+
+        Yields:
+            SSE formatted strings
+        """
+        queue = self.subscribe()
+
+        try:
+            # Send existing thoughts first
+            for thought in self.thoughts:
+                yield self._format_sse(thought)
+                await asyncio.sleep(0.05)  # Small delay for readability
+
+            # Stream new thoughts as they come
+            should_continue = True
+            while should_continue:
+                try:
+                    # Wait for new thought with timeout
+                    event = await asyncio.wait_for(queue.get(), timeout=60.0)
+
+                    # Handle both ThoughtEvent objects and raw SSE strings
+                    if isinstance(event, str):
+                        # Raw SSE string (e.g., final response event)
+                        yield event
+                        # If it's a response event, we can stop after sending it
+                        if "event: response" in event:
+                            should_continue = False
+                    elif isinstance(event, ThoughtEvent):
+                        # Standard thought event
+                        yield self._format_sse(event)
+
+                        # If completed or error, continue streaming to get final response
+                        if event.type in [ThoughtType.COMPLETED, ThoughtType.ERROR]:
+                            # Don't stop yet - wait for the final response event
+                            pass
+
+                except asyncio.TimeoutError:
+                    # Send keep-alive ping
+                    yield f": keep-alive\n\n"
+
+        except asyncio.CancelledError:
+            logger.info("stream_cancelled", session_id=self.session_id)
+        finally:
+            self.unsubscribe(queue)
+
+    def _format_sse(self, event: ThoughtEvent) -> str:
+        """
+        Format thought event as Server-Sent Event
+
+        Format:
+        event: thought
+        data: {"id": "...", "type": "...", ...}
+
+        """
+        event_data = event.model_dump()
+        return f"event: thought\ndata: {json.dumps(event_data, default=str)}\n\n"
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Get summary of all thoughts"""
+        return {
+            "session_id": self.session_id,
+            "total_thoughts": len(self.thoughts),
+            "agents_used": list(set(t.agent for t in self.thoughts if t.agent)),
+            "duration_seconds": (
+                (self.thoughts[-1].timestamp - self.thoughts[0].timestamp).total_seconds()
+                if len(self.thoughts) > 1 else 0
+            ),
+            "thoughts": [t.model_dump() for t in self.thoughts]
+        }
+
+
+# Global registry of active thought streams
+_active_streams: Dict[str, ThoughtStream] = {}
+
+
+def get_thought_stream(session_id: str) -> ThoughtStream:
+    """Get or create thought stream for session"""
+    if session_id not in _active_streams:
+        _active_streams[session_id] = ThoughtStream(session_id)
+    return _active_streams[session_id]
+
+
+def cleanup_stream(session_id: str):
+    """Cleanup thought stream after session ends"""
+    if session_id in _active_streams:
+        del _active_streams[session_id]
+        logger.info("thought_stream_cleaned", session_id=session_id)

@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Newspaper, Send, Trash2, CheckCircle, Clock, AlertCircle, RefreshCw } from 'lucide-react';
+import { Newspaper, Send, Trash2, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,45 +28,181 @@ export const DigestPage: React.FC = () => {
     retry: 1,
   });
 
-  // Fetch email stats
-  const { data: statsData, refetch: refetchStats } = useQuery({
-    queryKey: ['email-stats'],
-    queryFn: () => emailsApi.getStats(),
-  });
-
   // Fetch all emails as fallback if no digest
-  const { data: emailsData, isLoading: isLoadingEmails, refetch: refetchEmails } = useQuery({
+  const { data: emailsData, isLoading: isLoadingEmails } = useQuery({
     queryKey: ['emails-all', { limit: 100, offset: 0 }],
     queryFn: () => emailsApi.list({ limit: 100, offset: 0, processed: false }),
     enabled: !digestData, // Only fetch if no digest available
   });
 
-  // Mark as processed mutation
+  // Get emails to display (defined early for use in stats calculation)
+  const getEmailsToDisplay = (): Email[] => {
+    if (digestData?.data) {
+      const allEmails: Email[] = [];
+      const { urgent, important, routine } = digestData.data;
+
+      if (urgent?.emails) {
+        urgent.emails.forEach((email: any) => {
+          allEmails.push({
+            ...email,
+            urgency: 'urgent',
+            attachments: email.attachments || [],
+            processed: email.processed || false,
+            included_in_digest: true,
+          });
+        });
+      }
+
+      if (important?.emails) {
+        important.emails.forEach((email: any) => {
+          allEmails.push({
+            ...email,
+            urgency: 'important',
+            attachments: email.attachments || [],
+            processed: email.processed || false,
+            included_in_digest: true,
+          });
+        });
+      }
+
+      if (routine?.emails) {
+        routine.emails.forEach((email: any) => {
+          allEmails.push({
+            ...email,
+            urgency: 'routine',
+            attachments: email.attachments || [],
+            processed: email.processed || false,
+            included_in_digest: true,
+          });
+        });
+      }
+
+      return allEmails;
+    } else if (emailsData?.data?.emails) {
+      return emailsData.data.emails;
+    }
+    return [];
+  };
+
+  // Calculate stats directly from DISPLAYED emails (for real-time sync)
+  const emails = getEmailsToDisplay();
+  const stats = {
+    total: emails.length,
+    urgent: emails.filter(e => e.urgency === 'urgent').length,
+    important: emails.filter(e => e.urgency === 'important').length,
+    routine: emails.filter(e => e.urgency === 'routine').length,
+  };
+
+  // Mark as processed mutation with optimistic update
   const markProcessedMutation = useMutation({
     mutationFn: (id: number) => emailsApi.markProcessed(id),
+    onMutate: async (processedId) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['digest-latest'] });
+
+      // Snapshot previous value
+      const previousDigest = queryClient.getQueryData(['digest-latest']);
+
+      // Optimistically update by marking email as processed
+      queryClient.setQueryData(['digest-latest'], (old: any) => {
+        if (!old?.data) return old;
+
+        const markEmailProcessed = (emails: any[]) =>
+          emails.map((e: any) => e.id === processedId ? { ...e, processed: true } : e);
+
+        return {
+          ...old,
+          data: {
+            ...old.data,
+            urgent: {
+              ...old.data.urgent,
+              emails: markEmailProcessed(old.data.urgent?.emails || []),
+            },
+            important: {
+              ...old.data.important,
+              emails: markEmailProcessed(old.data.important?.emails || []),
+            },
+            routine: {
+              ...old.data.routine,
+              emails: markEmailProcessed(old.data.routine?.emails || []),
+            },
+          },
+        };
+      });
+
+      return { previousDigest };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['digest-latest'] });
-      queryClient.invalidateQueries({ queryKey: ['emails-all'] });
-      queryClient.invalidateQueries({ queryKey: ['email-stats'] });
       toast.success('Email marqué comme traité');
     },
-    onError: () => {
+    onError: (_err, _processedId, context: any) => {
+      // Rollback on error
+      queryClient.setQueryData(['digest-latest'], context.previousDigest);
       toast.error('Erreur lors du marquage');
+    },
+    onSettled: () => {
+      // Refetch to ensure sync
+      queryClient.invalidateQueries({ queryKey: ['digest-latest'] });
+      queryClient.invalidateQueries({ queryKey: ['emails-all'] });
     },
   });
 
-  // Delete mutation
+  // Delete mutation with optimistic update
   const deleteMutation = useMutation({
     mutationFn: (id: number) => emailsApi.delete(id),
+    onMutate: async (deletedId) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['digest-latest'] });
+
+      // Snapshot previous value
+      const previousDigest = queryClient.getQueryData(['digest-latest']);
+
+      // Optimistically update by removing deleted email from cache
+      queryClient.setQueryData(['digest-latest'], (old: any) => {
+        if (!old?.data) return old;
+
+        const removeEmailById = (emails: any[]) =>
+          emails.filter((e: any) => e.id !== deletedId);
+
+        return {
+          ...old,
+          data: {
+            ...old.data,
+            urgent: {
+              ...old.data.urgent,
+              emails: removeEmailById(old.data.urgent?.emails || []),
+              count: (old.data.urgent?.emails || []).filter((e: any) => e.id !== deletedId).length,
+            },
+            important: {
+              ...old.data.important,
+              emails: removeEmailById(old.data.important?.emails || []),
+              count: (old.data.important?.emails || []).filter((e: any) => e.id !== deletedId).length,
+            },
+            routine: {
+              ...old.data.routine,
+              emails: removeEmailById(old.data.routine?.emails || []),
+              count: (old.data.routine?.emails || []).filter((e: any) => e.id !== deletedId).length,
+            },
+            total_emails: (old.data.total_emails || 0) - 1,
+          },
+        };
+      });
+
+      return { previousDigest };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['digest-latest'] });
-      queryClient.invalidateQueries({ queryKey: ['emails-all'] });
-      queryClient.invalidateQueries({ queryKey: ['email-stats'] });
-      toast.success('Email supprimé');
+      toast.success('Email supprimé du digest');
       setSelectedEmail(null);
     },
-    onError: () => {
+    onError: (_err, _deletedId, context: any) => {
+      // Rollback on error
+      queryClient.setQueryData(['digest-latest'], context.previousDigest);
       toast.error('Erreur lors de la suppression');
+    },
+    onSettled: () => {
+      // Always refetch to ensure sync
+      queryClient.invalidateQueries({ queryKey: ['digest-latest'] });
+      queryClient.invalidateQueries({ queryKey: ['emails-all'] });
     },
   });
 
@@ -84,7 +220,6 @@ export const DigestPage: React.FC = () => {
 
       toast.success('Digest généré avec succès !');
       await refetchDigest();
-      await refetchStats();
     } catch (error: any) {
       console.error('Error generating digest:', error);
       if (error.name === 'AbortError') {
@@ -97,13 +232,7 @@ export const DigestPage: React.FC = () => {
     }
   };
 
-  // Refresh all data
-  const handleRefresh = () => {
-    refetchDigest();
-    refetchStats();
-    refetchEmails();
-    toast.success('Données actualisées');
-  };
+  // Removed handleRefresh - now using handleGenerateDigest for both sync and refresh
 
   // Get urgency badge
   const getUrgencyBadge = (urgency: string) => {
@@ -127,59 +256,7 @@ export const DigestPage: React.FC = () => {
     return categories;
   };
 
-  // Get emails to display
-  const getEmailsToDisplay = (): Email[] => {
-    if (digestData?.data) {
-      // Backend returns { urgent: {count, emails}, important: {count, emails}, routine: {count, emails} }
-      const allEmails: Email[] = [];
-
-      // Extract emails from urgent, important, and routine
-      const { urgent, important, routine } = digestData.data;
-
-      if (urgent?.emails) {
-        urgent.emails.forEach((email: any) => {
-          allEmails.push({
-            ...email,
-            urgency: 'urgent',
-            attachments: email.attachments || [],
-            processed: false,
-            included_in_digest: true,
-          });
-        });
-      }
-
-      if (important?.emails) {
-        important.emails.forEach((email: any) => {
-          allEmails.push({
-            ...email,
-            urgency: 'important',
-            attachments: email.attachments || [],
-            processed: false,
-            included_in_digest: true,
-          });
-        });
-      }
-
-      if (routine?.emails) {
-        routine.emails.forEach((email: any) => {
-          allEmails.push({
-            ...email,
-            urgency: 'routine',
-            attachments: email.attachments || [],
-            processed: false,
-            included_in_digest: true,
-          });
-        });
-      }
-
-      return allEmails;
-    } else if (emailsData?.data?.emails) {
-      return emailsData.data.emails;
-    }
-    return [];
-  };
-
-  const emails = getEmailsToDisplay();
+  // Emails already defined at top of component
   const categorizedEmails = organizeByCategory(emails);
   const isLoading = isLoadingDigest || isLoadingEmails;
 
@@ -198,57 +275,51 @@ export const DigestPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button onClick={handleRefresh} variant="outline" size="sm">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Actualiser
-          </Button>
           <Button onClick={handleGenerateDigest} disabled={isGenerating}>
             <Send className={`h-4 w-4 mr-2 ${isGenerating ? 'animate-pulse' : ''}`} />
-            {isGenerating ? 'Génération...' : 'Générer Digest IA'}
+            {isGenerating ? 'Synchronisation Gmail...' : 'Synchroniser Gmail'}
           </Button>
         </div>
       </div>
 
-      {/* Stats Cards */}
-      {statsData && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-gray-600">Total Emails</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold">{statsData.data.total}</p>
-            </CardContent>
-          </Card>
+      {/* Stats Cards - Based on current digest data */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-gray-600">Total Emails (Digest)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold">{stats.total}</p>
+          </CardContent>
+        </Card>
 
-          <Card className="bg-red-50 border-red-200">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-red-900">Urgents</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-red-700">{statsData.data.by_urgency.urgent}</p>
-            </CardContent>
-          </Card>
+        <Card className="bg-red-50 border-red-200">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-red-900">Urgents</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold text-red-700">{stats.urgent}</p>
+          </CardContent>
+        </Card>
 
-          <Card className="bg-orange-50 border-orange-200">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-orange-900">Importants</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-orange-700">{statsData.data.by_urgency.important}</p>
-            </CardContent>
-          </Card>
+        <Card className="bg-orange-50 border-orange-200">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-orange-900">Importants</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold text-orange-700">{stats.important}</p>
+          </CardContent>
+        </Card>
 
-          <Card className="bg-blue-50 border-blue-200">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-blue-900">Non traités</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-blue-700">{statsData.data.by_status.unprocessed}</p>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+        <Card className="bg-green-50 border-green-200">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-green-900">Routine</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold text-green-700">{stats.routine}</p>
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Auto-generation option */}
       <Card className="border-blue-200 bg-blue-50">

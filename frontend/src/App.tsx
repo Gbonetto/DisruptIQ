@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { DashboardPage } from './pages/DashboardPage'
@@ -10,7 +10,8 @@ import { DocumentsPage } from './pages/DocumentsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ChatPage } from './pages/ChatPage'
 import { DigestPage } from './pages/DigestPage'
-import { AssistantPage } from './pages/AssistantPage'
+import { ChatPageV2 } from './pages/ChatPageV2'
+import { MainChatPage } from './pages/MainChatPage'
 import { AppLayout } from './components/layout/AppLayout'
 import { useEffect } from 'react'
 import { adminApi } from './lib/api'
@@ -48,11 +49,12 @@ function App() {
 
           {/* Routes */}
           <Routes>
-            {/* Redirect root to admin dashboard */}
-            <Route path="/" element={<Navigate to="/admin" replace />} />
+            {/* Main Chat Page - Interface principale simplifiée */}
+            <Route path="/" element={<MainChatPage />} />
 
-            {/* Chat page (standalone, not in admin layout) */}
+            {/* Legacy chat pages */}
             <Route path="/chat" element={<ChatPage />} />
+            <Route path="/chat-v2" element={<ChatPageV2 />} />
 
             {/* Admin routes with AppLayout (sidebar navigation) */}
             <Route path="/admin" element={<AppLayout />}>
@@ -63,7 +65,7 @@ function App() {
               <Route path="import" element={<ImportPage />} />
               <Route path="documents" element={<DocumentsPage />} />
               <Route path="digest" element={<DigestPage />} />
-              <Route path="assistant" element={<AssistantPage />} />
+              <Route path="assistant" element={<ChatPageV2 />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>

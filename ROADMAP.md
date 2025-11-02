@@ -53,23 +53,125 @@ Prod-Ready      │ Optimisations    │ Enterprise       │ Scale            �
 
 ---
 
-## 🔧 V2.1 - CORRECTIONS & STABILITÉ
-**Date**: 15 Novembre 2025 (2 semaines)
-**Status**: 🚧 EN COURS
-**Focus**: Sécurité, Tests, Documentation
+## 🔧 V2.2 - AMÉLIORATIONS UX & ARCHITECTURE ✅
+**Date**: 2-3 Novembre 2025
+**Status**: ✅ COMPLÉTÉ
+**Focus**: Markdown, Action Lists, Documentation
+
+### Réalisations
+- [x] ✅ Markdown rendering (react-markdown + remark-gfm)
+- [x] ✅ Action lists RAG automatiques (détection procédurale)
+- [x] ✅ Documentation digest hybrid architecture
+- [x] ✅ SQL Agent fast formatting (suppression LLM call)
+- [x] ✅ Test data complètes (67 professionnels, 25 résidents, 29 emails, 11 copropriétés)
+- [x] ✅ Services redémarrés avec nouvelles features
+
+**Impact**: UX significativement améliorée, réponses formatées, actions structurées
+
+---
+
+## 🚀 V2.3 - FONCTIONNALITÉS MANQUANTES CRITIQUES
+**Date**: 4-18 Novembre 2025 (2 semaines)
+**Status**: 🚧 EN COURS - PRIORITÉ MAX
+**Focus**: Upload Documents, Admin Panel, Sécurité
 
 ### Objectifs
 
-#### 🔒 Sécurité (CRITIQUE)
-- [x] ✅ Validation SECRET_KEY production
-- [x] ✅ Timeouts Gmail API configurables
-- [ ] Whitelist SQL tables (injection prevention)
-- [ ] Rate limit upload documents (10/hour)
-- [ ] Validation/sanitization filenames
-- [ ] Masquer erreurs détaillées en production
-- [ ] CORS configuration stricte
+#### 📤 Upload Documents (BLOQUANT UX - P0)
+**Problème**: Drag & drop et attachment ne fonctionnent pas
+**Impact**: Feature advertised mais non-opérationnelle
 
-**Impact**: Vulnérabilités critiques éliminées
+- [ ] Fix drag & drop upload in MainChatPage.tsx
+- [ ] Implement file attachment button handler
+- [ ] Backend endpoint /api/documents/upload
+- [ ] OCR integration (Tesseract + PyPDF2)
+- [ ] Progress bar upload
+- [ ] Error handling (size, type, upload failed)
+- [ ] Tests E2E upload → OCR → query RAG
+
+**Success Metrics**:
+- Upload success rate >95%
+- OCR accuracy >90%
+- File types: PDF, DOCX, TXT, PNG, JPG
+
+#### 🎛️ Admin Panel SQL/RAG (BLOQUANT BUSINESS - P0)
+**Problème**: Pas d'interface pour gérer données SQL et RAG
+**Impact**: Impossibilité admin données sans base de données directe
+
+**Right Panel Component**:
+- [ ] Sidebar toggle (open/close)
+- [ ] Tabs: SQL Tables / RAG Documents
+- [ ] Table selector dropdown
+
+**SQL Management**:
+- [ ] CRUD Copropriétés (create, read, update, delete)
+- [ ] CRUD Copropriétaires
+- [ ] CRUD Professionnels
+- [ ] Bulk operations (CSV import, delete multiple)
+- [ ] Search & filters (nom, ville, category)
+- [ ] Inline editing
+
+**RAG Management**:
+- [ ] List indexed documents (title, type, date, status)
+- [ ] View document content
+- [ ] Delete document + embeddings
+- [ ] Re-index document
+- [ ] Bulk delete
+- [ ] Search documents
+
+**Success Metrics**:
+- CRUD operations <500ms
+- Bulk import 100 rows <5s
+- Zero data corruption
+
+#### 🔒 Sécurité (CRITIQUE - P0)
+**Problème**: Vulnérabilités critiques production
+**Impact**: Risques SQL injection, upload malicieux, DoS
+
+**SQL Injection Prevention**:
+- [ ] Whitelist tables autorisées (orchestrator_agent.py)
+  ```python
+  ALLOWED_TABLES = ['coproprietes', 'coproprietaires', 'professionnels', 'emails']
+  ```
+- [ ] Validation paramètres utilisateur
+- [ ] Rate limiting SQL queries (100/hour/user)
+
+**Upload Security**:
+- [ ] File type whitelist (PDF, DOCX, TXT, PNG, JPG only)
+- [ ] File size limit (25 MB max)
+- [ ] Filename sanitization (alphanumeric + underscore)
+- [ ] Antivirus scan (ClamAV) optional
+- [ ] Rate limiting upload (10/hour/user)
+
+**Production Hardening**:
+- [ ] SECRET_KEY validation (.env.production must be 50+ chars random)
+- [ ] CORS whitelist (settings.py)
+  ```python
+  CORS_ORIGINS = ["https://app.disruptiq.fr", "https://admin.disruptiq.fr"]
+  ```
+- [ ] Error masking (no stack traces in production)
+- [ ] HTTPS enforcement (nginx config)
+- [ ] CSP headers
+
+**Success Metrics**:
+- 0 vulnérabilités critiques (npm audit, safety)
+- Penetration test passed
+
+#### ✅ Confirmations Workflow N8N (SÉCURITÉ - P1)
+**Problème**: Workflows exécutés sans confirmation utilisateur
+**Impact**: Risque actions non-intentionnelles
+
+- [ ] Confirmation dialog component
+- [ ] Preview workflow actions avant exécution
+- [ ] Dry-run mode (simulation)
+- [ ] Historique workflows exécutés
+- [ ] Rollback capability (si possible)
+
+**Success Metrics**:
+- 100% workflows nécessitent confirmation
+- <1% erreurs utilisateur
+
+**Impact Global**: Vulnérabilités éliminées, UX complète
 
 #### 🧪 Tests
 - [ ] Tests unitaires email_processor

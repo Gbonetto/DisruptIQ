@@ -13,7 +13,7 @@ import structlog
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache
+from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document
 from app.services.scheduler_service import get_scheduler
@@ -160,6 +160,8 @@ app.include_router(emails.router, prefix="/api/emails", tags=["Email Management"
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["AI Assistant"])
+app.include_router(assistant_v2.router, prefix="/api/assistant-v2", tags=["Multi-Agent Assistant"])
+app.include_router(assistant_v2_stream.router, prefix="/api/assistant-v2", tags=["Multi-Agent Assistant Streaming"])
 app.include_router(coproprietes.router, prefix="/api/coproprietes", tags=["Copropriétés"])
 app.include_router(coproprietaires.router, prefix="/api/coproprietaires", tags=["Copropriétaires"])
 app.include_router(cache.router, prefix="/api/cache", tags=["Cache Management"])

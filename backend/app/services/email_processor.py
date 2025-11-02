@@ -352,6 +352,9 @@ class EmailProcessor:
         """
         Filter promotional/spam emails based on sender and subject patterns
 
+        NOTE: Filter is intentionally conservative to avoid false positives.
+        Only filters obvious spam patterns.
+
         Args:
             sender: Email sender address
             subject: Email subject
@@ -363,29 +366,16 @@ class EmailProcessor:
         sender_lower = sender.lower()
         subject_lower = subject.lower()
 
-        # Common promotional email patterns
+        # ONLY filter obvious spam patterns (reduced from 18 to 5 patterns)
         spam_patterns = [
             'noreply@',
             'no-reply@',
-            'no_reply@',
-            'info@',
-            'marketing@',
-            'newsletter@',
-            'notification@',
-            'notifications@',
-            'do-not-reply@',
             'donotreply@',
-            'support@',  # Often automated support emails
-            'updates@',
-            'news@',
-            'promo@',
-            'promotions@',
-            'hello@',  # Often marketing emails
-            'hi@',
-            'contact@',  # Often automated contact forms
+            'do-not-reply@',
+            'newsletter@',
         ]
 
-        # Additional patterns in subject
+        # Subject spam keywords - require 3+ matches to filter (more conservative)
         subject_spam_keywords = [
             'unsubscribe',
             'désabonner',
@@ -399,15 +389,15 @@ class EmailProcessor:
             'act now',
         ]
 
-        # Check sender patterns
+        # Check sender patterns (only obvious spam)
         for pattern in spam_patterns:
             if pattern in sender_lower:
                 logger.debug("email_filtered_promotional", sender=sender, pattern=pattern)
                 return True
 
-        # Check subject keywords (less aggressive filtering)
+        # Check subject keywords - require 3+ matches (more conservative)
         spam_keyword_count = sum(1 for keyword in subject_spam_keywords if keyword in subject_lower)
-        if spam_keyword_count >= 2:  # At least 2 spam keywords in subject
+        if spam_keyword_count >= 3:  # Changed from 2 to 3 for less aggressive filtering
             logger.debug("email_filtered_promotional", subject=subject, matches=spam_keyword_count)
             return True
 

@@ -504,8 +504,14 @@ class DigestServiceV2:
             httpx.RequestError: On network errors
             httpx.HTTPStatusError: On HTTP errors
         """
-        # Serialize emails to dict for JSON
-        serialized_emails = [email.dict() for email in emails]
+        # Serialize emails to dict for JSON with datetime handling
+        serialized_emails = []
+        for email in emails:
+            email_dict = email.model_dump()
+            # Convert datetime to ISO string for JSON serialization
+            if isinstance(email_dict.get('received_at'), datetime):
+                email_dict['received_at'] = email_dict['received_at'].isoformat()
+            serialized_emails.append(email_dict)
 
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             logger.info(
@@ -602,14 +608,14 @@ class DigestServiceV2:
             if not emails:
                 self.metrics.success = True
                 self.metrics.end_time = datetime.now()
-                logger.info("digest_generation_complete_no_emails", metrics=self.metrics.dict())
+                logger.info("digest_generation_complete_no_emails", metrics=self.metrics.model_dump())
                 return {
                     "date": datetime.now().isoformat(),
                     "total_emails": 0,
                     "urgent": {"count": 0, "emails": []},
                     "important": {"count": 0, "emails": []},
                     "routine": {"count": 0, "emails": []},
-                    "metrics": self.metrics.dict()
+                    "metrics": self.metrics.model_dump()
                 }
 
             # Step 2: Send to backend for classification and persistence
@@ -623,10 +629,10 @@ class DigestServiceV2:
                 "digest_generation_complete",
                 total=result.get('total_emails', 0),
                 duration_seconds=self.metrics.duration_seconds(),
-                metrics=self.metrics.dict()
+                metrics=self.metrics.model_dump()
             )
 
-            result["metrics"] = self.metrics.dict()
+            result["metrics"] = self.metrics.model_dump()
             return result
 
         except Exception as e:
@@ -637,7 +643,7 @@ class DigestServiceV2:
             self.metrics.end_time = datetime.now()
             return {
                 "error": error_msg,
-                "metrics": self.metrics.dict()
+                "metrics": self.metrics.model_dump()
             }
 
     async def health_check(self) -> Dict[str, Any]:

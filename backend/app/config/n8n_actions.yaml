@@ -1,0 +1,322 @@
+# Configuration des actions N8N disponibles
+# Ce fichier définit toutes les actions que l'orchestrateur peut suggérer et exécuter
+
+workflows:
+  # ============================================
+  # COMMUNICATIONS
+  # ============================================
+
+  email_alert_urgence:
+    name: "Alerte Email Urgence"
+    description: "Envoyer un email d'urgence à des destinataires"
+    webhook_id: "email-alert-urgence"
+    required_params:
+      - recipients  # Liste d'emails ou IDs copropriétaires
+      - subject
+      - message
+      - urgency_level  # critical, high, medium
+    optional_params:
+      - attachments
+      - cc
+    confirmation_required: true
+    suggested_when:
+      - intent: "urgence_detectee"
+      - keywords: ["urgent", "urgence", "dégât", "fuite", "incendie"]
+
+  email_digest_send:
+    name: "Envoi Digest Email"
+    description: "Envoyer le digest quotidien/hebdomadaire par email"
+    webhook_id: "email-digest-send"
+    required_params:
+      - recipients
+      - period  # daily, weekly
+      - digest_data
+    confirmation_required: false
+    suggested_when:
+      - intent: "digest_generated"
+      - schedule: "daily_8am"
+
+  email_draft_create:
+    name: "Créer Brouillon Gmail"
+    description: "Créer un brouillon d'email dans Gmail"
+    webhook_id: "gmail-draft-create"
+    required_params:
+      - to
+      - subject
+      - body
+    optional_params:
+      - cc
+      - bcc
+      - attachments
+    confirmation_required: false
+
+  sms_notification:
+    name: "Notification SMS"
+    description: "Envoyer SMS d'urgence (via Twilio/autre)"
+    webhook_id: "sms-notification"
+    required_params:
+      - phone_numbers
+      - message
+    confirmation_required: true
+    suggested_when:
+      - intent: "urgence_critique"
+      - urgency_level: "critical"
+
+  # ============================================
+  # DEMANDES DE DEVIS
+  # ============================================
+
+  devis_request_bulk:
+    name: "Demande Devis Multiple"
+    description: "Envoyer demande de devis à plusieurs fournisseurs"
+    webhook_id: "devis-request-bulk"
+    required_params:
+      - professionnel_ids  # Liste IDs professionnels
+      - service_type  # plomberie, electricité, jardinage, etc.
+      - description
+      - deadline
+    optional_params:
+      - budget_max
+      - copropriete_id
+      - attachments  # Plans, photos, etc.
+    confirmation_required: true
+    suggested_when:
+      - intent: "demande_devis"
+      - keywords: ["devis", "tarif", "prix", "plombier", "electricien"]
+
+  devis_reminder:
+    name: "Relance Devis"
+    description: "Relancer les fournisseurs n'ayant pas répondu"
+    webhook_id: "devis-reminder"
+    required_params:
+      - devis_request_id
+      - professionnel_ids
+    confirmation_required: false
+
+  # ============================================
+  # CONVOCATIONS & ASSEMBLÉES
+  # ============================================
+
+  ag_convocation_send:
+    name: "Envoi Convocation AG"
+    description: "Envoyer convocation assemblée générale"
+    webhook_id: "ag-convocation"
+    required_params:
+      - copropriete_id
+      - ag_date
+      - ag_time
+      - ag_location
+      - ordre_du_jour
+    optional_params:
+      - documents_annexes
+    confirmation_required: true
+    suggested_when:
+      - intent: "preparation_ag"
+      - keywords: ["assemblée", "ag", "convocation"]
+
+  ag_reminder:
+    name: "Rappel AG"
+    description: "Rappeler AG à J-7 et J-1"
+    webhook_id: "ag-reminder"
+    required_params:
+      - ag_id
+      - reminder_type  # j7, j1, today
+    confirmation_required: false
+
+  # ============================================
+  # GESTION DOCUMENTS
+  # ============================================
+
+  document_share:
+    name: "Partager Document"
+    description: "Partager un document avec copropriétaires/professionnels"
+    webhook_id: "document-share"
+    required_params:
+      - document_id
+      - recipients  # Liste emails ou IDs
+      - access_level  # view_only, download
+    optional_params:
+      - message
+      - expiration_date
+    confirmation_required: false
+
+  # ============================================
+  # FACTURATION & PAIEMENTS
+  # ============================================
+
+  facture_validation_notify:
+    name: "Notification Validation Facture"
+    description: "Notifier validation/rejet d'une facture"
+    webhook_id: "facture-validation"
+    required_params:
+      - facture_id
+      - status  # approved, rejected, pending_info
+      - professionnel_id
+    optional_params:
+      - comments
+      - next_steps
+    confirmation_required: false
+    suggested_when:
+      - intent: "facture_validee"
+      - intent: "facture_rejetee"
+
+  paiement_reminder:
+    name: "Relance Paiement"
+    description: "Relancer les copropriétaires en retard de paiement"
+    webhook_id: "paiement-reminder"
+    required_params:
+      - coproprietaire_ids
+      - montant_du
+      - echeance
+    optional_params:
+      - penalty_info
+    confirmation_required: true
+
+  # ============================================
+  # GESTION SINISTRES
+  # ============================================
+
+  sinistre_declaration:
+    name: "Déclaration Sinistre"
+    description: "Déclarer un sinistre auprès assurance"
+    webhook_id: "sinistre-declaration"
+    required_params:
+      - type_sinistre  # dégât_eaux, incendie, vol, etc.
+      - date_sinistre
+      - description
+      - copropriete_id
+    optional_params:
+      - temoins
+      - photos
+      - estimation_degats
+    confirmation_required: true
+    suggested_when:
+      - intent: "declaration_sinistre"
+      - keywords: ["sinistre", "dégât", "assurance"]
+
+  sinistre_update_notify:
+    name: "Mise à Jour Sinistre"
+    description: "Notifier l'avancement d'un dossier sinistre"
+    webhook_id: "sinistre-update"
+    required_params:
+      - sinistre_id
+      - status_update
+      - recipients
+    confirmation_required: false
+
+  # ============================================
+  # MAINTENANCE & INTERVENTIONS
+  # ============================================
+
+  intervention_schedule:
+    name: "Planifier Intervention"
+    description: "Planifier intervention technique"
+    webhook_id: "intervention-schedule"
+    required_params:
+      - professionnel_id
+      - type_intervention
+      - date_souhaitee
+      - copropriete_id
+    optional_params:
+      - description
+      - acces_info
+    confirmation_required: true
+
+  intervention_completed_notify:
+    name: "Intervention Terminée"
+    description: "Notifier fin d'intervention"
+    webhook_id: "intervention-completed"
+    required_params:
+      - intervention_id
+      - compte_rendu
+      - recipients
+    optional_params:
+      - photos
+      - next_actions
+    confirmation_required: false
+
+  # ============================================
+  # REPORTING & ANALYTICS
+  # ============================================
+
+  report_monthly_generate:
+    name: "Rapport Mensuel"
+    description: "Générer et envoyer rapport mensuel"
+    webhook_id: "report-monthly"
+    required_params:
+      - copropriete_id
+      - month
+      - year
+    optional_params:
+      - recipients
+    confirmation_required: false
+
+  # ============================================
+  # UTILITAIRES
+  # ============================================
+
+  data_export:
+    name: "Export Données"
+    description: "Exporter données en CSV/Excel"
+    webhook_id: "data-export"
+    required_params:
+      - export_type  # professionnels, coproprietaires, factures, etc.
+      - format  # csv, xlsx
+    optional_params:
+      - filters
+      - date_range
+    confirmation_required: false
+
+
+# ============================================
+# RÈGLES DE SUGGESTION
+# ============================================
+
+suggestion_rules:
+  # Après validation facture
+  facture_validee:
+    - action: "facture_validation_notify"
+      label: "Notifier le fournisseur"
+      icon: "✉️"
+    - action: "schedule_payment"
+      label: "Planifier le paiement"
+      icon: "💳"
+
+  # Après génération digest
+  digest_generated:
+    - action: "email_digest_send"
+      label: "Envoyer le digest"
+      icon: "📧"
+    - action: "mark_urgent_emails"
+      label: "Traiter les urgents"
+      icon: "🚨"
+
+  # Après détection urgence
+  urgence_detectee:
+    - action: "email_alert_urgence"
+      label: "Alerter par email"
+      icon: "📧"
+    - action: "sms_notification"
+      label: "Alerter par SMS"
+      icon: "📱"
+    - action: "sinistre_declaration"
+      label: "Déclarer le sinistre"
+      icon: "📋"
+
+  # Après recherche professionnel
+  professionnel_trouve:
+    - action: "devis_request_bulk"
+      label: "Demander un devis"
+      icon: "💰"
+    - action: "intervention_schedule"
+      label: "Planifier intervention"
+      icon: "🔧"
+
+  # Après import facture
+  facture_importee:
+    - action: "validate_invoice"
+      label: "Vérifier la facture"
+      icon: "✓"
+    - action: "compare_quotes"
+      label: "Comparer aux devis"
+      icon: "📊"

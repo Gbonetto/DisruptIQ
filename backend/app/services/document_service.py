@@ -19,6 +19,9 @@ class DocumentService:
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
         'application/msword': '.doc',
         'text/plain': '.txt',
+        'image/jpeg': '.jpg',
+        'image/jpg': '.jpg',
+        'image/png': '.png',
     }
 
     async def extract_text(self, file_content: bytes, mime_type: str, filename: str) -> Tuple[str, bool]:
@@ -43,6 +46,8 @@ class DocumentService:
                 return await self._extract_from_docx(file_content, mime_type)
             elif mime_type == 'text/plain':
                 return await self._extract_from_txt(file_content)
+            elif mime_type in ['image/jpeg', 'image/jpg', 'image/png']:
+                return await self._extract_from_image(file_content, mime_type)
             else:
                 logger.warning("unsupported_file_type", mime_type=mime_type)
                 return "", False
@@ -52,7 +57,7 @@ class DocumentService:
             return "", False
 
     async def _extract_from_pdf(self, content: bytes) -> Tuple[str, bool]:
-        """Extract text from PDF"""
+        """Extract text from PDF with OCR fallback"""
         try:
             from pypdf import PdfReader
 
@@ -68,9 +73,9 @@ class DocumentService:
             extracted_text = "\n\n".join(text_parts)
 
             if not extracted_text.strip():
-                logger.warning("pdf_no_text_extracted_might_need_ocr")
-                # TODO: Implement OCR fallback with Tesseract if needed
-                return "", False
+                logger.warning("pdf_no_text_extracted_trying_ocr")
+                # Fallback to OCR for scanned PDFs
+                return await self._extract_pdf_with_ocr(content)
 
             logger.info("pdf_text_extracted", pages=len(reader.pages))
             return extracted_text, True
@@ -80,6 +85,39 @@ class DocumentService:
             return "", False
         except Exception as e:
             logger.error("pdf_extraction_error", error=str(e))
+            return "", False
+
+    async def _extract_pdf_with_ocr(self, content: bytes) -> Tuple[str, bool]:
+        """Extract text from scanned PDF using OCR"""
+        try:
+            from pdf2image import convert_from_bytes
+            import pytesseract
+            from PIL import Image
+
+            logger.info("converting_pdf_to_images")
+            images = convert_from_bytes(content, dpi=200)
+
+            text_parts = []
+            for i, image in enumerate(images):
+                logger.info("ocr_processing_page", page=i+1)
+                text = pytesseract.image_to_string(image, lang='fra+eng')
+                if text.strip():
+                    text_parts.append(text.strip())
+
+            extracted_text = "\n\n".join(text_parts)
+
+            if not extracted_text.strip():
+                logger.warning("ocr_no_text_extracted")
+                return "", False
+
+            logger.info("pdf_ocr_completed", pages=len(images))
+            return extracted_text, True
+
+        except ImportError as e:
+            logger.error("ocr_dependencies_missing", error=str(e))
+            return "", False
+        except Exception as e:
+            logger.error("pdf_ocr_error", error=str(e))
             return "", False
 
     async def _extract_from_docx(self, content: bytes, mime_type: str) -> Tuple[str, bool]:
@@ -168,6 +206,34 @@ class DocumentService:
 
         logger.info("text_chunked", chunks=len(chunks))
         return chunks
+
+    async def _extract_from_image(self, content: bytes, mime_type: str) -> Tuple[str, bool]:
+        """Extract text from image using OCR"""
+        try:
+            from PIL import Image
+            import pytesseract
+
+            image_file = io.BytesIO(content)
+            image = Image.open(image_file)
+
+            logger.info("ocr_processing_image", mime_type=mime_type)
+
+            # Extract text with Tesseract (French + English)
+            text = pytesseract.image_to_string(image, lang='fra+eng')
+
+            if not text.strip():
+                logger.warning("ocr_no_text_in_image")
+                return "", False
+
+            logger.info("image_ocr_completed", text_length=len(text))
+            return text.strip(), True
+
+        except ImportError as e:
+            logger.error("ocr_dependencies_missing", error=str(e))
+            return "", False
+        except Exception as e:
+            logger.error("image_ocr_error", error=str(e))
+            return "", False
 
     @staticmethod
     def is_supported_format(mime_type: str) -> bool:
