@@ -237,56 +237,30 @@ async def generate_digest(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Generate email digest with Gmail sync - HYBRID ARCHITECTURE
+    Generate email digest from database - SIMPLE ARCHITECTURE
 
     ## Architecture Overview:
 
-    This endpoint implements a **hybrid Gmail + Database approach** for resilient
-    email digest generation. The system attempts real-time Gmail sync but gracefully
-    falls back to cached data if Gmail is unavailable.
+    This endpoint reads emails from the database and generates a digest.
+    It does NOT fetch from Gmail - use v1.py (manual or cron) to sync emails first.
 
     ## Workflow:
 
-    1. **Gmail API Fetch** (with 60s timeout protection)
-       - Authenticates via OAuth2 (credentials/token.json)
-       - Fetches unread emails from the last `since_hours`
-       - Timeout prevents hanging requests on network issues
+    1. **Query Database** - Fetch emails from last `since_hours`
+    2. **Group by Urgency** - URGENT, IMPORTANT, ROUTINE
+    3. **Return Structured Digest**
 
-    2. **LLM Classification** (parallel processing, 90s timeout)
-       - Classifies emails by urgency: URGENT, IMPORTANT, ROUTINE
-       - Uses semantic analysis of subject + body
-       - Processes in parallel for speed
+    ## Prerequisites:
 
-    3. **Database Persistence** (bulk insert)
-       - Stores classified emails in `emails` table
-       - Provides offline access to email history
-       - Enables digest generation even when Gmail is down
-
-    4. **Digest Generation from Database** (always succeeds)
-       - Queries `emails` table for cached/fresh data
-       - Groups by urgency level
-       - Returns structured digest
-
-    ## Benefits of Hybrid Approach:
-
-    - ✅ **Real-time data**: Fresh emails when Gmail is accessible
-    - ✅ **Offline capability**: Works with cached data when Gmail is down
-    - ✅ **Timeout protection**: Never hangs indefinitely (120s total max)
-    - ✅ **Docker-safe**: Handles container networking issues gracefully
-    - ✅ **Resilient**: Digest endpoint always returns successfully
-
-    ## Gmail Setup (One-time):
-
+    Run v1.py to sync emails from Gmail to database:
     ```bash
-    # 1. Place Gmail API credentials
-    cp path/to/credentials.json credentials/credentials.json
+    cd scripts/digest-service
+    python v1.py
+    ```
 
-    # 2. Run authentication script (opens browser for OAuth)
-    cd backend
-    python scripts/gmail_auth.py
-
-    # 3. Verify token.json was created
-    ls -la credentials/token.json
+    Or setup a cron job on VPS:
+    ```bash
+    0 */6 * * * cd /path/to/DisruptIQ_CC/scripts/digest-service && python v1.py
     ```
 
     ## Request Parameters:
@@ -301,65 +275,21 @@ async def generate_digest(
     - `important`: List[EmailDigestItem] - IMPORTANT emails
     - `routine`: List[EmailDigestItem] - ROUTINE emails
     - `total`: int - Total email count
-    - `gmail_sync_status`: str - "success", "timeout", or "failed"
-
-    ## Timeouts:
-
-    - Gmail fetch: 60 seconds
-    - LLM classification: 90 seconds
-    - Total endpoint: ~120 seconds max
 
     ## Notes:
 
-    - Gmail API uses OAuth2 - token refreshes automatically
-    - Database cache enables historical digest queries
-    - Parallel LLM classification for speed (async/await)
-    - Fallback ensures digest always succeeds
+    - This endpoint is FAST - no Gmail API calls
+    - Works offline if emails are already cached
+    - For VPS deployment: run v1.py via cron for automation
     """
     if request is None:
         request = DigestGenerateRequest()
 
-    gmail_fetch_succeeded = False
-
     try:
-        # Try to fetch from Gmail with timeout protection
-        processor = get_email_processor()
-        logger.info("attempting_gmail_fetch", since_hours=request.since_hours)
-
-        try:
-            # Fetch with 60 second timeout
-            emails = await asyncio.wait_for(
-                processor.fetch_unread_emails(
-                    max_results=request.max_emails,
-                    since_hours=request.since_hours
-                ),
-                timeout=60.0
-            )
-
-            if emails:
-                logger.info("gmail_fetch_succeeded", count=len(emails))
-
-                # Classify emails with LLM (also with timeout)
-                classified = await asyncio.wait_for(
-                    processor.classify_emails(emails),
-                    timeout=90.0
-                )
-
-                # Persist to database
-                await _persist_classified_emails(db, classified)
-                gmail_fetch_succeeded = True
-                logger.info("emails_synced_to_db", count=len(emails))
-
-        except asyncio.TimeoutError:
-            logger.warning("gmail_fetch_timeout", message="Gmail fetch took too long, using existing DB data")
-        except Exception as e:
-            logger.warning("gmail_fetch_failed", error=str(e), message="Using existing DB data")
-
-        # Whether Gmail succeeded or not, return digest from database
-        # This ensures we always return data
+        # Query database for emails from last N hours
         time_threshold = datetime.now() - timedelta(hours=request.since_hours)
 
-        logger.info("fetching_digest_from_db", gmail_synced=gmail_fetch_succeeded)
+        logger.info("fetching_digest_from_db", since_hours=request.since_hours)
         result = await db.execute(
             select(Email)
             .where(Email.received_at >= time_threshold)
@@ -376,8 +306,7 @@ async def generate_digest(
                 "urgent": {"count": 0, "emails": []},
                 "important": {"count": 0, "emails": []},
                 "routine": {"count": 0, "emails": []},
-                "generated_at": datetime.now().isoformat(),
-                "gmail_synced": gmail_fetch_succeeded
+                "generated_at": datetime.now().isoformat()
             }
 
         # Group emails by urgency

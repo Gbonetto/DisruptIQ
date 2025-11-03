@@ -119,6 +119,7 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                 "send_email": IntentType.SEND_EMAIL,
                 "request_quotes": IntentType.REQUEST_QUOTES,
                 "analyze_document": IntentType.ANALYZE_DOCUMENT,
+                "generate_digest": IntentType.GENERATE_DIGEST,
                 "trigger_workflow": IntentType.TRIGGER_WORKFLOW,
                 "general_question": IntentType.GENERAL_QUESTION,
             }
@@ -435,21 +436,21 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
             # Import digest service
             from app.api.endpoints.digest import generate_digest, DigestGenerateRequest
 
-            await self.thought_stream.emit_thought(
-                thought_type="analyzing",
-                title="Génération du digest",
-                content="Je génère le digest à partir des emails en base de données..."
-            )
+            logger.info("generating_digest_from_db")
 
             request = DigestGenerateRequest(since_hours=24, max_emails=100)
             digest_result = await generate_digest(request=request, db=db)
 
-            # Format the response
-            if digest_result and hasattr(digest_result, 'urgent'):
-                urgent_count = len(digest_result.urgent)
-                important_count = len(digest_result.important)
-                routine_count = len(digest_result.routine)
-                total = urgent_count + important_count + routine_count
+            # digest_result is a dict
+            if digest_result and isinstance(digest_result, dict):
+                urgent_emails = digest_result.get('urgent', {}).get('emails', [])
+                important_emails = digest_result.get('important', {}).get('emails', [])
+                routine_emails = digest_result.get('routine', {}).get('emails', [])
+
+                urgent_count = len(urgent_emails)
+                important_count = len(important_emails)
+                routine_count = len(routine_emails)
+                total = digest_result.get('total_emails', 0)
 
                 message_parts = [
                     f"📧 **Digest des emails généré** ({total} emails analysés)\n",
@@ -459,10 +460,12 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                 ]
 
                 # Add sample urgent emails
-                if digest_result.urgent:
+                if urgent_emails:
                     message_parts.append("\n**Emails urgents:**")
-                    for i, email in enumerate(digest_result.urgent[:3], 1):
-                        message_parts.append(f"\n{i}. {email.subject} (de {email.sender})")
+                    for i, email in enumerate(urgent_emails[:3], 1):
+                        subject = email.get('subject', 'Sans objet')
+                        sender = email.get('sender', 'Inconnu')
+                        message_parts.append(f"\n{i}. {subject} (de {sender})")
 
                 return AgentResponse(
                     success=True,
@@ -471,7 +474,7 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                         "urgent_count": urgent_count,
                         "important_count": important_count,
                         "routine_count": routine_count,
-                        "digest": digest_result.dict() if hasattr(digest_result, 'dict') else None
+                        "digest": digest_result
                     },
                     agents_used=["digest_agent"],
                     suggestions=[
