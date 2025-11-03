@@ -430,12 +430,17 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
         )
 
     async def _handle_generate_digest(self, user_input: str, db: AsyncSession) -> AgentResponse:
-        """Handle email digest generation"""
+        """Handle email digest generation - reads from database"""
         try:
             # Import digest service
             from app.api.endpoints.digest import generate_digest, DigestGenerateRequest
 
-            # Generate digest with default parameters
+            await self.thought_stream.emit_thought(
+                thought_type="analyzing",
+                title="Génération du digest",
+                content="Je génère le digest à partir des emails en base de données..."
+            )
+
             request = DigestGenerateRequest(since_hours=24, max_emails=100)
             digest_result = await generate_digest(request=request, db=db)
 

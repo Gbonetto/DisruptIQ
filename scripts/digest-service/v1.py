@@ -28,11 +28,13 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# Add backend to path for shared code
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
-from app.core.config import settings
-
 logger = structlog.get_logger()
+
+# Configuration paths (relative to project root)
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+CREDENTIALS_DIR = os.path.join(PROJECT_ROOT, 'credentials')
+GMAIL_TOKEN_PATH = os.path.join(CREDENTIALS_DIR, 'gmail_token.json')
+GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 
 class DigestService:
@@ -46,19 +48,19 @@ class DigestService:
     def _initialize_gmail(self):
         """Initialize Gmail API connection"""
         try:
-            if not os.path.exists(settings.GMAIL_TOKEN_PATH):
-                logger.error("gmail_token_missing", path=settings.GMAIL_TOKEN_PATH)
+            if not os.path.exists(GMAIL_TOKEN_PATH):
+                logger.error("gmail_token_missing", path=GMAIL_TOKEN_PATH)
                 return
 
             creds = Credentials.from_authorized_user_file(
-                settings.GMAIL_TOKEN_PATH,
-                settings.gmail_scopes_list
+                GMAIL_TOKEN_PATH,
+                GMAIL_SCOPES
             )
 
             if creds and creds.expired and creds.refresh_token:
                 from google.auth.transport.requests import Request
                 creds.refresh(Request())
-                with open(settings.GMAIL_TOKEN_PATH, 'w') as token:
+                with open(GMAIL_TOKEN_PATH, 'w') as token:
                     token.write(creds.to_json())
                 logger.info("gmail_token_refreshed")
 
@@ -259,7 +261,7 @@ async def main():
     print("=" * 60)
     print(f"🕐 Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"📍 Backend URL: http://localhost:8000")
-    print(f"🔑 Gmail Token: {settings.GMAIL_TOKEN_PATH}")
+    print(f"🔑 Gmail Token: {GMAIL_TOKEN_PATH}")
     print("=" * 60)
 
     service = DigestService()

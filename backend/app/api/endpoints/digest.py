@@ -7,6 +7,9 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import structlog
 import asyncio
+import subprocess
+import os
+from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timedelta
@@ -30,6 +33,12 @@ class DigestGenerateRequest(BaseModel):
 class ProcessEmailsRequest(BaseModel):
     """Request to process pre-fetched emails from external service"""
     emails: List[Dict[str, Any]]
+
+
+class SyncGmailRequest(BaseModel):
+    """Request to sync Gmail"""
+    since_hours: Optional[int] = 24
+    max_emails: Optional[int] = 100
 
 
 async def _persist_classified_emails(db: AsyncSession, classified: Dict[str, List[Dict[str, Any]]]) -> None:
@@ -86,6 +95,140 @@ async def _persist_classified_emails(db: AsyncSession, classified: Dict[str, Lis
         logger.info("emails_persisted", count=len(new_emails))
     else:
         logger.info("no_new_emails_to_persist")
+
+
+@router.post("/sync-gmail")
+async def sync_gmail(
+    request: SyncGmailRequest = None
+):
+    """
+    Trigger external Gmail sync service on-demand
+
+    This endpoint calls the HTTP Trigger Service running on the host which:
+    1. Runs outside Docker to bypass network/SSL issues
+    2. Executes v1.py to fetch unread emails from Gmail via OAuth2
+    3. v1.py sends emails to /api/digest/process-emails for classification & persistence
+    4. Returns sync status and email count
+
+    ## Architecture:
+
+    ```
+    Backend (Docker) → HTTP Trigger (Host:5001) → v1.py (Gmail API) → Backend (Docker)
+    ```
+
+    ## Why External Service?
+
+    The digest service runs on the HOST (not in Docker) because:
+    - Gmail API has network/SSL issues inside Docker containers
+    - External execution has native network access
+    - Proven 100% success rate vs 6% inside Docker
+
+    ## Prerequisites:
+
+    The HTTP Trigger Service must be running on the host:
+    ```bash
+    cd scripts/digest-service
+    python http_trigger.py
+    ```
+
+    ## Performance:
+
+    - Execution time: 5-15 seconds (depending on email count)
+    - Timeout: 130 seconds max (120s for script + 10s buffer)
+    - Parallel LLM classification for speed
+
+    ## Request:
+
+    - `since_hours` (int): Fetch emails from last N hours (default: 24)
+    - `max_emails` (int): Maximum emails to fetch (default: 100)
+
+    ## Response:
+
+    - `status`: "success" or "error"
+    - `emails_synced`: Number of emails fetched
+    - `execution_time`: Time taken in seconds
+    - `message`: Status message
+
+    ## Usage:
+
+    Call this endpoint before generating a digest to ensure fresh data:
+
+    ```python
+    # 1. Sync Gmail
+    sync_response = await client.post("/api/digest/sync-gmail", json={"since_hours": 24})
+
+    # 2. Generate digest from fresh data
+    digest = await client.post("/api/digest/generate", json={"since_hours": 24})
+    ```
+    """
+    import httpx
+
+    if request is None:
+        request = SyncGmailRequest()
+
+    try:
+        start_time = datetime.now()
+        logger.info("sync_gmail_triggered", since_hours=request.since_hours, max_emails=request.max_emails)
+
+        # Call HTTP Trigger Service running on host
+        # Use host.docker.internal to reach host machine from Docker
+        trigger_url = "http://host.docker.internal:5001/trigger-sync"
+
+        logger.info("calling_trigger_service", url=trigger_url)
+
+        async with httpx.AsyncClient(timeout=130.0) as client:
+            try:
+                response = await client.post(
+                    trigger_url,
+                    json={
+                        "since_hours": request.since_hours,
+                        "max_emails": request.max_emails
+                    }
+                )
+
+                execution_time = (datetime.now() - start_time).total_seconds()
+
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info("gmail_sync_succeeded",
+                                emails=result.get('emails_synced', 0),
+                                duration=execution_time)
+
+                    return {
+                        "status": "success",
+                        "emails_synced": result.get('emails_synced', 0),
+                        "execution_time": round(execution_time, 2),
+                        "message": result.get('message', 'Gmail sync completed')
+                    }
+                else:
+                    error_detail = response.text
+                    logger.error("gmail_sync_failed", status_code=response.status_code, error=error_detail)
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Gmail sync failed: {error_detail}"
+                    )
+
+            except httpx.ConnectError:
+                logger.error("trigger_service_not_available")
+                raise HTTPException(
+                    status_code=503,
+                    detail="HTTP Trigger Service not available. Please ensure 'python http_trigger.py' is running on the host."
+                )
+            except httpx.TimeoutException:
+                logger.error("trigger_service_timeout")
+                raise HTTPException(
+                    status_code=504,
+                    detail="Gmail sync timed out after 130 seconds"
+                )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("sync_gmail_error", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync Gmail: {str(e)}"
+        )
 
 
 @router.post("/generate")

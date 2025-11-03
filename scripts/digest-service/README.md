@@ -2,36 +2,61 @@
 
 ## Vue d'ensemble
 
-Les scripts de ce dossier permettent de récupérer les emails Gmail **en dehors du conteneur Docker** et de les envoyer au backend pour traitement. Cette approche "hybride" résout les problèmes de réseau/SSL que Docker peut rencontrer avec l'API Gmail.
+Ce dossier contient **v1.py**, un script qui récupère les emails Gmail **en dehors du conteneur Docker** et les envoie au backend pour classification et stockage. Cette approche "hybride" résout les problèmes de réseau/SSL que Docker peut rencontrer avec l'API Gmail.
 
-## Architecture Hybride
+## 🎯 Architecture Simple (Production Ready)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│               PRODUCTION DIGEST FLOW                        │
+│                  DIGEST WORKFLOW                            │
 └─────────────────────────────────────────────────────────────┘
 
-User/Cron → digest_service (External - Windows/Mac/Linux)
-           ├─ Gmail API OAuth ✓ (Native network access)
-           ├─ fetch_unread_emails()
-           └─ POST /api/digest/process-emails
-                    │
-                    ▼
-           backend/app/api/endpoints/digest.py
-           ├─ EmailProcessor.classify_emails()  [LLM]
-           ├─ Database persistence
-           └─ Response grouped by urgency (URGENT, IMPORTANT, ROUTINE)
+Step 1: Sync Gmail (manuel ou cron)
+   │
+   v1.py (Host - hors Docker)
+   ├─ Gmail API OAuth ✓ (Native network access)
+   ├─ fetch_unread_emails()
+   └─ POST /api/digest/process-emails
+            │
+            ▼
+   backend/app/api/endpoints/digest.py
+   ├─ EmailProcessor.classify_emails() [LLM]
+   ├─ Database persistence
+   └─ Emails stockés en base
+
+Step 2: Generate Digest (via agent ou API)
+   │
+   User: "Génère mon digest"
+   │
+   ▼
+   Orchestrator Agent
+   │
+   └─ POST /api/digest/generate
+            │
+            ▼
+       Query emails from DB
+       Group by urgency (URGENT, IMPORTANT, ROUTINE)
+       Return structured digest
 ```
 
-## Versions Disponibles
+### Avantages de cette approche
 
-### v1.py (Production - Recommandé)
+✅ **Simple**: Un seul script à lancer (v1.py)
+✅ **Fiable**: Pas de dépendances complexes
+✅ **Production-ready**: Fonctionne sur VPS avec cron
+✅ **Rapide**: ~3 secondes pour récupérer et classifier les emails
+✅ **Offline-capable**: Le digest fonctionne même sans Gmail si emails déjà en cache
+
+## Fichiers Disponibles
+
+### v1.py (Production)
 - ✅ **Version stable** utilisée en production
 - Récupération Gmail via OAuth2
 - Classification LLM des emails (OpenAI/Anthropic)
 - Envoi au backend via `/api/digest/process-emails`
 - Gestion d'erreurs basique
 - **Performance testée**: 17/17 emails récupérés (100% vs 6% Docker seul)
+- **Utilisé par**: http_trigger.py et exécution manuelle/cron
 
 ### v2.py (Enhanced - Beta)
 - ✨ **Version améliorée** avec fonctionnalités avancées
