@@ -460,9 +460,36 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                         state_manager.get_state().set_last_query_entities(results, "people")
                         logger.info("stored_query_entities_in_state", type="people", count=len(results))
                     elif "name" in first_row and "category" in first_row:
-                        # Professionals query
+                        # Professionals query - extract profession type from user query
+                        profession_keywords = {
+                            "plombier": ["plombier", "plombiers"],
+                            "électricien": ["électricien", "électriciens", "electricien"],
+                            "chauffagiste": ["chauffagiste", "chauffagistes"],
+                            "jardinier": ["jardinier", "jardiniers"],
+                            "menuisier": ["menuisier", "menuisiers"],
+                            "peintre": ["peintre", "peintres"],
+                            "serrurier": ["serrurier", "serruriers"],
+                            "maçon": ["maçon", "maçons", "macon"]
+                        }
+
+                        # Detect profession from user input
+                        user_input_lower = user_input.lower()
+                        detected_profession = "professionnel"
+                        for profession, keywords in profession_keywords.items():
+                            if any(keyword in user_input_lower for keyword in keywords):
+                                detected_profession = profession
+                                break
+
+                        # Store profession in business context for later reference
+                        if not state_manager.get_state().business_context:
+                            state_manager.get_state().business_context = {}
+                        state_manager.get_state().business_context["profession_requested"] = detected_profession
+
                         state_manager.get_state().set_last_query_entities(results, "professionals")
-                        logger.info("stored_query_entities_in_state", type="professionals", count=len(results))
+                        logger.info("stored_query_entities_in_state",
+                                   type="professionals",
+                                   profession=detected_profession,
+                                   count=len(results))
                     elif "nom" in first_row and "nombre_coproprietaires" in first_row:
                         # Properties query
                         state_manager.get_state().set_last_query_entities(results, "properties")
