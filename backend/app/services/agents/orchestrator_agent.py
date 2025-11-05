@@ -564,12 +564,29 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                 )
 
             else:
-                # Neither (empty result)
+                # Neither (empty result) - IMPROVED MESSAGE
+                logger.warning("no_results_found",
+                             query=user_input[:50],
+                             has_sql=hybrid_result.has_sql,
+                             has_rag=hybrid_result.has_rag)
+
                 return AgentResponse(
                     success=True,
-                    message="Je n'ai trouvé aucune information pertinente pour répondre à votre question.",
+                    message=(
+                        "Je n'ai trouvé aucune information pertinente pour répondre à votre question.\n\n"
+                        "**Suggestions** :\n"
+                        "1. Vérifiez que des documents sont bien uploadés dans le panneau de droite\n"
+                        "2. Reformulez votre question avec d'autres mots\n"
+                        "3. Précisez le contexte (noms, dates, catégories)\n\n"
+                        "Si vous cherchez dans les documents, assurez-vous qu'ils contiennent l'information recherchée."
+                    ),
                     agents_used=["intent_classifier_v2", "hybrid_executor"],
-                    confidence=0.0
+                    confidence=0.0,
+                    suggestions=[
+                        "Afficher les documents disponibles",
+                        "Reformuler la question",
+                        "Chercher dans la base de données"
+                    ]
                 )
 
         except Exception as e:
