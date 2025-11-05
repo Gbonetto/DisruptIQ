@@ -44,105 +44,22 @@ class SQLAgentService:
 
     def __init__(self):
         self.llm_service = LLMService()
+        # Import here to avoid circular dependency
+        from app.services.schema_introspection_service import get_schema_service
+        self._schema_service = get_schema_service()
 
     def _build_schema_description(self) -> str:
         """
         Construit une description complète du schéma BDD pour le LLM
 
+        Note:
+            Description générée DYNAMIQUEMENT depuis SQLAlchemy models
+            via SchemaIntrospectionService. Single source of truth!
+
         Returns:
-            Description texte du schéma
+            Description texte du schéma (Markdown)
         """
-        schema = """
-# SCHÉMA DE LA BASE DE DONNÉES DisruptIQ
-
-## Table: professionnels (Prestataires/Fournisseurs)
-- id (INTEGER, PK)
-- name (VARCHAR) - Nom du professionnel
-- company_name (VARCHAR) - Nom de l'entreprise
-- email (VARCHAR, UNIQUE) - Email
-- phone (VARCHAR) - Téléphone
-- siret (VARCHAR) - Numéro SIRET
-- description (TEXT) - Description des services
-- statut (VARCHAR) - active, inactive, blacklisted
-- category (VARCHAR) - plombier, électricien, peintre, etc.
-- specialties (JSONB) - Liste des spécialités
-- address (TEXT), city (VARCHAR), postal_code (VARCHAR)
-- rating (FLOAT) - Note sur 5
-- total_jobs (INTEGER) - Nombre d'interventions
-- is_indexed (BOOLEAN) - Indexé dans Qdrant
-- created_at (TIMESTAMPTZ)
-
-## Table: coproprietes (Immeubles gérés)
-- id (INTEGER, PK)
-- nom (VARCHAR) - Nom de la copropriété
-- adresse (TEXT), ville (VARCHAR), code_postal (VARCHAR)
-- nombre_lots (INTEGER) - Nombre d'appartements
-- nombre_batiments (INTEGER)
-- annee_construction (INTEGER)
-- syndic (VARCHAR) - Nom du syndic
-- type_copropriete (VARCHAR) - résidentiel, mixte, commercial
-- surface_totale (NUMERIC) - Surface en m²
-- equipements (JSONB) - ["ascenseur", "parking"]
-- is_indexed (BOOLEAN)
-- created_at (TIMESTAMPTZ)
-
-## Table: coproprietaires (Résidents/Propriétaires)
-- id (INTEGER, PK)
-- nom (VARCHAR), prenom (VARCHAR)
-- email (VARCHAR), telephone (VARCHAR), telephone_mobile (VARCHAR)
-- copropriete_id (INTEGER, FK → coproprietes.id)
-- numero_lot (VARCHAR) - "A12", "Bat B - 304"
-- type_lot (VARCHAR) - appartement, garage, cave
-- etage (INTEGER), surface (NUMERIC)
-- statut (VARCHAR) - proprietaire, locataire, usufruitier
-- statut_special (VARCHAR) - président, syndic, gardien
-- est_resident (BOOLEAN) - Habite-t-il le lot?
-- tantiemes (INTEGER) - Millièmes de copropriété
-- is_indexed (BOOLEAN)
-- created_at (TIMESTAMPTZ)
-
-## Table: professionnels_coproprietes (Liaison Many-to-Many)
-- professionnel_id (INTEGER, FK → professionnels.id)
-- copropriete_id (INTEGER, FK → coproprietes.id)
-- date_debut (DATE), date_fin (DATE)
-- est_prestataire_principal (BOOLEAN)
-- nombre_interventions (INTEGER)
-- note_moyenne (NUMERIC)
-
-## Table: documents
-- id (INTEGER, PK)
-- filename (VARCHAR), file_size (BIGINT), mime_type (VARCHAR)
-- document_type (VARCHAR) - invoice, contract, letter
-- extracted_text (TEXT)
-- professionnel_id (INTEGER, FK → professionnels.id)
-- copropriete_id (INTEGER, FK → coproprietes.id)
-- coproprietaire_id (INTEGER, FK → coproprietaires.id)
-- created_at (TIMESTAMPTZ)
-
-## Table: emails
-- id (INTEGER, PK)
-- sender (VARCHAR), subject (VARCHAR), body (TEXT)
-- urgency (ENUM) - urgent, important, routine
-- professionnel_id, copropriete_id, coproprietaire_id (FK)
-- received_at (TIMESTAMPTZ)
-
-# EXEMPLES DE REQUÊTES
-
-1. "Trouve tous les plombiers dans le 13ème arrondissement"
-   → SELECT * FROM professionnels WHERE category ILIKE '%plombier%' AND (city ILIKE '%13%' OR postal_code LIKE '13%')
-
-2. "Qui habite au 3ème étage de la résidence Les Mimosas?"
-   → SELECT c.* FROM coproprietaires c
-      JOIN coproprietes co ON c.copropriete_id = co.id
-      WHERE co.nom ILIKE '%Les Mimosas%' AND c.etage = 3
-
-3. "Liste les professionnels qui travaillent sur la copropriété X"
-   → SELECT p.* FROM professionnels p
-      JOIN professionnels_coproprietes pc ON p.id = pc.professionnel_id
-      JOIN coproprietes c ON pc.copropriete_id = c.id
-      WHERE c.nom ILIKE '%X%' AND pc.date_fin IS NULL
-"""
-        return schema
+        return self._schema_service.build_full_schema_description()
 
     async def natural_language_to_sql(
         self,

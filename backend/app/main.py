@@ -14,6 +14,7 @@ import structlog
 from app.core.config import settings
 from app.core.database import init_db
 from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, workflows, email_safe_send, invoices, enrichment
+from app.api.admin import reindexing
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document
 from app.services.scheduler_service import get_scheduler
@@ -66,6 +67,24 @@ async def startup_event():
     except Exception as e:
         logger.error("database_init_failed", error=str(e))
         raise
+
+    # Initialize Schema Introspection Service (for SQL agents)
+    try:
+        from app.services.schema_introspection_service import initialize_schema_service
+        schema_service = initialize_schema_service()
+        registered_tables = schema_service.get_registered_tables()
+        logger.info(
+            "schema_introspection_initialized",
+            message="Dynamic schema generation ready for SQL agents",
+            tables_count=len(registered_tables)
+        )
+    except Exception as e:
+        logger.error("schema_introspection_init_failed", error=str(e))
+        # Log error but don't fail startup - SQL agent will still work with fallback
+        logger.warning(
+            "schema_introspection_startup_warning",
+            message="Schema introspection failed, SQL agents may use fallback schemas"
+        )
 
     # Initialize RAG Service (Qdrant collection)
     try:
@@ -168,6 +187,7 @@ app.include_router(cache.router, prefix="/api/cache", tags=["Cache Management"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["N8N Webhooks"])
 app.include_router(webhook_test.router, prefix="/api/webhook-test", tags=["Webhook Testing"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Administration"])
+app.include_router(reindexing.router, prefix="/api/admin", tags=["Admin - RAG Reindexing"])
 app.include_router(sql_tables.router, prefix="/api/sql", tags=["SQL Table Management"])
 
 # Phase 2: Workflows & Email Safe-Send

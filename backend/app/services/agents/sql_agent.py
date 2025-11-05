@@ -48,86 +48,24 @@ class SQLAgent:
 
     def __init__(self):
         self.llm_service = LLMService()
+        # Import here to avoid circular dependency
+        from app.services.schema_introspection_service import get_schema_service
+        self._schema_service = get_schema_service()
         logger.info("sql_agent_initialized")
 
-        # Database schema for context - CANONICAL VIEWS (Phase 1)
-        self.schema = """
-VIEWS CANONIQUES (RECOMMANDÉES - Phase 1):
+    @property
+    def schema(self) -> str:
+        """
+        Database schema for context - DYNAMICALLY GENERATED
 
-1. vw_professionnels_min (Professionnels - Vue minimaliste sans infos sensibles)
-   - id, name, company_name, category, email, phone, city, rating, statut, created_at, updated_at
-   - Filtre: statut = 'active' uniquement
-   - ⚠️ IMPORTANT: Pas de siret, description, hashed_password → Vue sécurisée
+        Note:
+            Generated dynamically from SQLAlchemy models via SchemaIntrospectionService.
+            Single source of truth: SQLAlchemy models + canonical views in migrations.
 
-2. vw_coproprietaires_contact (Copropriétaires - Contacts uniquement)
-   - id, nom, prenom, email, telephone, copropriete_id, numero_lot, statut, created_at
-   - ⚠️ IMPORTANT: Pas d'infos bancaires/sensibles → Vue sécurisée
-
-3. vw_coproprietes_stats (Copropriétés avec statistiques)
-   - id, nom, adresse, ville, code_postal, nombre_lots, nombre_batiments, created_at
-   - nombre_coproprietaires (calculé dynamiquement)
-
-4. vw_emails_urgents (Emails urgents uniquement)
-   - id, sender, subject, received_at, urgency
-   - Filtre: urgency = 'URGENT' uniquement
-
-5. vw_documents_active (Documents actifs uniquement)
-   - id, filename, content_type, collection_name, uploaded_at, file_size_kb
-   - Filtre: is_deleted = false
-
-TABLES RAW (Legacy - À utiliser uniquement si nécessaire):
-
-1. coproprietes
-   - id: Integer (PK)
-   - nom: String (ex: "Les Mimosas", "Résidence du Parc")
-   - adresse: String
-   - ville: String (NOT NULL)
-   - code_postal: String (NOT NULL)
-   - nombre_lots: Integer
-   - nombre_batiments: Integer
-   - created_at: DateTime
-
-2. coproprietaires
-   - id: Integer (PK)
-   - nom: String (NOT NULL)
-   - prenom: String (NOT NULL)
-   - email: String
-   - telephone: String
-   - copropriete_id: Integer (FK -> coproprietes.id) (NOT NULL)
-   - numero_lot: String (NOT NULL) (ex: "302", "A301", "12")
-   - type_lot: String (ex: "Appartement", "Maison")
-   - etage: Integer
-   - surface: Decimal (en m²)
-   - statut: String (default: "proprietaire")
-   - created_at: DateTime
-
-3. professionnels
-   - id: Integer (PK)
-   - name: String (nom du professionnel)
-   - company_name: String (nom de l'entreprise)
-   - category: String (ex: "plombier", "électricien", "peintre", "jardinier", "serrurier", "chauffagiste", "menuisier", "maçon")
-   - email: String
-   - phone: String
-   - siret: String
-   - description: Text
-   - statut: String (active, inactive, blacklisted)
-   - address: Text
-   - city: String
-   - postal_code: String
-   - rating: Float (note sur 5)
-   - is_indexed: Boolean
-   - created_at: DateTime
-
-4. emails
-   - id: Integer (PK)
-   - message_id: String (UNIQUE)
-   - sender: String
-   - subject: String
-   - body: Text
-   - urgency: Enum ('URGENT', 'IMPORTANT', 'ROUTINE') -- IMPORTANT: valeurs en MAJUSCULES
-   - received_at: DateTime
-   - processed: Boolean
-"""
+        Returns:
+            Complete schema description (Markdown)
+        """
+        return self._schema_service.build_full_schema_description()
 
     async def process(self, user_input: str, db: AsyncSession) -> Dict[str, Any]:
         """
