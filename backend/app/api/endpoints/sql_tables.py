@@ -60,8 +60,12 @@ def get_default_values(table_name: str) -> Dict[str, Any]:
         'professionnels': {
             'is_indexed': False,  # New professionals start as not indexed
         },
-        'coproprietaires': {},
-        'coproprietes': {}
+        'coproprietaires': {
+            'is_indexed': False,  # New coproprietaires start as not indexed
+        },
+        'coproprietes': {
+            'is_indexed': False,  # New coproprietes start as not indexed
+        }
     }
     return defaults_by_table.get(table_name, {})
 

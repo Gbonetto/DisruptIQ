@@ -5,7 +5,7 @@ Représente les copropriétés/immeubles gérés par le syndic
 
 from sqlalchemy import Column, Integer, String, Text, JSON, DateTime, Boolean, Numeric
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 from app.core.database import Base
 
 
@@ -47,7 +47,7 @@ class Copropriete(Base):
     documents_path = Column(String)  # Chemin vers dossier de documents
 
     # Indexation RAG (synchronisation Qdrant)
-    is_indexed = Column(Boolean, default=False, nullable=False, index=True)
+    is_indexed = Column(Boolean, default=False, server_default=text('false'), nullable=False, index=True)
     last_indexed_at = Column(DateTime(timezone=True))
 
     # Timestamps

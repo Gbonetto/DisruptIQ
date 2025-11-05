@@ -5,7 +5,7 @@ Représente les copropriétaires/résidents des immeubles gérés
 
 from sqlalchemy import Column, Integer, String, Text, JSON, DateTime, Boolean, ForeignKey, Date, Numeric, UniqueConstraint
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 from app.core.database import Base
 
 
@@ -54,7 +54,7 @@ class Coproprietaire(Base):
     notes = Column(Text)
 
     # Indexation RAG (synchronisation Qdrant)
-    is_indexed = Column(Boolean, default=False, nullable=False, index=True)
+    is_indexed = Column(Boolean, default=False, server_default=text('false'), nullable=False, index=True)
     last_indexed_at = Column(DateTime(timezone=True))
 
     # Timestamps
