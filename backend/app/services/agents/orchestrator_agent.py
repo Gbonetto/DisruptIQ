@@ -37,6 +37,7 @@ class AgentResponse(BaseModel):
     agents_used: List[str] = []
     confidence: float = 1.0
     suggestions: List[str] = []
+    sources: List[Dict[str, Any]] = []  # ADDED: Sources for citations (RAG, SQL, etc.)
 
 
 class OrchestratorAgent:
@@ -295,10 +296,10 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
 
             # 2. Route to appropriate agent(s)
             if intent == IntentType.QUERY_DATA:
-                return await self._handle_query_data(user_input, db, state_manager)
+                return await self._handle_query_data(user_input, db, state_manager, thought_stream)
 
             elif intent == IntentType.SEARCH_DOCUMENTS:
-                return await self._handle_search_documents(user_input, db, state_manager)
+                return await self._handle_search_documents(user_input, db, state_manager, thought_stream)
 
             elif intent == IntentType.SEND_EMAIL:
                 return await self._handle_send_email_intelligent(
@@ -396,10 +397,20 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
             logger.info("recipient_lookup_required", user_input=user_input[:50], has_names=has_specific_names)
         return result
 
-    async def _handle_query_data(self, user_input: str, db: AsyncSession, state_manager=None) -> AgentResponse:
+    async def _handle_query_data(self, user_input: str, db: AsyncSession, state_manager=None, thought_stream: ThoughtStream = None) -> AgentResponse:
         """Handle SQL data queries and store results in context"""
         # Import here to avoid circular imports
         from .sql_agent import SQLAgent
+
+        # Emit thought: Executing SQL query
+        if thought_stream:
+            await thought_stream.add_thought(
+                ThoughtType.EXECUTING,
+                title="Requête SQL",
+                content="J'interroge la base de données pour trouver les informations demandées...",
+                agent="sql_agent",
+                progress=0.5
+            )
 
         # Check if user is asking to filter by relevant professions based on context
         user_lower = user_input.lower()
@@ -469,7 +480,7 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
             ] if result.get("success") and response_data.get("results") else []
         )
 
-    async def _handle_search_documents(self, user_input: str, db: AsyncSession, state_manager = None) -> AgentResponse:
+    async def _handle_search_documents(self, user_input: str, db: AsyncSession, state_manager = None, thought_stream: ThoughtStream = None) -> AgentResponse:
         """
         Handle document search via RAG with HYBRID SQL+RAG intelligence
 
@@ -483,6 +494,16 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
         """
         try:
             logger.info("handling_search_with_hybrid_intelligence", query=user_input[:50])
+
+            # Emit thought: Starting document search
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.EXECUTING,
+                    title="Recherche documentaire",
+                    content="J'analyse les documents uploadés pour trouver les informations pertinentes...",
+                    agent="rag_agent",
+                    progress=0.4
+                )
 
             # Step 1: Classify with v2.0 Intent Classifier (SQL vs RAG vs HYBRID)
             classification = await self.intent_classifier_v2.classify_with_confidence(
@@ -522,6 +543,16 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                 logger.info("fusing_sql_and_rag_results")
                 fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
 
+                # Emit thought: Synthesizing results
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.SYNTHESIZING,
+                        title="Synthèse des résultats",
+                        content=f"Je combine les résultats de la base de données et des documents pour vous donner une réponse complète. J'ai trouvé {len(fused.sources)} sources pertinentes.",
+                        agent="fusion_agent",
+                        progress=0.8
+                    )
+
                 return AgentResponse(
                     success=True,
                     message=fused.text,
@@ -534,24 +565,48 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                         "rag_result": hybrid_result.rag_result.dict() if hybrid_result.rag_result else None
                     },
                     agents_used=["intent_classifier_v2", "hybrid_executor", "sql_agent", "rag_agent", "synthesis_agent", "fusion_agent"],
-                    confidence=fused.confidence
+                    confidence=fused.confidence,
+                    sources=fused.sources  # ADDED: Top-level sources for frontend
                 )
 
             # Step 5: Return SQL-only or RAG-only result
             elif hybrid_result.has_sql and not hybrid_result.has_rag:
                 # SQL only
                 fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
+
+                # Emit thought: Processing SQL results
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.PROCESSING,
+                        title="Traitement des résultats SQL",
+                        content=f"J'ai récupéré {len(fused.sources)} résultats de la base de données.",
+                        agent="sql_agent",
+                        progress=0.7
+                    )
+
                 return AgentResponse(
                     success=True,
                     message=fused.text,
                     data={"sources": fused.sources},
                     agents_used=["intent_classifier_v2", "sql_agent"],
-                    confidence=fused.confidence
+                    confidence=fused.confidence,
+                    sources=fused.sources  # ADDED: Top-level sources
                 )
 
             elif hybrid_result.has_rag and not hybrid_result.has_sql:
                 # RAG only
                 fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
+
+                # Emit thought: Processing RAG results
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.PROCESSING,
+                        title="Traitement des documents",
+                        content=f"J'ai trouvé {len(fused.sources)} passages pertinents dans les documents uploadés.",
+                        agent="rag_agent",
+                        progress=0.7
+                    )
+
                 return AgentResponse(
                     success=True,
                     message=fused.text,
@@ -560,7 +615,8 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                         "has_contradictions": fused.has_contradictions
                     },
                     agents_used=["intent_classifier_v2", "rag_agent", "synthesis_agent"],
-                    confidence=fused.confidence
+                    confidence=fused.confidence,
+                    sources=fused.sources  # ADDED: Top-level sources
                 )
 
             else:

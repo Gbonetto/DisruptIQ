@@ -162,7 +162,8 @@ async def assistant_chat_stream(
                         "message": result.message,
                         "data": result.data,
                         "agents_used": result.agents_used,
-                        "suggestions": result.suggestions
+                        "suggestions": result.suggestions,
+                        "sources": result.sources  # ADDED: Include sources for citations
                     }
                     final_event = f"event: response\ndata: {json.dumps(response_data, default=str)}\n\n"
                     await thought_stream._broadcast(final_event)
