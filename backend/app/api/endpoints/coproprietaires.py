@@ -159,11 +159,33 @@ async def create_coproprietaire(
         raise
     except Exception as e:
         await db.rollback()
-        logger.error("coproprietaire_creation_failed", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create copropriétaire: {str(e)}"
-        )
+        logger.error("coproprietaire_creation_failed", error=str(e), exc_info=True)
+
+        # Provide more specific error messages for common issues
+        error_msg = str(e).lower()
+
+        if "foreign key" in error_msg or "violates foreign key constraint" in error_msg:
+            # Get list of available coproprietes for helpful message
+            copro_result = await db.execute(select(Copropriete.id, Copropriete.nom))
+            available_copros = copro_result.all()
+            copro_list = ", ".join([f"{c.id}: {c.nom}" for c in available_copros[:5]])
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"La copropriété avec l'ID {coproprietaire_data.copropriete_id} n'existe pas. "
+                       f"Copropriétés disponibles: {copro_list}{'...' if len(available_copros) > 5 else ''}"
+            )
+        elif "unique constraint" in error_msg:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Un copropriétaire existe déjà pour le lot {coproprietaire_data.numero_lot} "
+                       f"dans cette copropriété (contrainte d'unicité)"
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Erreur lors de la création du copropriétaire: {str(e)}"
+            )
 
 
 @router.get("/", response_model=List[CoproprietaireResponse])
