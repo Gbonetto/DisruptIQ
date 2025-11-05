@@ -15,6 +15,7 @@ from sqlalchemy import select
 from datetime import datetime, timedelta
 
 from app.services.email_processor import EmailProcessor
+from app.services.digest_summarizer import DigestSummarizer
 from app.schemas.email import DigestResponse
 from app.core.database import get_db
 from app.models.email import Email, EmailUrgency
@@ -80,6 +81,7 @@ async def _persist_classified_emails(db: AsyncSession, classified: Dict[str, Lis
                 body=email_data.get('body', ''),
                 urgency=EmailUrgency(email_data['urgency']),
                 category=email_data.get('category'),
+                llm_analysis=email_data.get('llm_analysis'),
                 attachments=email_data.get('attachments', []),
                 received_at=email_data.get('received_at'),
                 processed=True,
@@ -323,6 +325,7 @@ async def generate_digest(
                 "body": email.body,
                 "urgency": email.urgency.value,
                 "category": email.category,
+                "llm_analysis": email.llm_analysis if hasattr(email, 'llm_analysis') else None,
                 "received_at": email.received_at.isoformat() if email.received_at else None,
                 "attachments": email.attachments or []
             }
@@ -333,6 +336,16 @@ async def generate_digest(
                 important_emails.append(email_dict)
             else:
                 routine_emails.append(email_dict)
+
+        # Generate executive summary
+        classified_emails = {
+            "urgent": urgent_emails,
+            "important": important_emails,
+            "routine": routine_emails
+        }
+
+        summarizer = DigestSummarizer()
+        executive_summary = await summarizer.generate_executive_summary(classified_emails)
 
         # Format response
         response = {
@@ -350,6 +363,7 @@ async def generate_digest(
                 "count": len(routine_emails),
                 "emails": routine_emails
             },
+            "executive_summary": executive_summary,
             "generated_at": datetime.now().isoformat()
         }
 
@@ -466,6 +480,8 @@ async def get_latest_digest(
                 "subject": email.subject,
                 "body": email.body,
                 "urgency": email.urgency.value,
+                "category": email.category,
+                "llm_analysis": email.llm_analysis if hasattr(email, 'llm_analysis') else None,
                 "received_at": email.received_at.isoformat() if email.received_at else None,
                 "attachments": email.attachments or []
             }
@@ -476,6 +492,16 @@ async def get_latest_digest(
                 important.append(email_dict)
             else:
                 routine.append(email_dict)
+
+        # Generate executive summary
+        classified_emails = {
+            "urgent": urgent,
+            "important": important,
+            "routine": routine
+        }
+
+        summarizer = DigestSummarizer()
+        executive_summary = await summarizer.generate_executive_summary(classified_emails)
 
         response = {
             "date": datetime.now().isoformat(),
@@ -492,6 +518,7 @@ async def get_latest_digest(
                 "count": len(routine),
                 "emails": routine
             },
+            "executive_summary": executive_summary,
             "generated_at": datetime.now().isoformat()
         }
 
@@ -590,6 +617,8 @@ async def process_emails(
                     subject=email_data['subject'],
                     body=email_data.get('body', ''),
                     urgency=EmailUrgency(email_data['urgency']),
+                    category=email_data.get('category'),
+                    llm_analysis=email_data.get('llm_analysis'),
                     attachments=email_data.get('attachments', []),
                     received_at=received_at,
                     processed=True,
@@ -605,6 +634,10 @@ async def process_emails(
             logger.info("emails_persisted", count=len(new_emails))
         else:
             logger.info("no_new_emails_to_persist")
+
+        # Generate executive summary
+        summarizer = DigestSummarizer()
+        executive_summary = await summarizer.generate_executive_summary(classified)
 
         # Format response
         response = {
@@ -622,6 +655,7 @@ async def process_emails(
                 "count": len(classified['routine']),
                 "emails": classified['routine']
             },
+            "executive_summary": executive_summary,
             "generated_at": datetime.now().isoformat()
         }
 

@@ -10,6 +10,7 @@ import structlog
 from typing import List
 
 from app.services.email_sender import EmailSenderService
+from app.services.digest_summarizer import DigestSummarizer
 from app.api.endpoints.digest import generate_digest
 from app.core.database import get_db
 
@@ -57,10 +58,8 @@ class SchedulerService:
                 try:
                     # Call the digest generation endpoint
                     from app.services.email_processor import EmailProcessor
-                    from app.services.llm_service import LLMService
 
                     email_processor = EmailProcessor()
-                    llm_service = LLMService()
 
                     # Get unprocessed emails
                     logger.info("fetching_unread_emails")
@@ -70,32 +69,13 @@ class SchedulerService:
                         logger.info("no_new_emails_for_digest")
                         return
 
+                    # Classify emails using advanced classifier (parallel processing)
                     logger.info("classifying_emails", count=len(emails))
+                    classified_emails = await email_processor.classify_emails(emails)
 
-                    # Classify emails by urgency
-                    classified_emails = {
-                        "urgent": [],
-                        "important": [],
-                        "routine": []
-                    }
-
-                    for email in emails:
-                        # Classify using LLM
-                        urgency = await llm_service.classify_urgency(
-                            subject=email.get("subject", ""),
-                            body=email.get("body", "")
-                        )
-
-                        urgency_key = urgency.lower()
-                        if urgency_key in classified_emails:
-                            classified_emails[urgency_key].append({
-                                "id": email.get("id"),
-                                "subject": email.get("subject", "Sans objet"),
-                                "sender": email.get("from", "Inconnu"),
-                                "snippet": email.get("snippet", email.get("body", "")[:150]),
-                                "body": email.get("body", ""),
-                                "urgency": urgency_key
-                            })
+                    # Generate executive summary
+                    summarizer = DigestSummarizer()
+                    executive_summary = await summarizer.generate_executive_summary(classified_emails)
 
                     # Build digest data
                     digest_data = {
@@ -112,7 +92,8 @@ class SchedulerService:
                         "routine": {
                             "count": len(classified_emails["routine"]),
                             "emails": classified_emails["routine"]
-                        }
+                        },
+                        "executive_summary": executive_summary
                     }
 
                     logger.info(

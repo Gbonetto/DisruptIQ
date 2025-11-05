@@ -25,6 +25,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from app.core.config import settings
 from app.services.llm_service import LLMService
+from app.services.advanced_email_classifier import AdvancedEmailClassifier
 from app.models.email import EmailUrgency
 
 logger = structlog.get_logger()
@@ -35,6 +36,7 @@ class EmailProcessor:
 
     def __init__(self):
         self.llm_service = LLMService()
+        self.advanced_classifier = AdvancedEmailClassifier()
         self.gmail_service = None
         self._initialize_gmail()
 
@@ -405,28 +407,30 @@ class EmailProcessor:
 
     async def _classify_single_email(self, email: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Classify a single email (helper for parallel processing)
+        Classify a single email using advanced classifier (helper for parallel processing)
 
         Args:
             email: Email dictionary
 
         Returns:
-            Email with 'urgency' field added
+            Email with 'urgency', 'category', 'llm_analysis' fields added
         """
         try:
-            urgency = await self.llm_service.classify_email_urgency(
-                subject=email['subject'],
-                sender=email['sender'],
-                body=email['body'],
-                snippet=email['snippet']
-            )
+            # Use advanced classification
+            classification = await self.advanced_classifier.classify_advanced(email)
 
-            email['urgency'] = urgency
+            # Add classification results to email
+            email['urgency'] = classification.get('urgency', 'routine')
+            email['category'] = classification.get('category')
+            email['llm_analysis'] = classification  # Full analysis for DB storage
 
             logger.info(
-                "email_classified",
+                "email_classified_advanced",
                 subject=email['subject'],
-                urgency=urgency
+                urgency=email['urgency'],
+                category=email['category'],
+                priority_score=classification.get('priority_score', 0),
+                action_required=classification.get('action_required', False)
             )
 
         except Exception as e:
@@ -435,8 +439,22 @@ class EmailProcessor:
                 subject=email['subject'],
                 error=str(e)
             )
-            # Default to routine if classification fails
-            email['urgency'] = 'routine'
+            # Fallback to simple classification
+            try:
+                urgency = await self.llm_service.classify_email_urgency(
+                    subject=email['subject'],
+                    sender=email['sender'],
+                    body=email['body'],
+                    snippet=email['snippet']
+                )
+                email['urgency'] = urgency
+                email['category'] = None
+                email['llm_analysis'] = {'urgency': urgency, 'fallback': True}
+            except Exception as fallback_error:
+                logger.error("fallback_classification_failed", error=str(fallback_error))
+                email['urgency'] = 'routine'
+                email['category'] = None
+                email['llm_analysis'] = {'urgency': 'routine', 'error': True}
 
         return email
 
