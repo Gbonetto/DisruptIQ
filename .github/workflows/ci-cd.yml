@@ -1,0 +1,307 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop, claude/**]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  # Backend Tests
+  test-backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: disruptiq_test
+          POSTGRES_USER: disruptiq
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements.txt'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run linting
+        run: |
+          cd backend
+          pip install ruff
+          ruff check app/ --select=E,F,W,C90 --ignore=E501
+
+      - name: Run type checking
+        run: |
+          cd backend
+          pip install mypy
+          mypy app/ --ignore-missing-imports || true
+
+      - name: Run tests with coverage
+        env:
+          DATABASE_URL: postgresql+asyncpg://disruptiq:test_password@localhost:5432/disruptiq_test
+          REDIS_URL: redis://localhost:6379/0
+          QDRANT_URL: http://localhost:6333
+          OPENAI_API_KEY: sk-test-key
+          SECRET_KEY: test-secret-key-for-ci-cd-minimum-32-characters
+          DEBUG: False
+        run: |
+          cd backend
+          pytest tests/ -v --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./backend/coverage.xml
+          flags: backend
+          name: backend-coverage
+
+  # Frontend Tests
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Run linting
+        run: |
+          cd frontend
+          npm run lint || true
+
+      - name: Run type checking
+        run: |
+          cd frontend
+          npx tsc --noEmit
+
+      - name: Build production bundle
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Check bundle size
+        run: |
+          cd frontend
+          du -sh dist/
+          echo "Bundle size should be < 5MB"
+
+  # Security Scanning
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Python Security Scan
+        run: |
+          cd backend
+          pip install safety bandit
+          safety check --json || true
+          bandit -r app/ -f json -o bandit-report.json || true
+
+      - name: npm Audit
+        run: |
+          cd frontend
+          npm audit --json || true
+
+  # Docker Build
+  build-docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/disruptiq-backend:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/disruptiq-backend:latest
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/disruptiq-backend:latest
+          cache-to: type=inline
+
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/disruptiq-frontend:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/disruptiq-frontend:latest
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/disruptiq-frontend:latest
+          cache-to: type=inline
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-docker]
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: staging
+      url: https://staging.disruptiq.com
+
+    steps:
+      - name: Deploy to staging server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/disruptiq
+            docker-compose pull
+            docker-compose up -d
+            docker-compose exec -T backend alembic upgrade head
+            docker system prune -f
+
+      - name: Run smoke tests
+        run: |
+          sleep 30
+          curl -f https://staging.disruptiq.com/health/detailed || exit 1
+
+  # Deploy to Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-docker]
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://disruptiq.com
+
+    steps:
+      - name: Create deployment
+        uses: chrnorm/deployment-action@v2
+        id: deployment
+        with:
+          token: ${{ github.token }}
+          environment: production
+
+      - name: Deploy to production server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            cd /opt/disruptiq
+
+            # Backup database
+            docker exec disruptiq_postgres pg_dump -U disruptiq disruptiq > backup_$(date +%Y%m%d_%H%M%S).sql
+
+            # Deploy
+            docker-compose pull
+            docker-compose up -d
+            docker-compose exec -T backend alembic upgrade head
+            docker system prune -f
+
+      - name: Run smoke tests
+        run: |
+          sleep 30
+          curl -f https://disruptiq.com/health/detailed || exit 1
+
+      - name: Update deployment status (success)
+        if: success()
+        uses: chrnorm/deployment-status@v2
+        with:
+          token: ${{ github.token }}
+          state: 'success'
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+
+      - name: Update deployment status (failure)
+        if: failure()
+        uses: chrnorm/deployment-status@v2
+        with:
+          token: ${{ github.token }}
+          state: 'failure'
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+
+  # Notify on failure
+  notify:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend, security-scan]
+    if: failure()
+
+    steps:
+      - name: Send notification
+        run: |
+          echo "Pipeline failed. Check GitHub Actions for details."
+          # Add Slack/Discord/Email notification here

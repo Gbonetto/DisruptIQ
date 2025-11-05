@@ -18,7 +18,6 @@ import {
   Menu,
   X,
   Newspaper,
-  Bot,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
