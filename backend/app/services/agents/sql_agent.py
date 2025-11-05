@@ -138,34 +138,45 @@ class SQLAgent:
             }
 
     async def _generate_sql(self, user_input: str) -> str:
-        """Generate SQL query from natural language with few-shot examples"""
+        """Generate SQL query from natural language with comprehensive examples"""
         prompt = f"""
-Tu es un expert SQL PostgreSQL. Génère une requête SQL SELECT UNIQUEMENT pour répondre à la question.
+Tu es un expert SQL PostgreSQL avancé. Génère une requête SQL SELECT optimisée pour répondre à la question.
 
 SCHÉMA DE BASE DE DONNÉES:
 {self.schema}
 
-RÈGLES IMPORTANTES:
-1. Utilise UNIQUEMENT des SELECT (pas INSERT, UPDATE, DELETE, DROP)
-2. Pour rechercher des NOMS/PRÉNOMS: utilise TOUJOURS LOWER() et LIKE avec '%'
-3. Pour chercher une PERSONNE: regarde d'abord dans 'professionnels' (name), puis 'coproprietaires' (nom, prenom)
-4. Pour chercher un MÉTIER/CATÉGORIE: utilise table 'professionnels' colonne 'category'
-5. Utilise des JOINs appropriés si nécessaire
-6. Limite les résultats à 100 rows (LIMIT 100), SAUF si demandé explicitement "tous"
-7. Retourne UNIQUEMENT le SQL, sans explication, sans markdown
+RÈGLES CRITIQUES:
+1. ✅ UNIQUEMENT des SELECT (jamais INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE)
+2. ✅ Recherche NOMS/PRÉNOMS: TOUJOURS LOWER() et LIKE avec '%' pour gérer les variations
+3. ✅ Recherche PERSONNES:
+   - Professionnels → colonne 'name' (nom complet en un seul champ)
+   - Copropriétaires → colonnes 'nom' et 'prenom' (séparés)
+   - IMPORTANT: Les noms peuvent être dans n'importe quel ordre (Michel Bertrand OU Bertrand Michel)
+4. ✅ Recherche MÉTIERS: table 'professionnels', colonne 'category'
+5. ✅ JOINs: Utilise INNER JOIN pour données liées (évite les subqueries quand possible)
+6. ✅ Limite: LIMIT 100 par défaut, SAUF si "tous" ou "combien" (agrégations)
+7. ✅ Agrégations: Pour COUNT, SUM, AVG → pas de LIMIT, utilise GROUP BY si nécessaire
+8. ✅ Relations:
+   - coproprietaires.copropriete_id → coproprietes.id
+   - professionnels_coproprietes: table de liaison pour Many-to-Many
+9. ✅ Retourne UNIQUEMENT le SQL brut, sans explication, sans markdown, sans backticks
 
-⚠️ INFORMATIONS NON DISPONIBLES EN BASE DE DONNÉES:
-Les informations suivantes NE SONT PAS stockées dans la base et ne peuvent PAS être interrogées avec SQL:
-- Prix, tarifs, coûts, honoraires des professionnels
+⚠️ INFORMATIONS NON DISPONIBLES (renvoyer vers RAG):
+Ces données NE SONT PAS en base SQL, elles sont dans les documents:
+- Prix, tarifs, coûts, honoraires
 - Conditions de paiement, modalités contractuelles
 - Devis, factures, montants financiers
 - Documents, contrats, conditions générales
+- Procédures, règlements, articles
 
-Si la question porte sur ces sujets, retourne une requête SQL vide ou indique que ces informations ne sont pas en base.
+Si la question porte sur ces sujets, retourne: ""
 
-EXEMPLES CONCRETS:
+EXEMPLES CONCRETS PAR CATÉGORIE:
 
-PROFESSIONNELS (name en un seul champ):
+═══════════════════════════════════════════════════════════════════════
+📋 RECHERCHE SIMPLE - PROFESSIONNELS (name en un seul champ)
+═══════════════════════════════════════════════════════════════════════
+
 Q: "qui est nadege moussu ?"
 A: SELECT * FROM professionnels WHERE LOWER(name) LIKE '%nadege%' AND LOWER(name) LIKE '%moussu%' LIMIT 100
 
@@ -178,12 +189,18 @@ A: SELECT * FROM professionnels WHERE LOWER(category) LIKE '%consultant%' LIMIT 
 Q: "liste des plombiers"
 A: SELECT name, email, phone, city FROM professionnels WHERE LOWER(category) LIKE '%plombier%' LIMIT 100
 
-COPROPRIETAIRES (nom et prenom séparés - TRÈS IMPORTANT):
+Q: "email du plombier"
+A: SELECT name, email, phone, category FROM professionnels WHERE LOWER(category) LIKE '%plombier%' LIMIT 100
+
+═══════════════════════════════════════════════════════════════════════
+👥 RECHERCHE SIMPLE - COPROPRIETAIRES (nom et prenom séparés)
+═══════════════════════════════════════════════════════════════════════
+
 Q: "Qui est Dupont Marie ?"
-A: SELECT * FROM coproprietaires WHERE LOWER(nom) LIKE '%dupont%' AND LOWER(prenom) LIKE '%marie%' LIMIT 100
+A: SELECT * FROM coproprietaires WHERE (LOWER(nom) LIKE '%dupont%' AND LOWER(prenom) LIKE '%marie%') OR (LOWER(nom) LIKE '%marie%' AND LOWER(prenom) LIKE '%dupont%') LIMIT 100
 
 Q: "où vit Marie Dupont ?"
-A: SELECT nom, prenom, adresse_postale, ville, numero_lot FROM coproprietaires WHERE LOWER(prenom) LIKE '%marie%' AND LOWER(nom) LIKE '%dupont%' LIMIT 100
+A: SELECT nom, prenom, adresse_postale, ville, numero_lot FROM coproprietaires WHERE (LOWER(prenom) LIKE '%marie%' AND LOWER(nom) LIKE '%dupont%') OR (LOWER(nom) LIKE '%marie%' AND LOWER(prenom) LIKE '%dupont%') LIMIT 100
 
 Q: "qui est Michel Bertrand ?"
 A: SELECT * FROM coproprietaires WHERE (LOWER(prenom) LIKE '%michel%' AND LOWER(nom) LIKE '%bertrand%') OR (LOWER(nom) LIKE '%michel%' AND LOWER(prenom) LIKE '%bertrand%') LIMIT 100
@@ -191,13 +208,63 @@ A: SELECT * FROM coproprietaires WHERE (LOWER(prenom) LIKE '%michel%' AND LOWER(
 Q: "quel est l'email de Sophie Durant ?"
 A: SELECT nom, prenom, email, telephone FROM coproprietaires WHERE (LOWER(prenom) LIKE '%sophie%' AND LOWER(nom) LIKE '%durant%') OR (LOWER(nom) LIKE '%sophie%' AND LOWER(prenom) LIKE '%durant%') LIMIT 100
 
-COPROPRIETES:
-Q: "copropriétaires des Mimosas"
-A: SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE LOWER(co.nom) LIKE '%mimosas%' LIMIT 100
+═══════════════════════════════════════════════════════════════════════
+🔗 JOINTURES (Relations entre tables)
+═══════════════════════════════════════════════════════════════════════
 
-VÉRIFICATION DE PRÉSENCE:
+Q: "copropriétaires des Mimosas"
+A: SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot, co.nom as copropriete FROM coproprietaires c INNER JOIN coproprietes co ON c.copropriete_id = co.id WHERE LOWER(co.nom) LIKE '%mimosas%' LIMIT 100
+
+Q: "combien de copropriétaires dans Les Mimosas ?"
+A: SELECT COUNT(*) as nombre_coproprietaires FROM coproprietaires c INNER JOIN coproprietes co ON c.copropriete_id = co.id WHERE LOWER(co.nom) LIKE '%mimosas%'
+
+Q: "professionnels qui travaillent pour Les Mimosas"
+A: SELECT p.name, p.email, p.phone, p.category FROM professionnels p INNER JOIN professionnels_coproprietes pc ON p.id = pc.professionnel_id INNER JOIN coproprietes co ON pc.copropriete_id = co.id WHERE LOWER(co.nom) LIKE '%mimosas%' LIMIT 100
+
+═══════════════════════════════════════════════════════════════════════
+🔢 AGRÉGATIONS (COUNT, SUM, AVG, GROUP BY)
+═══════════════════════════════════════════════════════════════════════
+
+Q: "combien de copropriétaires ?"
+A: SELECT COUNT(*) as total FROM coproprietaires
+
+Q: "combien de plombiers ?"
+A: SELECT COUNT(*) as total FROM professionnels WHERE LOWER(category) LIKE '%plombier%'
+
+Q: "nombre de copropriétaires par copropriété"
+A: SELECT co.nom as copropriete, COUNT(c.id) as nombre_coproprietaires FROM coproprietes co LEFT JOIN coproprietaires c ON co.id = c.copropriete_id GROUP BY co.nom ORDER BY nombre_coproprietaires DESC
+
+Q: "nombre de professionnels par catégorie"
+A: SELECT category, COUNT(*) as nombre FROM professionnels GROUP BY category ORDER BY nombre DESC
+
+Q: "combien de copropriétés ?"
+A: SELECT COUNT(*) as total FROM coproprietes
+
+═══════════════════════════════════════════════════════════════════════
+🔍 VÉRIFICATION DE PRÉSENCE
+═══════════════════════════════════════════════════════════════════════
+
 Q: "dans la table professionnels, y a t-il Gregori Bonetto ?"
 A: SELECT * FROM professionnels WHERE LOWER(name) LIKE '%gregori%' AND LOWER(name) LIKE '%bonetto%' LIMIT 100
+
+Q: "est-ce que Michel Bertrand est un copropriétaire ?"
+A: SELECT * FROM coproprietaires WHERE (LOWER(prenom) LIKE '%michel%' AND LOWER(nom) LIKE '%bertrand%') OR (LOWER(nom) LIKE '%michel%' AND LOWER(prenom) LIKE '%bertrand%') LIMIT 100
+
+═══════════════════════════════════════════════════════════════════════
+❌ QUESTIONS NON-SQL (Renvoyer vers RAG - retourner "")
+═══════════════════════════════════════════════════════════════════════
+
+Q: "combien coute le plombier ?"
+A:
+
+Q: "quel est le tarif du jardinier ?"
+A:
+
+Q: "conditions de paiement du syndic ?"
+A:
+
+Q: "que dit le contrat de plomberie ?"
+A:
 
 QUESTION DE L'UTILISATEUR:
 {user_input}
@@ -359,7 +426,7 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
         sql_query: str
     ) -> str:
         """
-        Format SQL results as a Markdown table for better readability
+        Format SQL results as a Markdown table for better readability with intelligent suggestions
 
         Args:
             original_question: User's original question
@@ -370,13 +437,58 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
             Formatted message with Markdown table
         """
         if not results:
-            # Check if query was about pricing/tarif
-            pricing_keywords = ["prix", "tarif", "coût", "combien", "facture", "honoraire"]
-            if any(word in original_question.lower() for word in pricing_keywords):
-                return ("Je n'ai trouvé aucun résultat dans la base de données.\n\n"
-                       "💡 **Astuce**: Les informations tarifaires sont souvent dans les contrats et documents. "
-                       "Essayez de rechercher dans les documents uploadés avec: `Cherche dans les documents: tarif plombier`")
-            return "Je n'ai trouvé aucun résultat pour votre question."
+            question_lower = original_question.lower()
+
+            # Check if query was about pricing/financial info
+            pricing_keywords = ["prix", "tarif", "coût", "combien coût", "combien coute",
+                              "facture", "honoraire", "devis", "montant", "payer", "paiement"]
+            if any(word in question_lower for word in pricing_keywords):
+                return (
+                    "❌ **Aucun résultat trouvé dans la base de données**\n\n"
+                    "💡 **Suggestion**: Les informations **tarifaires et financières** ne sont **pas stockées dans la base de données**. "
+                    "Elles se trouvent dans les **documents contractuels** (contrats, devis, factures).\n\n"
+                    "**Essayez plutôt**: \n"
+                    "- _\"Cherche dans les documents: tarif plombier\"_\n"
+                    "- _\"Que dit le contrat sur les prix ?\"_\n"
+                    "- _\"De quoi parle le devis ?\"_\n\n"
+                    "Uploadez vos documents dans le panneau de droite si ce n'est pas déjà fait."
+                )
+
+            # Check if query was about person lookup
+            person_keywords = ["qui est", "qui", "email", "téléphone", "telephone", "phone", "contact", "adresse"]
+            if any(word in question_lower for word in person_keywords):
+                return (
+                    "❌ **Aucun résultat trouvé**\n\n"
+                    "💡 **Suggestions**: \n"
+                    "1. Vérifiez l'**orthographe** du nom (les noms peuvent être dans l'ordre inverse)\n"
+                    "2. Essayez avec **juste le nom de famille**: _\"qui est Dupont ?\"_\n"
+                    "3. Cherchez par **métier**: _\"liste des plombiers\"_\n"
+                    "4. Utilisez des **termes partiels**: _\"nom contenant Dupon\"_ (sans 't')\n\n"
+                    f"**Requête exécutée**: `{sql_query}`"
+                )
+
+            # Check if query was about count/statistics
+            count_keywords = ["combien", "nombre", "total", "statistique"]
+            if any(word in question_lower for word in count_keywords):
+                return (
+                    "❌ **Aucun résultat trouvé**\n\n"
+                    "💡 **Suggestion**: La table interrogée est peut-être **vide** ou le **filtre est trop restrictif**.\n\n"
+                    "**Essayez**: \n"
+                    "- _\"combien de copropriétaires ?\"_ (sans filtre)\n"
+                    "- _\"combien de professionnels ?\"_\n"
+                    "- _\"nombre de copropriétés ?\"_\n\n"
+                    f"**Requête exécutée**: `{sql_query}`"
+                )
+
+            # Generic no results message
+            return (
+                "❌ **Aucun résultat trouvé dans la base de données**\n\n"
+                "💡 **Suggestions**: \n"
+                "1. Vérifiez l'**orthographe** et les **termes de recherche**\n"
+                "2. Essayez des **requêtes plus larges** (moins de filtres)\n"
+                "3. Les **informations contractuelles** (prix, conditions) sont dans les **documents**, pas en base\n\n"
+                f"**Requête exécutée**: `{sql_query}`"
+            )
 
         count = len(results)
 
