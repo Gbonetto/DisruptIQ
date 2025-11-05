@@ -7,9 +7,10 @@ import { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, FileText, X } from 'lucide-react';
 import { ChainOfThoughts } from '@/components/ChainOfThoughts';
 import { toast } from 'sonner';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { DocumentPanel } from '@/components/DocumentPanel/DocumentPanel';
+import { RichMarkdownRenderer } from '@/components/chat/RichMarkdownRenderer';
+import { SourceCitation } from '@/components/chat/SourceCitation';
+import { DataTable } from '@/components/chat/DataTable';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -20,6 +21,7 @@ interface Message {
   sources?: Source[];
   suggestions?: Suggestion[];
   confirmation_required?: ConfirmationData;
+  table_data?: any[];  // Données tabulaires pour rendu avec DataTable
   timestamp: Date;
 }
 
@@ -449,54 +451,22 @@ export function MainChatPage() {
                     />
                   )}
 
-                  {/* Main response */}
-                  <div className="prose prose-sm max-w-none">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        // Custom styling for links
-                        a: ({ node, ...props }) => (
-                          <a {...props} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer" />
-                        ),
-                        // Code blocks
-                        code: ({ node, inline, ...props }: any) => (
-                          inline
-                            ? <code className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono text-gray-800" {...props} />
-                            : <code className="block bg-gray-100 p-3 rounded text-sm font-mono overflow-x-auto" {...props} />
-                        ),
-                        // Lists
-                        ul: ({ node, ...props }) => (
-                          <ul className="list-disc list-inside space-y-1 my-2" {...props} />
-                        ),
-                        ol: ({ node, ...props }) => (
-                          <ol className="list-decimal list-inside space-y-1 my-2" {...props} />
-                        ),
-                        // Paragraphs
-                        p: ({ node, ...props }) => (
-                          <p className="mb-2 text-gray-900" {...props} />
-                        ),
-                      }}
-                    >
-                      {message.content}
-                    </ReactMarkdown>
-                  </div>
+                  {/* Main response with Rich Markdown */}
+                  <RichMarkdownRenderer content={message.content} />
 
-                  {/* Sources */}
-                  {message.sources && message.sources.length > 0 && (
-                    <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-                      <div className="text-xs font-medium text-gray-700">Sources :</div>
-                      {message.sources.map((source, i) => (
-                        <div key={i} className="text-xs text-gray-600">
-                          <span className="font-medium">
-                            {source.type === 'sql' && '📊'}
-                            {source.type === 'rag' && '📄'}
-                            {source.type === 'web' && '🌐'}
-                            {' '}{source.title}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                  {/* Data Table if present */}
+                  {message.table_data && message.table_data.length > 0 && (
+                    <DataTable
+                      data={message.table_data}
+                      caption="Résultats"
+                      enableExport={true}
+                      enableSearch={true}
+                      enableSort={true}
+                    />
                   )}
+
+                  {/* Sources with elegant footnote style */}
+                  <SourceCitation sources={message.sources || []} />
 
                   {/* Contextual suggestions */}
                   {message.suggestions && message.suggestions.length > 0 && (
