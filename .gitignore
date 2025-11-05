@@ -90,3 +90,4 @@ backend/migrations/versions/__pycache__/
 # Windows problematic files
 nul
 backend/nul
+coverage.xml
