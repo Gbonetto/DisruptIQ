@@ -76,6 +76,7 @@ export function MainChatPageV2() {
   // Conversations - loaded from backend
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | undefined>();
+  const [isLoadingConversation, setIsLoadingConversation] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -298,8 +299,11 @@ export function MainChatPageV2() {
   };
 
   const handleSelectConversation = async (id: string) => {
+    // Prevent double-click
+    if (isLoadingConversation) return;
+
     try {
-      setActiveConversationId(id);
+      setIsLoadingConversation(true);
 
       const response = await fetch(`${API_BASE_URL}/api/conversations/${id}`);
       if (!response.ok) throw new Error('Failed to load conversation');
@@ -316,6 +320,8 @@ export function MainChatPageV2() {
         table_data: msg.table_data
       }));
 
+      // Batch all state updates after successful load
+      setActiveConversationId(id);
       setMessages(loadedMessages);
       setCurrentThoughts([]);
 
@@ -323,6 +329,8 @@ export function MainChatPageV2() {
     } catch (error) {
       console.error('Failed to load conversation:', error);
       toast.error('Erreur lors du chargement de la conversation');
+    } finally {
+      setIsLoadingConversation(false);
     }
   };
 

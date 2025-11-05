@@ -3,7 +3,7 @@ Conversation Management Endpoints
 CRUD operations for conversation sessions
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from typing import List, Optional
@@ -79,6 +79,7 @@ async def list_conversations(
     skip: int = 0,
     limit: int = 20,
     user_id: Optional[int] = None,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -119,8 +120,8 @@ async def list_conversations(
 
             preview = first_message.user_message[:100] if first_message else ""
 
-            # Generate title if not set
-            title = await _get_or_generate_title(session, db)
+            # Generate title if not set (with background task support)
+            title = await _get_or_generate_title(session, db, background_tasks)
 
             conversations.append(ConversationResponse(
                 id=session.id,
@@ -393,63 +394,54 @@ async def delete_conversation(
         )
 
 
-async def _get_or_generate_title(session: ConversationSession, db: AsyncSession) -> str:
+async def _get_or_generate_title(
+    session: ConversationSession,
+    db: AsyncSession,
+    background_tasks: Optional[BackgroundTasks] = None
+) -> str:
     """
-    Get conversation title or generate one using LLM
+    Get conversation title or generate one (with background task support)
 
-    Generates smart titles after 2+ exchanges using LLM analysis
+    If title doesn't exist and 2+ turns: returns temporary title and
+    generates real title in background to avoid blocking GET requests
 
     Args:
         session: Conversation session
         db: Database session
+        background_tasks: Optional background tasks manager
 
     Returns:
-        Conversation title
+        Conversation title (temporary or final)
     """
     # If title already stored, use it
     if session.current_topic:
         return session.current_topic
 
-    # Generate smart title if we have at least 2 exchanges (2 turns = 4 messages)
-    if session.turns_count >= 2:
-        # Get first 3 turns for title generation
-        turns_result = await db.execute(
+    # For conversations with 2+ turns, generate in background
+    if session.turns_count >= 2 and background_tasks:
+        # Schedule background title generation
+        background_tasks.add_task(
+            _generate_and_save_title_background,
+            session.id,
+            session.session_id
+        )
+
+        # Return temporary title immediately (from first message)
+        first_turn = await db.execute(
             select(ConversationTurn)
             .where(ConversationTurn.session_id == session.id)
             .order_by(ConversationTurn.turn_number)
-            .limit(3)
+            .limit(1)
         )
-        turns = turns_result.scalars().all()
+        first_message = first_turn.scalar_one_or_none()
 
-        if len(turns) >= 2:
-            # Format messages for title service
-            messages = []
-            for turn in turns:
-                messages.append({"role": "user", "content": turn.user_message})
-                messages.append({"role": "assistant", "content": turn.assistant_message})
+        if first_message:
+            temp_title = first_message.user_message[:50]
+            if len(first_message.user_message) > 50:
+                temp_title += "..."
+            return temp_title
 
-            # Generate title using LLM
-            try:
-                from app.services.conversation_title_service import get_title_service
-                title_service = get_title_service()
-                title = await title_service.generate_title(messages, max_length=50)
-
-                # Store generated title (auto-save for future calls)
-                session.current_topic = title
-                await db.commit()
-
-                logger.info("title_auto_generated",
-                           conversation_id=session.id,
-                           title=title,
-                           turn_count=session.turns_count)
-
-                return title
-
-            except Exception as e:
-                logger.error("title_generation_failed",
-                            conversation_id=session.id,
-                            error=str(e))
-                # Fall through to simple generation
+        return "Nouvelle conversation"
 
     # Fallback: Generate from first message (simple truncation)
     if session.turns_count > 0:
@@ -469,3 +461,61 @@ async def _get_or_generate_title(session: ConversationSession, db: AsyncSession)
 
     # Default for empty conversations
     return "Nouvelle conversation"
+
+
+async def _generate_and_save_title_background(session_id: int, session_session_id: str):
+    """
+    Background task to generate and save title without blocking the request
+
+    Args:
+        session_id: ConversationSession ID
+        session_session_id: ConversationSession session_id (UUID)
+    """
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.conversation_title_service import get_title_service
+
+        async with AsyncSessionLocal() as db:
+            # Get session
+            result = await db.execute(
+                select(ConversationSession).where(ConversationSession.id == session_id)
+            )
+            session = result.scalar_one_or_none()
+
+            if not session or session.current_topic:
+                return  # Already has title or not found
+
+            # Get turns
+            turns_result = await db.execute(
+                select(ConversationTurn)
+                .where(ConversationTurn.session_id == session.id)
+                .order_by(ConversationTurn.turn_number)
+                .limit(3)
+            )
+            turns = turns_result.scalars().all()
+
+            if len(turns) < 2:
+                return  # Not enough turns
+
+            # Format messages
+            messages = []
+            for turn in turns:
+                messages.append({"role": "user", "content": turn.user_message})
+                messages.append({"role": "assistant", "content": turn.assistant_message})
+
+            # Generate title
+            title_service = get_title_service()
+            title = await title_service.generate_title(messages, max_length=50)
+
+            # Save title
+            session.current_topic = title
+            await db.commit()
+
+            logger.info("background_title_generated",
+                       session_id=session_id,
+                       title=title)
+
+    except Exception as e:
+        logger.error("background_title_generation_failed",
+                    session_id=session_id,
+                    error=str(e))

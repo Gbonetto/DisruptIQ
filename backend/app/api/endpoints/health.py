@@ -97,16 +97,27 @@ async def check_qdrant() -> Dict[str, Any]:
         dict: Qdrant health status
     """
     try:
-        # TODO: Add Qdrant health check when client is available
+        from app.services.rag_service import get_rag_service
+
+        rag_service = get_rag_service()
+        collection_info = await rag_service._run_sync(
+            rag_service.client.get_collection,
+            collection_name=rag_service.collection_name
+        )
+
         return {
-            "status": "not_implemented",
-            "message": "Qdrant health check not implemented yet"
+            "status": "healthy",
+            "points_count": collection_info.points_count,
+            "collection": rag_service.collection_name,
+            "vector_size": collection_info.config.params.vectors.size,
+            "message": "Qdrant connection successful"
         }
     except Exception as e:
         logger.error("qdrant_health_check_failed", error=str(e))
         return {
             "status": "unhealthy",
-            "error": str(e)
+            "error": str(e),
+            "message": "Qdrant connection failed"
         }
 
 
