@@ -52,6 +52,18 @@ module.exports = {
         urgent: "#EF4444",
         important: "#F59E0B",
         routine: "#10B981",
+        // Neo-Rétro Tech color palette
+        neon: {
+          cyan: "#00FFFF",
+          violet: "#9D00FF",
+          pink: "#FF2E63",
+          green: "#39FF14",
+        },
+        retro: {
+          dark: "#121212",
+          light: "#F5F5F5",
+          gray: "#2A2A2A",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -67,10 +79,44 @@ module.exports = {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: 0 },
         },
+        // Neo-Rétro animations
+        "neon-pulse": {
+          "0%, 100%": {
+            boxShadow: "0 0 5px currentColor, 0 0 10px currentColor",
+            opacity: "1"
+          },
+          "50%": {
+            boxShadow: "0 0 10px currentColor, 0 0 20px currentColor",
+            opacity: "0.8"
+          },
+        },
+        "glitch": {
+          "0%, 100%": { transform: "translate(0)" },
+          "33%": { transform: "translate(-2px, 2px)" },
+          "66%": { transform: "translate(2px, -2px)" },
+        },
+        "scanline": {
+          "0%": { transform: "translateY(-100%)" },
+          "100%": { transform: "translateY(100%)" },
+        },
+        "pixel-fade-in": {
+          "0%": {
+            opacity: "0",
+            transform: "scale(0.8)",
+          },
+          "100%": {
+            opacity: "1",
+            transform: "scale(1)",
+          },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "neon-pulse": "neon-pulse 2s ease-in-out infinite",
+        "glitch": "glitch 0.3s ease-in-out infinite",
+        "scanline": "scanline 6s linear infinite",
+        "pixel-fade-in": "pixel-fade-in 0.3s ease-out",
       },
     },
   },

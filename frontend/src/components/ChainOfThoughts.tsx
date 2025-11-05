@@ -44,21 +44,21 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
   const getThoughtIcon = (type: Thought['type']) => {
     switch (type) {
       case 'analyzing':
-        return <Brain className="h-4 w-4 text-purple-500 animate-pulse" />;
+        return <Brain className="h-4 w-4 text-neon-violet animate-pulse" />;
       case 'classifying':
-        return <Brain className="h-4 w-4 text-blue-500 animate-pulse" />;
+        return <Brain className="h-4 w-4 text-neon-cyan animate-pulse" />;
       case 'planning':
-        return <Brain className="h-4 w-4 text-indigo-500 animate-pulse" />;
+        return <Brain className="h-4 w-4 text-neon-violet animate-pulse" />;
       case 'executing':
-        return <Loader2 className="h-4 w-4 text-orange-500 animate-spin" />;
+        return <Loader2 className="h-4 w-4 text-neon-pink animate-spin" />;
       case 'processing':
-        return <Loader2 className="h-4 w-4 text-yellow-500 animate-spin" />;
+        return <Loader2 className="h-4 w-4 text-neon-green animate-spin" />;
       case 'synthesizing':
-        return <Brain className="h-4 w-4 text-green-500 animate-pulse" />;
+        return <Brain className="h-4 w-4 text-neon-green animate-pulse" />;
       case 'completed':
-        return <CheckCircle2 className="h-4 w-4 text-green-600" />;
+        return <CheckCircle2 className="h-4 w-4 text-neon-green" />;
       case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-600" />;
+        return <AlertCircle className="h-4 w-4 text-neon-pink" />;
       default:
         return <Brain className="h-4 w-4 text-gray-500" />;
     }
@@ -66,31 +66,31 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
 
   const getThoughtColor = (type: Thought['type']) => {
     switch (type) {
-      case 'analyzing': return 'border-l-purple-500 bg-purple-50';
-      case 'classifying': return 'border-l-blue-500 bg-blue-50';
-      case 'planning': return 'border-l-indigo-500 bg-indigo-50';
-      case 'executing': return 'border-l-orange-500 bg-orange-50';
-      case 'processing': return 'border-l-yellow-500 bg-yellow-50';
-      case 'synthesizing': return 'border-l-green-500 bg-green-50';
-      case 'completed': return 'border-l-green-600 bg-green-50';
-      case 'error': return 'border-l-red-600 bg-red-50';
-      default: return 'border-l-gray-500 bg-gray-50';
+      case 'analyzing': return 'border-l-neon-violet bg-retro-gray/50';
+      case 'classifying': return 'border-l-neon-cyan bg-retro-gray/50';
+      case 'planning': return 'border-l-neon-violet bg-retro-gray/50';
+      case 'executing': return 'border-l-neon-pink bg-retro-gray/50';
+      case 'processing': return 'border-l-neon-green bg-retro-gray/50';
+      case 'synthesizing': return 'border-l-neon-green bg-retro-gray/50';
+      case 'completed': return 'border-l-neon-green bg-retro-gray/50';
+      case 'error': return 'border-l-neon-pink bg-retro-gray/50';
+      default: return 'border-l-gray-500 bg-retro-gray/50';
     }
   };
 
   const getAgentBadgeColor = (agent?: string) => {
-    if (!agent) return 'bg-gray-100 text-gray-700';
+    if (!agent) return 'bg-retro-gray/50 text-gray-400 border border-gray-600';
 
     const colors: Record<string, string> = {
-      'orchestrator': 'bg-purple-100 text-purple-700',
-      'sql_agent': 'bg-blue-100 text-blue-700',
-      'email_agent': 'bg-green-100 text-green-700',
-      'rag_agent': 'bg-yellow-100 text-yellow-700',
-      'workflow_agent': 'bg-orange-100 text-orange-700',
-      'template_agent': 'bg-pink-100 text-pink-700',
+      'orchestrator': 'bg-neon-violet/20 text-neon-violet border border-neon-violet/50',
+      'sql_agent': 'bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/50',
+      'email_agent': 'bg-neon-green/20 text-neon-green border border-neon-green/50',
+      'rag_agent': 'bg-neon-pink/20 text-neon-pink border border-neon-pink/50',
+      'workflow_agent': 'bg-neon-violet/20 text-neon-violet border border-neon-violet/50',
+      'template_agent': 'bg-neon-pink/20 text-neon-pink border border-neon-pink/50',
     };
 
-    return colors[agent] || 'bg-gray-100 text-gray-700';
+    return colors[agent] || 'bg-retro-gray/50 text-gray-400 border border-gray-600';
   };
 
   if (thoughts.length === 0 && !isThinking) {
@@ -98,25 +98,25 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
   }
 
   return (
-    <Card className="mb-4 overflow-hidden border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-blue-50">
+    <Card className="mb-4 overflow-hidden border-2 border-neon-violet/50 bg-retro-gray neon-border-violet pixel-corners">
       {/* Header */}
       <div
-        className="flex items-center justify-between p-3 bg-white border-b cursor-pointer hover:bg-gray-50 transition-colors"
+        className="flex items-center justify-between p-3 bg-retro-gray/80 border-b border-neon-violet/30 cursor-pointer hover:bg-retro-gray transition-colors"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
         <div className="flex items-center gap-2">
-          <Brain className={`h-5 w-5 text-purple-600 ${isThinking ? 'animate-pulse' : ''}`} />
-          <span className="font-semibold text-gray-900">
+          <Brain className={`h-5 w-5 text-neon-violet ${isThinking ? 'animate-pulse' : ''}`} />
+          <span className="font-semibold text-white font-pixel text-sm">
             {isThinking ? 'Réflexion en cours...' : 'Chaîne de pensée'}
           </span>
             {thoughts.length > 0 && (
-              <Badge variant="outline" className="ml-2">
+              <Badge variant="outline" className="ml-2 bg-neon-violet/20 text-neon-violet border-neon-violet/50 pixel-border-sm">
                 {thoughts.length} étape{thoughts.length > 1 ? 's' : ''}
               </Badge>
             )}
         </div>
 
-        <Button variant="ghost" size="sm">
+        <Button variant="ghost" size="sm" className="text-gray-400 hover:text-neon-cyan hover:bg-retro-dark">
           {isCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         </Button>
       </div>
@@ -144,33 +144,33 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2">
                       {getThoughtIcon(thought.type)}
-                      <span className="font-medium text-sm text-gray-900">
+                      <span className="font-medium text-sm text-white">
                         {thought.title}
                       </span>
                       {thought.agent && (
-                        <Badge className={`text-xs ${getAgentBadgeColor(thought.agent)}`}>
+                        <Badge className={`text-xs font-pixel ${getAgentBadgeColor(thought.agent)}`}>
                           {thought.agent.replace('_', ' ')}
                         </Badge>
                       )}
                     </div>
 
                     {thought.progress !== undefined && thought.progress < 1 && (
-                      <span className="text-xs text-gray-500">
+                      <span className="text-xs text-neon-cyan font-pixel">
                         {Math.round(thought.progress * 100)}%
                       </span>
                     )}
                   </div>
 
                   {/* Thought Content */}
-                  <div className="text-sm text-gray-700 whitespace-pre-wrap ml-6">
+                  <div className="text-sm text-gray-300 whitespace-pre-wrap ml-6">
                     {thought.content}
                   </div>
 
                   {/* Progress Bar */}
                   {thought.progress !== undefined && thought.progress < 1 && (
-                    <div className="mt-2 ml-6 h-1 bg-gray-200 rounded-full overflow-hidden">
+                    <div className="mt-2 ml-6 h-1 bg-retro-dark rounded-full overflow-hidden">
                       <motion.div
-                        className="h-full bg-purple-500"
+                        className="h-full bg-neon-violet animate-neon-pulse"
                         initial={{ width: 0 }}
                         animate={{ width: `${thought.progress * 100}%` }}
                         transition={{ duration: 0.5 }}
@@ -181,17 +181,17 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
                   {/* Additional Data (if any) */}
                   {thought.data && typeof thought.data === 'object' && Object.keys(thought.data).length > 0 && (
                     <details className="mt-2 ml-6">
-                      <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">
+                      <summary className="text-xs text-gray-400 cursor-pointer hover:text-neon-cyan transition-colors font-pixel">
                         Détails techniques
                       </summary>
-                      <pre className="mt-2 text-xs bg-white p-2 rounded border overflow-x-auto">
+                      <pre className="mt-2 text-xs bg-retro-dark text-neon-green p-2 rounded border border-neon-green/30 overflow-x-auto">
                         {JSON.stringify(thought.data, null, 2)}
                       </pre>
                     </details>
                   )}
 
                   {/* Timestamp */}
-                  <div className="text-xs text-gray-400 mt-2 ml-6">
+                  <div className="text-xs text-gray-500 mt-2 ml-6 font-pixel">
                     {new Date(thought.timestamp).toLocaleTimeString('fr-FR')}
                   </div>
                 </motion.div>
@@ -202,9 +202,9 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="flex items-center gap-2 text-sm text-gray-500 ml-6"
+                  className="flex items-center gap-2 text-sm text-neon-cyan ml-6 font-pixel"
                 >
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin text-neon-cyan" />
                   <span>Traitement en cours...</span>
                 </motion.div>
               )}

@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -102,5 +104,188 @@
 
   .animate-slideUp {
     animation: slideUp 0.3s ease-out;
+  }
+
+  /* Neo-Rétro Tech Utilities */
+
+  /* Pixel font */
+  .font-pixel {
+    font-family: 'Silkscreen', monospace;
+  }
+
+  /* Pixel borders - 8-bit style */
+  .pixel-border {
+    position: relative;
+    box-shadow:
+      0 0 0 2px currentColor,
+      2px 0 0 2px currentColor,
+      -2px 0 0 2px currentColor,
+      0 2px 0 2px currentColor,
+      0 -2px 0 2px currentColor;
+  }
+
+  .pixel-border-sm {
+    position: relative;
+    box-shadow:
+      0 0 0 1px currentColor,
+      1px 0 0 1px currentColor,
+      -1px 0 0 1px currentColor,
+      0 1px 0 1px currentColor,
+      0 -1px 0 1px currentColor;
+  }
+
+  /* Neon glow effects */
+  .neon-glow-cyan {
+    text-shadow: 0 0 10px #00FFFF, 0 0 20px #00FFFF, 0 0 30px #00FFFF;
+  }
+
+  .neon-glow-violet {
+    text-shadow: 0 0 10px #9D00FF, 0 0 20px #9D00FF, 0 0 30px #9D00FF;
+  }
+
+  .neon-glow-pink {
+    text-shadow: 0 0 10px #FF2E63, 0 0 20px #FF2E63, 0 0 30px #FF2E63;
+  }
+
+  .neon-border-cyan {
+    box-shadow: 0 0 5px #00FFFF, 0 0 10px #00FFFF, inset 0 0 5px #00FFFF;
+    border: 1px solid #00FFFF;
+  }
+
+  .neon-border-violet {
+    box-shadow: 0 0 5px #9D00FF, 0 0 10px #9D00FF, inset 0 0 5px #9D00FF;
+    border: 1px solid #9D00FF;
+  }
+
+  .neon-border-pink {
+    box-shadow: 0 0 5px #FF2E63, 0 0 10px #FF2E63, inset 0 0 5px #FF2E63;
+    border: 1px solid #FF2E63;
+  }
+
+  /* Scanline overlay effect */
+  .scanline-overlay::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(
+      to bottom,
+      transparent 50%,
+      rgba(0, 0, 0, 0.05) 50%
+    );
+    background-size: 100% 4px;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Retro gradient backgrounds */
+  .retro-gradient-cyber {
+    background: linear-gradient(135deg, #9D00FF 0%, #00FFFF 100%);
+  }
+
+  .retro-gradient-sunset {
+    background: linear-gradient(135deg, #FF2E63 0%, #9D00FF 50%, #00FFFF 100%);
+  }
+
+  /* Pixelated corners */
+  .pixel-corners {
+    clip-path: polygon(
+      0 8px, 8px 8px, 8px 0,
+      calc(100% - 8px) 0, calc(100% - 8px) 8px, 100% 8px,
+      100% calc(100% - 8px), calc(100% - 8px) calc(100% - 8px), calc(100% - 8px) 100%,
+      8px 100%, 8px calc(100% - 8px), 0 calc(100% - 8px)
+    );
+  }
+
+  /* CRT screen effect */
+  .crt-effect {
+    animation: textShadow 1.6s infinite;
+  }
+
+  @keyframes textShadow {
+    0% {
+      text-shadow: 0.4389924193300864px 0 1px rgba(0,30,255,0.5), -0.4389924193300864px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    5% {
+      text-shadow: 2.7928974010788217px 0 1px rgba(0,30,255,0.5), -2.7928974010788217px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    10% {
+      text-shadow: 0.02956275843481219px 0 1px rgba(0,30,255,0.5), -0.02956275843481219px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    15% {
+      text-shadow: 0.40218538552878136px 0 1px rgba(0,30,255,0.5), -0.40218538552878136px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    20% {
+      text-shadow: 3.4794037899852017px 0 1px rgba(0,30,255,0.5), -3.4794037899852017px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    25% {
+      text-shadow: 1.6125630401149584px 0 1px rgba(0,30,255,0.5), -1.6125630401149584px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    30% {
+      text-shadow: 0.7015590085143956px 0 1px rgba(0,30,255,0.5), -0.7015590085143956px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    35% {
+      text-shadow: 3.896914047650351px 0 1px rgba(0,30,255,0.5), -3.896914047650351px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    40% {
+      text-shadow: 3.870905614848819px 0 1px rgba(0,30,255,0.5), -3.870905614848819px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    45% {
+      text-shadow: 2.231056963361899px 0 1px rgba(0,30,255,0.5), -2.231056963361899px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    50% {
+      text-shadow: 0.08084290417898504px 0 1px rgba(0,30,255,0.5), -0.08084290417898504px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    55% {
+      text-shadow: 2.3758461067427543px 0 1px rgba(0,30,255,0.5), -2.3758461067427543px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    60% {
+      text-shadow: 2.202193051050636px 0 1px rgba(0,30,255,0.5), -2.202193051050636px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    65% {
+      text-shadow: 2.8638780614874975px 0 1px rgba(0,30,255,0.5), -2.8638780614874975px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    70% {
+      text-shadow: 0.48874025155497314px 0 1px rgba(0,30,255,0.5), -0.48874025155497314px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    75% {
+      text-shadow: 1.8948491305757957px 0 1px rgba(0,30,255,0.5), -1.8948491305757957px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    80% {
+      text-shadow: 0.0833037308038857px 0 1px rgba(0,30,255,0.5), -0.0833037308038857px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    85% {
+      text-shadow: 0.09769827255241735px 0 1px rgba(0,30,255,0.5), -0.09769827255241735px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    90% {
+      text-shadow: 3.443339761481782px 0 1px rgba(0,30,255,0.5), -3.443339761481782px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    95% {
+      text-shadow: 2.1841838852799786px 0 1px rgba(0,30,255,0.5), -2.1841838852799786px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+    100% {
+      text-shadow: 2.6208764473832513px 0 1px rgba(0,30,255,0.5), -2.6208764473832513px 0 1px rgba(255,0,80,0.3), 0 0 3px;
+    }
+  }
+
+  /* Hover effects with neon */
+  .hover-neon-cyan:hover {
+    box-shadow: 0 0 10px #00FFFF, 0 0 20px #00FFFF, inset 0 0 10px rgba(0, 255, 255, 0.2);
+    border-color: #00FFFF;
+    transition: all 0.3s ease;
+  }
+
+  .hover-neon-violet:hover {
+    box-shadow: 0 0 10px #9D00FF, 0 0 20px #9D00FF, inset 0 0 10px rgba(157, 0, 255, 0.2);
+    border-color: #9D00FF;
+    transition: all 0.3s ease;
+  }
+
+  .hover-neon-pink:hover {
+    box-shadow: 0 0 10px #FF2E63, 0 0 20px #FF2E63, inset 0 0 10px rgba(255, 46, 99, 0.2);
+    border-color: #FF2E63;
+    transition: all 0.3s ease;
   }
 }

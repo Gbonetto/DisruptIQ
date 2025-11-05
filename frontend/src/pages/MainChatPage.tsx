@@ -354,7 +354,7 @@ export function MainChatPage() {
 
   return (
     <div
-      className="flex flex-col h-screen bg-white relative"
+      className="flex flex-col h-screen bg-retro-dark relative"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -365,34 +365,35 @@ export function MainChatPage() {
 
       {/* Drag & Drop Overlay */}
       {isDragging && (
-        <div className="absolute inset-0 bg-blue-50 bg-opacity-90 z-50 flex items-center justify-center border-4 border-dashed border-blue-500">
+        <div className="absolute inset-0 bg-retro-dark bg-opacity-95 z-50 flex items-center justify-center neon-border-cyan animate-neon-pulse">
           <div className="text-center">
-            <div className="text-6xl mb-4">📁</div>
-            <div className="text-2xl font-semibold text-blue-600">Déposez vos fichiers ici</div>
-            <div className="text-sm text-blue-500 mt-2">PDF, Word, Excel, Images (max 10MB)</div>
+            <div className="text-6xl mb-4 animate-pixel-fade-in">📁</div>
+            <div className="text-2xl font-semibold text-neon-cyan neon-glow-cyan font-pixel">Déposez vos fichiers ici</div>
+            <div className="text-sm text-gray-400 mt-2">PDF, Word, Excel, Images (max 10MB)</div>
           </div>
         </div>
       )}
 
       {/* Header */}
-      <header className="border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+      <header className="border-b border-neon-violet/30 px-4 py-3 flex items-center justify-between bg-retro-gray/50 backdrop-blur-sm">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">
+          <div className="w-8 h-8 retro-gradient-cyber rounded-lg flex items-center justify-center text-white font-bold pixel-border-sm animate-pixel-fade-in">
             D
           </div>
-          <h1 className="font-semibold text-gray-900">DisruptIQ</h1>
+          <h1 className="font-semibold text-white text-lg">DisruptIQ</h1>
+          <span className="text-neon-cyan text-xs font-pixel ml-2">v2.0</span>
         </div>
 
         <div className="flex items-center gap-4">
-          <div className="text-sm text-gray-500">Assistant Intelligent</div>
+          <div className="text-sm text-gray-400 font-pixel">Assistant Intelligent</div>
           <button
             onClick={() => setIsPanelOpen(!isPanelOpen)}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-retro-gray border border-neon-violet/50 rounded-lg hover-neon-violet transition-colors"
           >
             <FileText className="w-4 h-4" />
             <span>Documents</span>
             {documents.length > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded">
+              <span className="ml-1 px-1.5 py-0.5 text-xs font-medium bg-neon-violet/20 text-neon-violet rounded pixel-border-sm">
                 {documents.length}
               </span>
             )}
@@ -405,13 +406,13 @@ export function MainChatPage() {
         <div className="max-w-3xl mx-auto space-y-6">
           {messages.length === 0 && (
             <div className="text-center py-12">
-              <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 retro-gradient-cyber rounded-full flex items-center justify-center mx-auto mb-4 pixel-border animate-pixel-fade-in">
                 <div className="text-3xl">💬</div>
               </div>
-              <h2 className="text-xl font-semibold text-gray-900 mb-2">
+              <h2 className="text-xl font-semibold text-white mb-2 neon-glow-cyan">
                 Comment puis-je vous aider ?
               </h2>
-              <p className="text-gray-500 mb-6">
+              <p className="text-gray-400 mb-6">
                 Posez-moi une question ou décrivez ce que vous souhaitez faire
               </p>
 
@@ -426,7 +427,8 @@ export function MainChatPage() {
                   <button
                     key={i}
                     onClick={() => setInput(example)}
-                    className="p-3 text-left text-sm text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors"
+                    className="p-3 text-left text-sm text-white bg-retro-gray border border-neon-violet/30 hover-neon-violet rounded-lg transition-colors pixel-corners animate-pixel-fade-in"
+                    style={{ animationDelay: `${i * 0.1}s` }}
                   >
                     {example}
                   </button>
@@ -436,10 +438,10 @@ export function MainChatPage() {
           )}
 
           {messages.map((message, idx) => (
-            <div key={idx} className={`${message.role === 'user' ? 'flex justify-end' : ''}`}>
+            <div key={idx} className={`${message.role === 'user' ? 'flex justify-end' : ''} animate-pixel-fade-in`}>
               {message.role === 'user' ? (
                 /* User message */
-                <div className="bg-blue-600 text-white rounded-2xl px-4 py-3 max-w-[80%]">
+                <div className="retro-gradient-sunset text-white rounded-2xl px-4 py-3 max-w-[80%] neon-border-pink">
                   <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                 </div>
               ) : (
@@ -455,30 +457,30 @@ export function MainChatPage() {
                   )}
 
                   {/* Main response */}
-                  <div className="prose prose-sm max-w-none">
+                  <div className="prose prose-sm max-w-none prose-invert">
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
                       components={{
                         // Custom styling for links
                         a: ({ node, ...props }) => (
-                          <a {...props} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer" />
+                          <a {...props} className="text-neon-cyan hover:neon-glow-cyan transition-all" target="_blank" rel="noopener noreferrer" />
                         ),
                         // Code blocks
                         code: ({ node, inline, ...props }: any) => (
                           inline
-                            ? <code className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono text-gray-800" {...props} />
-                            : <code className="block bg-gray-100 p-3 rounded text-sm font-mono overflow-x-auto" {...props} />
+                            ? <code className="bg-retro-gray px-1.5 py-0.5 rounded text-sm font-mono text-neon-green border border-neon-green/30" {...props} />
+                            : <code className="block bg-retro-gray p-3 rounded text-sm font-mono overflow-x-auto text-neon-green border border-neon-green/30" {...props} />
                         ),
                         // Lists
                         ul: ({ node, ...props }) => (
-                          <ul className="list-disc list-inside space-y-1 my-2" {...props} />
+                          <ul className="list-disc list-inside space-y-1 my-2 text-gray-300" {...props} />
                         ),
                         ol: ({ node, ...props }) => (
-                          <ol className="list-decimal list-inside space-y-1 my-2" {...props} />
+                          <ol className="list-decimal list-inside space-y-1 my-2 text-gray-300" {...props} />
                         ),
                         // Paragraphs
                         p: ({ node, ...props }) => (
-                          <p className="mb-2 text-gray-900" {...props} />
+                          <p className="mb-2 text-gray-200" {...props} />
                         ),
                       }}
                     >
@@ -488,10 +490,10 @@ export function MainChatPage() {
 
                   {/* Sources */}
                   {message.sources && Array.isArray(message.sources) && message.sources.length > 0 && (
-                    <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-                      <div className="text-xs font-medium text-gray-700">Sources :</div>
+                    <div className="bg-retro-gray/50 rounded-lg p-3 space-y-2 border border-neon-cyan/30">
+                      <div className="text-xs font-medium text-neon-cyan font-pixel">Sources :</div>
                       {message.sources.filter(s => s && s.title).map((source, i) => (
-                        <div key={i} className="text-xs text-gray-600">
+                        <div key={i} className="text-xs text-gray-400">
                           <span className="font-medium">
                             {source.type === 'sql' && '📊'}
                             {source.type === 'rag' && '📄'}
@@ -510,7 +512,7 @@ export function MainChatPage() {
                         <button
                           key={i}
                           onClick={() => handleSuggestionClick(suggestion)}
-                          className="px-3 py-1.5 text-sm bg-white border border-gray-200 hover:border-gray-300 hover:bg-gray-50 rounded-full transition-colors"
+                          className="px-3 py-1.5 text-sm bg-retro-gray text-white border border-neon-violet/50 hover-neon-violet rounded-full transition-colors pixel-border-sm"
                         >
                           {suggestion.icon && <span className="mr-1">{suggestion.icon}</span>}
                           {suggestion.label}
@@ -521,17 +523,17 @@ export function MainChatPage() {
 
                   {/* Confirmation required */}
                   {message.confirmation_required && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+                    <div className="bg-retro-gray/80 border border-neon-pink rounded-lg p-4 space-y-3 neon-border-pink">
                       <div className="flex items-start gap-2">
-                        <div className="text-amber-600 mt-0.5">⚠️</div>
+                        <div className="text-neon-pink mt-0.5">⚠️</div>
                         <div className="flex-1">
-                          <div className="font-medium text-amber-900 mb-1">
+                          <div className="font-medium text-neon-pink mb-1 font-pixel">
                             Confirmation requise
                           </div>
-                          <div className="text-sm text-amber-800 mb-2">
+                          <div className="text-sm text-gray-200 mb-2">
                             {message.confirmation_required.action}
                           </div>
-                          <div className="text-xs text-amber-700 space-y-1">
+                          <div className="text-xs text-gray-400 space-y-1">
                             {message.confirmation_required.impact.map((item, i) => (
                               <div key={i}>• {item}</div>
                             ))}
@@ -541,13 +543,13 @@ export function MainChatPage() {
                       <div className="flex gap-2">
                         <button
                           onClick={handleConfirm}
-                          className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium"
+                          className="px-4 py-2 bg-neon-pink hover:animate-neon-pulse text-white rounded-lg text-sm font-medium pixel-border-sm"
                         >
                           Confirmer
                         </button>
                         <button
                           onClick={handleCancel}
-                          className="px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg text-sm font-medium"
+                          className="px-4 py-2 bg-retro-gray border border-gray-600 hover:border-gray-400 text-gray-300 rounded-lg text-sm font-medium"
                         >
                           Annuler
                         </button>
@@ -572,20 +574,20 @@ export function MainChatPage() {
       </div>
 
       {/* Input area - Fixed at bottom */}
-      <div className="border-t border-gray-200 bg-white">
+      <div className="border-t border-neon-violet/30 bg-retro-gray/50 backdrop-blur-sm">
         <div className="max-w-3xl mx-auto px-4 py-4">
           {/* Upload progress */}
           {Object.keys(uploadProgress).length > 0 && (
             <div className="mb-3 space-y-2">
               {Object.entries(uploadProgress).map(([fileName, progress]) => (
-                <div key={fileName} className="bg-blue-50 rounded-lg px-3 py-2">
+                <div key={fileName} className="bg-retro-gray rounded-lg px-3 py-2 border border-neon-cyan/50">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm text-blue-900">{fileName}</span>
-                    <span className="text-xs text-blue-600">{Math.round(progress)}%</span>
+                    <span className="text-sm text-white">{fileName}</span>
+                    <span className="text-xs text-neon-cyan font-pixel">{Math.round(progress)}%</span>
                   </div>
-                  <div className="w-full bg-blue-200 rounded-full h-1.5">
+                  <div className="w-full bg-retro-dark rounded-full h-1.5">
                     <div
-                      className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
+                      className="bg-neon-cyan h-1.5 rounded-full transition-all duration-300 animate-neon-pulse"
                       style={{ width: `${progress}%` }}
                     />
                   </div>
@@ -598,10 +600,10 @@ export function MainChatPage() {
           {uploadedFiles.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-2">
               {uploadedFiles.map((file, i) => (
-                <div key={i} className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-                  <FileText className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-green-900">{file.preview}</span>
-                  <button onClick={() => removeFile(i)} className="text-green-400 hover:text-green-600">
+                <div key={i} className="flex items-center gap-2 bg-retro-gray border border-neon-green/50 rounded-lg px-3 py-2 pixel-border-sm animate-pixel-fade-in">
+                  <FileText className="w-4 h-4 text-neon-green" />
+                  <span className="text-sm text-white">{file.preview}</span>
+                  <button onClick={() => removeFile(i)} className="text-gray-400 hover:text-neon-pink transition-colors">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
@@ -622,7 +624,7 @@ export function MainChatPage() {
 
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              className="p-2 text-gray-400 hover:text-neon-cyan hover:bg-retro-gray rounded-lg transition-colors border border-transparent hover:border-neon-cyan/50"
               disabled={isStreaming}
             >
               <Paperclip className="w-5 h-5" />
@@ -639,7 +641,7 @@ export function MainChatPage() {
                   }
                 }}
                 placeholder="Posez votre question ou décrivez votre demande..."
-                className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-2xl focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none"
+                className="w-full px-4 py-3 pr-12 bg-retro-gray text-white border border-neon-violet/50 rounded-2xl focus:outline-none focus:border-neon-cyan focus:ring-1 focus:ring-neon-cyan resize-none placeholder-gray-500 transition-all"
                 rows={1}
                 disabled={isStreaming}
                 style={{
@@ -658,7 +660,7 @@ export function MainChatPage() {
             {isStreaming ? (
               <button
                 onClick={handleStop}
-                className="p-3 bg-red-600 hover:bg-red-700 text-white rounded-xl transition-colors"
+                className="p-3 bg-neon-pink hover:animate-neon-pulse text-white rounded-xl transition-colors pixel-border-sm"
               >
                 <div className="w-4 h-4 bg-white rounded-sm" />
               </button>
@@ -666,7 +668,7 @@ export function MainChatPage() {
               <button
                 onClick={handleSend}
                 disabled={!input.trim() && uploadedFiles.length === 0}
-                className="p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-3 retro-gradient-cyber text-white rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:animate-neon-pulse pixel-border-sm"
               >
                 <Send className="w-5 h-5" />
               </button>
@@ -674,7 +676,7 @@ export function MainChatPage() {
           </div>
 
           {/* Hint text */}
-          <div className="mt-2 text-xs text-gray-400 text-center">
+          <div className="mt-2 text-xs text-gray-500 text-center font-pixel">
             Tapez votre demande en langage naturel • Shift + Enter pour nouvelle ligne
           </div>
         </div>
