@@ -359,11 +359,35 @@ class RAGService:
                 for result in results
             ]
 
-            logger.info(
-                "search_completed",
-                query=query[:50],
-                results_count=len(formatted_results)
-            )
+            # ENHANCED LOGGING for debugging "no results" issue
+            if len(formatted_results) == 0:
+                # Get collection info to diagnose
+                try:
+                    collection_info = await self._run_sync(
+                        self.client.get_collection,
+                        collection_name=self.collection_name
+                    )
+                    total_points = collection_info.points_count
+
+                    logger.warning(
+                        "search_returned_zero_results",
+                        query=query[:100],
+                        query_length=len(query),
+                        limit=limit,
+                        filter_active=search_filter is not None,
+                        filter_document_ids=document_ids,
+                        total_points_in_collection=total_points,
+                        message="No results found - possible causes: (1) Documents not indexed (2) Query too different from docs (3) Filter too restrictive (4) Qdrant connection issue"
+                    )
+                except Exception as e:
+                    logger.error("failed_to_get_collection_info", error=str(e))
+            else:
+                logger.info(
+                    "search_completed",
+                    query=query[:50],
+                    results_count=len(formatted_results),
+                    top_score=formatted_results[0]["score"] if formatted_results else None
+                )
 
             return formatted_results
 

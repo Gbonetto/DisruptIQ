@@ -645,3 +645,128 @@ async def reset_all_data(
             status_code=500,
             detail=f"Failed to reset system: {str(e)}"
         )
+
+
+@router.get("/rag/diagnostics")
+async def get_rag_diagnostics(db: AsyncSession = Depends(get_db)):
+    """
+    RAG System Diagnostics
+
+    Checks:
+    - Total documents in database
+    - Documents marked as indexed
+    - Total points in Qdrant collection
+    - Qdrant connectivity
+    - Sample document retrieval
+
+    Helps diagnose why RAG search returns no results
+    """
+    try:
+        from app.services.rag_service import RAGService
+
+        diagnostics = {}
+
+        # 1. Database check
+        total_docs = await db.scalar(select(func.count()).select_from(Document))
+        indexed_docs = await db.scalar(
+            select(func.count()).select_from(Document).where(Document.indexed == True)
+        )
+
+        diagnostics['database'] = {
+            'total_documents': total_docs or 0,
+            'indexed_documents': indexed_docs or 0,
+            'percentage_indexed': round((indexed_docs / total_docs * 100) if total_docs > 0 else 0, 2)
+        }
+
+        # 2. Qdrant check
+        try:
+            rag_service = RAGService()
+            collection_info = await rag_service._run_sync(
+                rag_service.client.get_collection,
+                collection_name=rag_service.collection_name
+            )
+
+            diagnostics['qdrant'] = {
+                'status': 'connected',
+                'collection_name': rag_service.collection_name,
+                'total_points': collection_info.points_count,
+                'vector_size': collection_info.config.params.vectors.size,
+                'distance_metric': collection_info.config.params.vectors.distance.name
+            }
+
+            # 3. Sample documents
+            if indexed_docs and indexed_docs > 0:
+                sample_result = await db.execute(
+                    select(Document)
+                    .where(Document.indexed == True)
+                    .limit(3)
+                )
+                sample_docs = sample_result.scalars().all()
+
+                diagnostics['sample_documents'] = [
+                    {
+                        'id': doc.id,
+                        'filename': doc.original_filename,
+                        'file_size': doc.file_size,
+                        'text_length': len(doc.extracted_text) if doc.extracted_text else 0,
+                        'uploaded_at': doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+                        'qdrant_id': doc.qdrant_id
+                    }
+                    for doc in sample_docs
+                ]
+            else:
+                diagnostics['sample_documents'] = []
+
+            # 4. Test search
+            if collection_info.points_count > 0:
+                try:
+                    test_results = await rag_service.search("test", limit=1)
+                    diagnostics['test_search'] = {
+                        'status': 'success',
+                        'results_found': len(test_results),
+                        'top_score': test_results[0]['score'] if test_results else None
+                    }
+                except Exception as e:
+                    diagnostics['test_search'] = {
+                        'status': 'error',
+                        'error': str(e)
+                    }
+            else:
+                diagnostics['test_search'] = {
+                    'status': 'skipped',
+                    'reason': 'No points in collection'
+                }
+
+        except Exception as e:
+            diagnostics['qdrant'] = {
+                'status': 'error',
+                'error': str(e),
+                'message': 'Failed to connect to Qdrant - make sure it is running'
+            }
+
+        # 5. Analysis & recommendations
+        issues = []
+        if diagnostics['database']['total_documents'] == 0:
+            issues.append("No documents uploaded - upload PDFs in DocumentPanel")
+        elif diagnostics['database']['indexed_documents'] == 0:
+            issues.append("Documents uploaded but none are indexed - check document upload logs")
+        elif diagnostics.get('qdrant', {}).get('status') == 'error':
+            issues.append("Qdrant not accessible - ensure Qdrant is running (docker-compose up qdrant)")
+        elif diagnostics.get('qdrant', {}).get('total_points', 0) == 0:
+            issues.append("No points in Qdrant collection - documents may have failed to index")
+        elif diagnostics['database']['indexed_documents'] != diagnostics.get('qdrant', {}).get('total_points', 0):
+            issues.append(f"Mismatch: {diagnostics['database']['indexed_documents']} docs indexed in DB but {diagnostics.get('qdrant', {}).get('total_points', 0)} points in Qdrant")
+
+        diagnostics['issues'] = issues
+        diagnostics['status'] = 'healthy' if len(issues) == 0 else 'issues_found'
+
+        logger.info("rag_diagnostics_completed", status=diagnostics['status'], issues_count=len(issues))
+
+        return diagnostics
+
+    except Exception as e:
+        logger.error("rag_diagnostics_failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to run RAG diagnostics: {str(e)}"
+        )
