@@ -64,17 +64,30 @@ class OrchestratorAgent:
 
         logger.info("orchestrator_agent_initialized", version="v2.0_with_hybrid")
 
-    async def classify_intention(self, user_input: str, context: Dict[str, Any] = None) -> IntentType:
+    async def classify_intention(self, user_input: str, context: Dict[str, Any] = None, state_manager = None) -> IntentType:
         """
         Classify user intention using LLM
 
         Args:
             user_input: User's message
             context: Optional context (uploaded files, conversation history)
+            state_manager: State manager for accessing recent uploads
 
         Returns:
             IntentType enum
         """
+        # Build enhanced context with recent uploads
+        enhanced_context = []
+        if context:
+            enhanced_context.append(str(context))
+
+        # Add recently uploaded documents to context
+        if state_manager and state_manager.state.last_uploaded_documents:
+            doc_names = [doc["filename"] for doc in state_manager.state.last_uploaded_documents[:5]]
+            enhanced_context.append(f"Documents récemment uploadés: {', '.join(doc_names)}")
+
+        context_str = "\n".join(enhanced_context) if enhanced_context else "Aucun"
+
         classification_prompt = f"""
 Analyse l'intention de l'utilisateur et classifie-la dans UNE de ces catégories:
 
@@ -85,6 +98,8 @@ CATÉGORIES:
   ⚠️ NE PAS UTILISER pour: prix, tarifs, coûts, conditions contractuelles → utiliser search_documents
 
 - search_documents: Recherche dans documents DÉJÀ UPLOADÉS et indexés (RAG)
+  ⚠️ RÈGLE CRITIQUE: Si des documents ont été récemment uploadés ET la question semble liée à leur contenu, utiliser search_documents
+
   Exemples généraux:
     * "Que contient le fichier X?"
     * "Recherche dans les documents: [mot-clé]"
@@ -94,6 +109,8 @@ CATÉGORIES:
     * "Résume le document X"
     * "Procédure dégât des eaux"
     * "Règlement copropriété article 5"
+    * "Quels sont les X?" (si X correspond au nom d'un document uploadé)
+    * "Quelles sont les Y?" (si Y correspond au contenu probable d'un document uploadé)
 
   Exemples PRIX/TARIFS (TRÈS IMPORTANT):
     * "Quel est le prix du plombier?"
@@ -132,14 +149,14 @@ CATÉGORIES:
 - trigger_workflow: Déclencher workflow N8N spécifique
   Exemples: "Créer brouillon Gmail", "Lancer workflow facturation", "Déclencher alerte SMS"
 
-- general_question: Question générale assistant
+- general_question: Question générale assistant (DERNIER RECOURS - utiliser seulement si aucune autre catégorie ne convient)
   Exemples: "Comment ça marche?", "Aide-moi", "Qu'est-ce que tu peux faire?"
 
 MESSAGE UTILISATEUR:
 "{user_input}"
 
 CONTEXTE:
-{context if context else "Aucun"}
+{context_str}
 
 Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explication.
 """
@@ -264,7 +281,7 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                     progress=0.2
                 )
 
-            intent = await self.classify_intention(user_input, context)
+            intent = await self.classify_intention(user_input, context, state_manager)
 
             logger.info("processing_request", intent=intent.value, input=user_input[:50])
 
