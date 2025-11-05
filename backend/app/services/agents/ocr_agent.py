@@ -14,7 +14,7 @@ import pytesseract
 from pypdf import PdfReader
 
 from app.services.llm_service import LLMService
-from app.services.rag_service import RAGService
+from app.services.rag_service import get_rag_service
 from app.models.document import Document
 
 logger = structlog.get_logger()
@@ -41,7 +41,7 @@ class OCRAgent:
 
     def __init__(self):
         self.llm_service = LLMService()
-        self.rag_service = RAGService()
+        self.rag_service = get_rag_service()
 
         # Document type classification
         self.document_types = [

@@ -18,6 +18,8 @@ import structlog
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
+from app.services.rag_service import get_rag_service
+
 logger = structlog.get_logger()
 
 
@@ -155,12 +157,11 @@ class HybridExecutor:
         state_manager
     ) -> HybridResult:
         """Execute RAG agent only"""
-        from app.services.rag_service import RAGService
         from .synthesis_agent import SynthesisAgent
 
         logger.info("executing_rag_only", query=query[:50])
 
-        rag_service = RAGService()
+        rag_service = get_rag_service()
         synthesis_agent = SynthesisAgent()
 
         # Get active document IDs from state
@@ -235,22 +236,44 @@ class HybridExecutor:
         state_manager
     ) -> HybridResult:
         """
-        Execute SQL and RAG in parallel for HYBRID intent
+        Execute SQL and RAG in parallel for HYBRID intent with timeout
 
         This is the most powerful mode: combines structured data
         with unstructured document knowledge.
+
+        Timeout: 30 seconds to prevent indefinite blocking
         """
         logger.info("executing_both_parallel", query=query[:50])
 
-        # Execute both in parallel using asyncio.gather
+        # Execute both in parallel with timeout protection
         sql_task = self._execute_sql_only(query, db, state_manager)
         rag_task = self._execute_rag_only(query, db, state_manager)
 
-        sql_hybrid, rag_hybrid = await asyncio.gather(
-            sql_task,
-            rag_task,
-            return_exceptions=True
-        )
+        try:
+            # Timeout of 30 seconds
+            sql_hybrid, rag_hybrid = await asyncio.wait_for(
+                asyncio.gather(sql_task, rag_task, return_exceptions=True),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("parallel_execution_timeout", query=query[:50])
+
+            # Cancel tasks
+            sql_task.cancel()
+            rag_task.cancel()
+
+            return HybridResult(
+                success=False,
+                execution_mode="timeout",
+                has_sql=False,
+                has_rag=False,
+                needs_fusion=False,
+                sql_result=SQLResult(
+                    success=False,
+                    message="Timeout: La requête a pris trop de temps (>30s)",
+                    rows_returned=0
+                )
+            )
 
         # Handle exceptions
         if isinstance(sql_hybrid, Exception):

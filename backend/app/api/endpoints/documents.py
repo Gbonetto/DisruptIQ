@@ -18,7 +18,7 @@ from slowapi.util import get_remote_address
 from app.core.database import get_db
 from app.models.document import Document
 from app.services.document_service import DocumentService
-from app.services.rag_service import RAGService
+from app.services.rag_service import get_rag_service
 from app.services.agents.state_registry import get_state_manager
 
 router = APIRouter()
@@ -106,16 +106,159 @@ async def upload_document(
     Args:
         session_id: Session identifier for tracking uploaded documents
     """
+    logger.info("document_upload_started", filename=file.filename)
+
+    # Use internal helper for processing
+    result = await _process_single_upload_internal(
+        file=file,
+        session_id=session_id,
+        db=db
+    )
+
+    logger.info("document_upload_complete", document_id=result["document_id"])
+
+    return {
+        "message": "Document uploaded and indexed successfully",
+        "document_id": result["document_id"],
+        "filename": result["filename"],
+        "chunks_indexed": result["chunks_indexed"],
+        "text_length": result["text_length"]
+    }
+
+
+async def _cleanup_failed_upload(
+    file_path: Optional[Path],
+    db_document: Optional[Document],
+    indexed_in_qdrant: bool,
+    db: AsyncSession
+):
+    """
+    Cleanup resources on failed upload - ensures atomicity
+
+    Args:
+        file_path: Path to file on disk (if saved)
+        db_document: Database document record (if created)
+        indexed_in_qdrant: Whether document was indexed in Qdrant
+        db: Database session
+    """
+    try:
+        # Rollback DB transaction
+        await db.rollback()
+        logger.info("cleanup_db_rollback")
+
+        # Delete file from disk
+        if file_path and file_path.exists():
+            file_path.unlink(missing_ok=True)
+            logger.info("cleanup_file_deleted", path=str(file_path))
+
+        # Delete from Qdrant if indexed
+        if indexed_in_qdrant and db_document and db_document.id:
+            try:
+                rag_service = get_rag_service()
+                await rag_service.delete_document(db_document.id)
+                logger.info("cleanup_qdrant_deleted", document_id=db_document.id)
+            except Exception as e:
+                logger.error("cleanup_qdrant_failed", error=str(e), document_id=db_document.id)
+
+    except Exception as e:
+        logger.error("cleanup_failed", error=str(e))
+
+
+@router.post("/bulk-upload")
+async def bulk_upload_documents(
+    request: Request,
+    files: List[UploadFile] = File(...),
+    session_id: str = "default",
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Upload multiple documents in batch
+
+    Processes files sequentially to avoid overwhelming the system
+    Maximum 20 files per batch
+    """
+    if len(files) > 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 20 files per batch upload"
+        )
+
+    results = []
+    successful_count = 0
+
+    for file in files:
+        try:
+            # Process each file using internal helper
+            result = await _process_single_upload_internal(
+                file=file,
+                session_id=session_id,
+                db=db
+            )
+
+            results.append({
+                "filename": file.filename,
+                "status": "success",
+                "document_id": result["document_id"],
+                "chunks_indexed": result["chunks_indexed"]
+            })
+            successful_count += 1
+
+        except HTTPException as e:
+            results.append({
+                "filename": file.filename,
+                "status": "error",
+                "error": e.detail
+            })
+        except Exception as e:
+            logger.error("bulk_upload_file_failed", filename=file.filename, error=str(e))
+            results.append({
+                "filename": file.filename,
+                "status": "error",
+                "error": str(e)
+            })
+
+    logger.info("bulk_upload_completed",
+                total=len(files),
+                successful=successful_count,
+                failed=len(files) - successful_count)
+
+    return {
+        "total": len(files),
+        "successful": successful_count,
+        "failed": len(files) - successful_count,
+        "results": results
+    }
+
+
+async def _process_single_upload_internal(
+    file: UploadFile,
+    session_id: str,
+    db: AsyncSession
+) -> Dict[str, Any]:
+    """
+    Internal helper to process a single file upload
+    Used by both single and bulk upload endpoints
+
+    Returns:
+        Dict with document_id, filename, chunks_indexed, text_length
+
+    Raises:
+        HTTPException on validation or processing errors
+    """
+    file_path = None
+    db_document = None
+    indexed_in_qdrant = False
+
     try:
         # Validate file type
         if not DocumentService.is_supported_format(file.content_type):
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type: {file.content_type}. Supported: PDF, DOCX, DOC, TXT"
+                detail=f"Unsupported file type: {file.content_type}"
             )
 
         # Validate file size (max 10MB)
-        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+        MAX_FILE_SIZE = 10 * 1024 * 1024
         file_content = await file.read()
         if len(file_content) > MAX_FILE_SIZE:
             raise HTTPException(
@@ -123,28 +266,10 @@ async def upload_document(
                 detail=f"File too large. Maximum size: 10MB"
             )
 
-        # SECURITY: Sanitize filename to prevent path traversal
+        # Sanitize filename
         sanitized_original_filename = sanitize_filename(file.filename)
 
-        logger.info(
-            "document_upload_started",
-            filename=file.filename,
-            sanitized_filename=sanitized_original_filename,
-            size=len(file_content)
-        )
-
-        # Generate unique filename with sanitized extension
-        file_extension = Path(sanitized_original_filename).suffix
-        unique_filename = f"{uuid.uuid4()}{file_extension}"
-        file_path = UPLOAD_DIR / unique_filename
-
-        # Save file to disk
-        with open(file_path, "wb") as f:
-            f.write(file_content)
-
-        logger.info("file_saved", path=str(file_path))
-
-        # Extract text
+        # Extract text BEFORE saving to disk
         doc_service = DocumentService()
         extracted_text, success = await doc_service.extract_text(
             file_content,
@@ -153,19 +278,32 @@ async def upload_document(
         )
 
         if not success or not extracted_text:
-            # Clean up file
-            file_path.unlink(missing_ok=True)
             raise HTTPException(
                 status_code=500,
                 detail="Failed to extract text from document"
             )
 
-        logger.info("text_extracted", length=len(extracted_text))
+        # Chunk text BEFORE saving (validation)
+        chunks = doc_service.chunk_text(extracted_text, chunk_size=1000, overlap=200)
 
-        # Create database record with sanitized filename
+        if not chunks:
+            raise HTTPException(
+                status_code=500,
+                detail="No text chunks generated from document"
+            )
+
+        # NOW save file to disk (after validation)
+        file_extension = Path(sanitized_original_filename).suffix
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = UPLOAD_DIR / unique_filename
+
+        with open(file_path, "wb") as f:
+            f.write(file_content)
+
+        # Create DB record
         db_document = Document(
             filename=unique_filename,
-            original_filename=sanitized_original_filename,  # Store sanitized version
+            original_filename=sanitized_original_filename,
             file_path=str(file_path),
             file_size=len(file_content),
             mime_type=file.content_type,
@@ -175,58 +313,40 @@ async def upload_document(
         )
 
         db.add(db_document)
-        await db.flush()  # Get the ID without committing
-
-        logger.info("document_record_created", document_id=db_document.id)
+        await db.flush()  # Get ID
 
         # Index in Qdrant
-        rag_service = RAGService()
+        rag_service = get_rag_service()
+        point_ids = await rag_service.index_document_chunks(
+            document_id=db_document.id,
+            chunks=chunks,
+            metadata={
+                "filename": file.filename,
+                "original_filename": db_document.original_filename,
+                "title": db_document.original_filename,
+                "mime_type": file.content_type,
+                "uploaded_at": datetime.now().isoformat()
+            }
+        )
 
-        # Chunk text for better retrieval
-        chunks = doc_service.chunk_text(extracted_text, chunk_size=1000, overlap=200)
+        indexed_in_qdrant = True
 
-        if chunks:
-            # Index all chunks
-            point_ids = await rag_service.index_document_chunks(
-                document_id=db_document.id,
-                chunks=chunks,
-                metadata={
-                    "filename": file.filename,
-                    "original_filename": db_document.original_filename,  # For synthesis_agent
-                    "title": db_document.original_filename,  # Fallback for old code
-                    "mime_type": file.content_type,
-                    "uploaded_at": datetime.now().isoformat()
-                }
-            )
-
-            # Store first point ID as reference
-            db_document.qdrant_id = point_ids[0] if point_ids else None
-            db_document.indexed = True
-
-            logger.info("document_indexed", document_id=db_document.id, chunks=len(chunks))
-        else:
-            logger.warning("no_chunks_to_index", document_id=db_document.id)
+        db_document.qdrant_id = point_ids[0] if point_ids else None
+        db_document.indexed = True
 
         # Commit transaction
         await db.commit()
         await db.refresh(db_document)
 
-        logger.info("document_upload_complete", document_id=db_document.id)
-
-        # Update conversation state to track uploaded document
+        # Update state
         state_manager = get_state_manager(session_id)
         state_manager.state.add_uploaded_document(
             filename=file.filename,
             document_id=db_document.id,
             mime_type=file.content_type
         )
-        logger.info("document_added_to_state",
-                   session_id=session_id,
-                   document_id=db_document.id,
-                   filename=file.filename)
 
         return {
-            "message": "Document uploaded and indexed successfully",
             "document_id": db_document.id,
             "filename": file.filename,
             "chunks_indexed": len(chunks),
@@ -234,41 +354,15 @@ async def upload_document(
         }
 
     except HTTPException:
+        await _cleanup_failed_upload(file_path, db_document, indexed_in_qdrant, db)
         raise
     except Exception as e:
-        await db.rollback()
-        logger.error("document_upload_failed", error=str(e), filename=file.filename)
+        await _cleanup_failed_upload(file_path, db_document, indexed_in_qdrant, db)
+        logger.error("upload_processing_failed", error=str(e), filename=file.filename)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to upload document: {str(e)}"
+            detail=f"Failed to process document: {str(e)}"
         )
-
-
-@router.post("/bulk-upload")
-async def bulk_upload_documents(files: List[UploadFile] = File(...)):
-    """Upload multiple documents"""
-    results = []
-
-    for file in files:
-        try:
-            # TODO: Process each file
-            results.append({
-                "filename": file.filename,
-                "status": "success",
-                "document_id": None
-            })
-        except Exception as e:
-            results.append({
-                "filename": file.filename,
-                "status": "error",
-                "error": str(e)
-            })
-
-    return {
-        "total": len(files),
-        "successful": len([r for r in results if r['status'] == 'success']),
-        "results": results
-    }
 
 
 @router.get("/")
@@ -380,7 +474,7 @@ async def delete_document(
 
         # Delete from Qdrant
         if document.indexed and document.qdrant_id:
-            rag_service = RAGService()
+            rag_service = get_rag_service()
             await rag_service.delete_document(document_id)
             logger.info("document_deleted_from_qdrant", document_id=document_id)
 

@@ -9,7 +9,7 @@ from enum import Enum
 from pydantic import BaseModel
 
 from app.services.llm_service import LLMService
-from app.services.rag_service import RAGService
+from app.services.rag_service import get_rag_service
 from app.core.database import AsyncSession
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
 
@@ -53,7 +53,7 @@ class OrchestratorAgent:
 
     def __init__(self):
         self.llm_service = LLMService()
-        self.rag_service = RAGService()
+        self.rag_service = get_rag_service()
         # Import new v2 components
         from .intent_classifier_v2 import IntentClassifierV2
         from .hybrid_executor import HybridExecutor

@@ -662,7 +662,7 @@ async def get_rag_diagnostics(db: AsyncSession = Depends(get_db)):
     Helps diagnose why RAG search returns no results
     """
     try:
-        from app.services.rag_service import RAGService
+        from app.services.rag_service import get_rag_service
 
         diagnostics = {}
 
@@ -680,7 +680,7 @@ async def get_rag_diagnostics(db: AsyncSession = Depends(get_db)):
 
         # 2. Qdrant check
         try:
-            rag_service = RAGService()
+            rag_service = get_rag_service()
             collection_info = await rag_service._run_sync(
                 rag_service.client.get_collection,
                 collection_name=rag_service.collection_name

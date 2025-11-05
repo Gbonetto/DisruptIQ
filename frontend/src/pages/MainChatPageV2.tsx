@@ -102,26 +102,55 @@ export function MainChatPageV2() {
     }
   };
 
-  // Load documents count
+  // Load documents count with intelligent polling
   useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    let errorCount = 0;
+
     const loadDocs = async () => {
       try {
         const response = await fetch(`${API_BASE_URL}/api/documents/`);
+        if (!response.ok) throw new Error('Failed to fetch documents');
+
         const data = await response.json();
         setDocuments(data.documents || []);
+
+        // Reset error count on success
+        errorCount = 0;
       } catch (error) {
         console.error('Failed to load documents:', error);
+        errorCount++;
+
+        // Stop polling after 3 consecutive errors
+        if (errorCount >= 3 && interval) {
+          clearInterval(interval);
+          toast.error('Impossible de charger les documents. Rechargez la page.');
+        }
       }
     };
+
     loadDocs();
-    const interval = setInterval(loadDocs, 5000);
-    return () => clearInterval(interval);
+
+    // Polling every 30 seconds (reduced from 5s to reduce load)
+    interval = setInterval(loadDocs, 30000);
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, []);
 
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, currentThoughts]);
+
+  // Cleanup EventSource on unmount
+  useEffect(() => {
+    return () => {
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
+    };
+  }, []);
 
   // Send message
   const handleSend = async () => {
@@ -136,11 +165,16 @@ export function MainChatPageV2() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsStreaming(true);
+
+    // Accumulate thoughts outside closure to avoid stale closure bug
+    const accumulatedThoughts: Thought[] = [];
     setCurrentThoughts([]);
+
+    let eventSource: EventSource | null = null;
 
     try {
       // Stream SSE
-      const eventSource = new EventSource(
+      eventSource = new EventSource(
         `${API_BASE_URL}/api/assistant-v2/chat/stream?` +
         new URLSearchParams({
           message: input,
@@ -157,6 +191,7 @@ export function MainChatPageV2() {
       // Thought events
       eventSource.addEventListener('thought', (e) => {
         const thought: Thought = JSON.parse(e.data);
+        accumulatedThoughts.push(thought); // Accumulate here
         setCurrentThoughts(prev => [...prev, thought]);
       });
 
@@ -173,7 +208,7 @@ export function MainChatPageV2() {
         const assistantMessage: Message = {
           role: 'assistant',
           content: response.message,
-          thoughts: currentThoughts,
+          thoughts: accumulatedThoughts, // Use accumulated thoughts
           sources: response.sources,
           suggestions: response.suggestions,
           table_data: response.table_data,
@@ -183,20 +218,27 @@ export function MainChatPageV2() {
         setMessages(prev => [...prev, assistantMessage]);
         setCurrentThoughts([]);
         setIsStreaming(false);
-        eventSource.close();
+        eventSource?.close();
+        eventSourceRef.current = null;
       });
 
       // Errors
-      eventSource.addEventListener('error', () => {
+      eventSource.addEventListener('error', (err) => {
+        console.error('EventSource error:', err);
         toast.error('Erreur de connexion');
+        setCurrentThoughts([]);
         setIsStreaming(false);
-        eventSource.close();
+        eventSource?.close();
+        eventSourceRef.current = null;
       });
 
     } catch (error) {
       console.error('Chat error:', error);
       toast.error('Erreur lors de l\'envoi');
       setIsStreaming(false);
+      setCurrentThoughts([]);
+      eventSource?.close();
+      eventSourceRef.current = null;
     }
   };
 
@@ -212,7 +254,19 @@ export function MainChatPageV2() {
   };
 
   const handleNewConversation = async () => {
+    // Prevent multiple actions during streaming
+    if (isStreaming) {
+      toast.warning('Veuillez attendre la fin de la réponse');
+      return;
+    }
+
     try {
+      // Close ongoing EventSource
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+
       const response = await fetch(`${API_BASE_URL}/api/conversations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -223,10 +277,15 @@ export function MainChatPageV2() {
 
       const newConv = await response.json();
 
-      // Clear current messages
+      // Batch all state updates together (avoid race conditions)
+      const newId = newConv.id.toString();
+
       setMessages([]);
       setCurrentThoughts([]);
-      setActiveConversationId(newConv.id.toString());
+      setPendingConfirmation(null);
+      setInput('');
+      setIsStreaming(false);
+      setActiveConversationId(newId);
 
       // Reload conversations list
       await fetchConversations();

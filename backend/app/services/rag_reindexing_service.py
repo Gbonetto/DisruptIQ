@@ -15,7 +15,7 @@ from sqlalchemy import select, func
 import structlog
 
 from app.services.schema_introspection_service import get_schema_service
-from app.services.rag_service import RAGService
+from app.services.rag_service import get_rag_service
 
 logger = structlog.get_logger(__name__)
 
@@ -58,7 +58,7 @@ class RAGReindexingService:
 
     def __init__(self):
         self.schema_service = get_schema_service()
-        self.rag_service = RAGService()
+        self.rag_service = get_rag_service()
 
     async def detect_indexed_field_changes(
         self,

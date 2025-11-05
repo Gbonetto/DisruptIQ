@@ -458,3 +458,26 @@ class RAGService:
             )
 
         return "\n---\n".join(context_parts)
+
+
+# Singleton pattern for RAGService
+_rag_service_instance: Optional[RAGService] = None
+
+
+def get_rag_service() -> RAGService:
+    """
+    Get or create singleton RAG service instance
+
+    This ensures:
+    - Single Qdrant client connection is reused
+    - Embedding cache is preserved across calls
+    - Better performance and reduced overhead
+
+    Returns:
+        RAGService: Singleton instance
+    """
+    global _rag_service_instance
+    if _rag_service_instance is None:
+        _rag_service_instance = RAGService()
+        logger.info("rag_service_singleton_created")
+    return _rag_service_instance

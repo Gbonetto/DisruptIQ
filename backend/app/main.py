@@ -88,8 +88,8 @@ async def startup_event():
 
     # Initialize RAG Service (Qdrant collection)
     try:
-        from app.services.rag_service import RAGService
-        rag_service = RAGService()
+        from app.services.rag_service import get_rag_service
+        rag_service = get_rag_service()
         await rag_service.initialize()
         logger.info("rag_service_initialized", message="Qdrant collection ready for indexing")
     except Exception as e:

@@ -7,7 +7,7 @@ import structlog
 from typing import Dict, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.rag_service import RAGService
+from app.services.rag_service import get_rag_service
 from app.services.sql_agent_service import SQLAgentService
 from app.services.llm_service import LLMService
 
@@ -23,7 +23,7 @@ class OrchestratorService:
 
     def __init__(self):
         self.llm_service = LLMService()
-        self.rag_service = RAGService()
+        self.rag_service = get_rag_service()
         self.sql_agent = SQLAgentService()
 
     async def route_query(self, query: str) -> QueryMode:

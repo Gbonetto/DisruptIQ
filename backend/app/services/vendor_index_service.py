@@ -10,7 +10,7 @@ from sqlalchemy import select
 from datetime import datetime, timezone
 
 from app.models.professionnel import Vendor  # Vendor est un alias de Professionnel
-from app.services.rag_service import RAGService
+from app.services.rag_service import get_rag_service
 
 logger = structlog.get_logger()
 
@@ -19,7 +19,7 @@ class VendorIndexService:
     """Service for indexing vendors in Qdrant for RAG"""
 
     def __init__(self):
-        self.rag_service = RAGService()
+        self.rag_service = get_rag_service()
 
     def vendor_to_text(self, vendor: Vendor) -> str:
         """
