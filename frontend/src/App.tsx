@@ -11,7 +11,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { ChatPage } from './pages/ChatPage'
 import { DigestPage } from './pages/DigestPage'
 import { ChatPageV2 } from './pages/ChatPageV2'
-import { MainChatPage } from './pages/MainChatPage'
+import { MainChatPageV2 } from './pages/MainChatPageV2'
 import { AppLayout } from './components/layout/AppLayout'
 import { useEffect } from 'react'
 import { adminApi } from './lib/api'
@@ -50,7 +50,7 @@ function App() {
           {/* Routes */}
           <Routes>
             {/* Main Chat Page - Interface principale simplifiée */}
-            <Route path="/" element={<MainChatPage />} />
+            <Route path="/" element={<MainChatPageV2 />} />
 
             {/* Legacy chat pages */}
             <Route path="/chat" element={<ChatPage />} />

@@ -14,7 +14,7 @@ import { ChainOfThoughts } from '../ChainOfThoughts';
 
 interface Thought {
   id: string;
-  type: string;
+  type: 'analyzing' | 'classifying' | 'planning' | 'executing' | 'processing' | 'synthesizing' | 'completed' | 'error';
   timestamp: string;
   agent?: string;
   title: string;
