@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 import structlog
 
 from app.core.database import get_db
@@ -21,12 +21,34 @@ router = APIRouter()
 # Pydantic models
 class ConversationCreate(BaseModel):
     """Create a new conversation"""
-    title: Optional[str] = "Nouvelle conversation"
+    title: Optional[str] = Field(default="Nouvelle conversation", max_length=100)
+
+    @field_validator('title')
+    @classmethod
+    def title_must_not_be_empty(cls, v):
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError('Title cannot be empty')
+            if len(v) > 100:
+                raise ValueError('Title too long (max 100 characters)')
+        return v
 
 
 class ConversationUpdate(BaseModel):
     """Update conversation details"""
-    title: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=100)
+
+    @field_validator('title')
+    @classmethod
+    def title_must_not_be_empty(cls, v):
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError('Title cannot be empty')
+            if len(v) > 100:
+                raise ValueError('Title too long (max 100 characters)')
+        return v
 
 
 class ConversationResponse(BaseModel):
@@ -311,11 +333,13 @@ async def delete_conversation(
     """
     Delete a conversation and all its turns
 
+    Returns count of deleted turns for transparency
+
     Args:
         conversation_id: Conversation ID
 
     Returns:
-        Success message
+        Success message with turns_deleted count
     """
     try:
         # Get session
@@ -331,22 +355,38 @@ async def delete_conversation(
                 detail=f"Conversation {conversation_id} not found"
             )
 
-        # Delete (cascade will delete turns)
+        # Count turns before delete (for transparency)
+        turns_count = session.turns_count
+
+        # Explicitly delete turns first (safety over CASCADE)
+        from sqlalchemy import delete
+        await db.execute(
+            delete(ConversationTurn)
+            .where(ConversationTurn.session_id == session.id)
+        )
+
+        # Delete session
         await db.delete(session)
         await db.commit()
 
-        logger.info("conversation_deleted", conversation_id=conversation_id)
+        logger.info("conversation_deleted",
+                   conversation_id=conversation_id,
+                   turns_deleted=turns_count)
 
         return {
             "message": "Conversation deleted successfully",
-            "conversation_id": conversation_id
+            "conversation_id": conversation_id,
+            "turns_deleted": turns_count  # Transparency
         }
 
     except HTTPException:
         raise
     except Exception as e:
         await db.rollback()
-        logger.error("delete_conversation_failed", conversation_id=conversation_id, error=str(e), exc_info=True)
+        logger.error("delete_conversation_failed",
+                    conversation_id=conversation_id,
+                    error=str(e),
+                    exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete conversation: {str(e)}"

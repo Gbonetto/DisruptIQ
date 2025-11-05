@@ -13,6 +13,7 @@ import hashlib
 import structlog
 from typing import List, Dict, Any, Optional
 from functools import partial
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -274,6 +275,12 @@ class RAGService:
             )
             raise
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+        reraise=True
+    )
     async def search(
         self,
         query: str,
@@ -282,7 +289,7 @@ class RAGService:
         document_ids: Optional[List[int]] = None
     ) -> List[Dict[str, Any]]:
         """
-        Search for relevant documents
+        Search for relevant documents with automatic retry on transient failures
 
         Args:
             query: Search query
@@ -295,6 +302,8 @@ class RAGService:
 
         Raises:
             ValueError: If query is empty or limit is invalid
+            ConnectionError: If Qdrant is unreachable after retries
+            TimeoutError: If Qdrant times out after retries
         """
         # Validate inputs
         if not query or not query.strip():
