@@ -130,6 +130,12 @@ CATÉGORIES:
 - send_email: Générer et envoyer emails (première génération de brouillon)
   Exemples: "Envoyer email aux copropriétaires", "Alerter pour urgence", "Convocation AG", "Préviens les voisins", "Répondons à", "Contact les copropriétaires", "Contacte les pour", "Informe-les", "Avertir de"
 
+  ⚠️ ATTENTION - NE PAS CONFONDRE avec questions de suivi:
+  * "Lesquelles?" après une question → query_data (demande détails)
+  * "Qui sont-ils?" → query_data (demande informations)
+  * "C'est quoi?" → query_data ou search_documents
+  * Questions courtes sans verbe d'email explicite → probablement query_data
+
 - confirm_email: Confirmer l'envoi d'un email après révision du brouillon
   Exemples: "Envoyer cet email", "Oui envoie", "OK envoie", "Valider l'envoi", "Confirmer"
 
