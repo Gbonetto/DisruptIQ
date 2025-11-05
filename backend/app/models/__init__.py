@@ -11,6 +11,7 @@ from app.models.coproprietaire import Coproprietaire
 from app.models.professionnel_copropriete import ProfessionnelCopropriete
 from app.models.agent_run import AgentRun, AgentRunStatus, AgentIntent
 from app.models.agent_step import AgentStep, AgentStepStatus, AgentTool
+from app.models.invoice import FactureGlobal, FactureDetail, FactureStatut, ExtractionMethod
 
 __all__ = [
     "User",
@@ -27,4 +28,8 @@ __all__ = [
     "AgentStep",
     "AgentStepStatus",
     "AgentTool",
+    "FactureGlobal",
+    "FactureDetail",
+    "FactureStatut",
+    "ExtractionMethod",
 ]
