@@ -4,13 +4,12 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, FileText, X } from 'lucide-react';
-import { ChainOfThoughts } from '@/components/ChainOfThoughts';
+import { FileText, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { DocumentPanel } from '@/components/DocumentPanel/DocumentPanel';
-import { RichMarkdownRenderer } from '@/components/chat/RichMarkdownRenderer';
-import { SourceCitation } from '@/components/chat/SourceCitation';
-import { DataTable } from '@/components/chat/DataTable';
+import { ConversationSidebar } from '@/components/chat/ConversationSidebar';
+import { ChatMessage } from '@/components/chat/ChatMessage';
+import { ChatInput } from '@/components/chat/ChatInput';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
