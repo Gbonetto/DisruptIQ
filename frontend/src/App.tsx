@@ -65,7 +65,6 @@ function App() {
               <Route path="import" element={<ImportPage />} />
               <Route path="documents" element={<DocumentsPage />} />
               <Route path="digest" element={<DigestPage />} />
-              <Route path="assistant" element={<ChatPageV2 />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>

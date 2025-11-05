@@ -50,13 +50,6 @@ const sidebarItems: SidebarItem[] = [
     group: 'main',
   },
   {
-    id: 'assistant',
-    label: 'Assistant IA',
-    icon: Bot,
-    href: '/admin/assistant',
-    group: 'main',
-  },
-  {
     id: 'professionnels',
     label: 'Professionnels',
     icon: Users,

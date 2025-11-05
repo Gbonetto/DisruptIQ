@@ -293,12 +293,17 @@ export function MainChatPage() {
       eventSource.addEventListener('response', (e) => {
         const response = JSON.parse(e.data);
 
+        // Filter and validate thoughts before adding to message
+        const validThoughts = currentThoughts.filter(t =>
+          t && typeof t === 'object' && t.id && t.title && t.content
+        );
+
         const assistantMessage: Message = {
           role: 'assistant',
-          content: response.message,
-          thoughts: currentThoughts,
-          sources: response.sources,
-          suggestions: response.suggestions,
+          content: response.message || '',
+          thoughts: validThoughts.length > 0 ? validThoughts : undefined,
+          sources: Array.isArray(response.sources) ? response.sources : undefined,
+          suggestions: Array.isArray(response.suggestions) ? response.suggestions : undefined,
           timestamp: new Date()
         };
 
@@ -482,10 +487,10 @@ export function MainChatPage() {
                   </div>
 
                   {/* Sources */}
-                  {message.sources && message.sources.length > 0 && (
+                  {message.sources && Array.isArray(message.sources) && message.sources.length > 0 && (
                     <div className="bg-gray-50 rounded-lg p-3 space-y-2">
                       <div className="text-xs font-medium text-gray-700">Sources :</div>
-                      {message.sources.map((source, i) => (
+                      {message.sources.filter(s => s && s.title).map((source, i) => (
                         <div key={i} className="text-xs text-gray-600">
                           <span className="font-medium">
                             {source.type === 'sql' && '📊'}

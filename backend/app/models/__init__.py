@@ -9,6 +9,8 @@ from app.models.document import Document
 from app.models.copropriete import Copropriete
 from app.models.coproprietaire import Coproprietaire
 from app.models.professionnel_copropriete import ProfessionnelCopropriete
+from app.models.conversation import Conversation
+from app.models.message import Message
 
 __all__ = [
     "User",
@@ -19,4 +21,6 @@ __all__ = [
     "Copropriete",
     "Coproprietaire",
     "ProfessionnelCopropriete",
+    "Conversation",
+    "Message",
 ]

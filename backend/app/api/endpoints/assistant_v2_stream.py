@@ -157,12 +157,19 @@ async def assistant_chat_stream(
 
                     # Send final response as separate event
                     import json
+
+                    # Extract sources from data if available
+                    sources = []
+                    if result.data and isinstance(result.data, dict):
+                        sources = result.data.get("sources", [])
+
                     response_data = {
                         "success": result.success,
                         "message": result.message,
                         "data": result.data,
                         "agents_used": result.agents_used,
-                        "suggestions": result.suggestions
+                        "suggestions": result.suggestions if result.suggestions else [],
+                        "sources": sources  # Extract sources to top level
                     }
                     final_event = f"event: response\ndata: {json.dumps(response_data, default=str)}\n\n"
                     await thought_stream._broadcast(final_event)

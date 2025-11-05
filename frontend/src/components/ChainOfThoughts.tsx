@@ -179,7 +179,7 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
                   )}
 
                   {/* Additional Data (if any) */}
-                  {thought.data && Object.keys(thought.data).length > 0 && (
+                  {thought.data && typeof thought.data === 'object' && Object.keys(thought.data).length > 0 && (
                     <details className="mt-2 ml-6">
                       <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">
                         Détails techniques
