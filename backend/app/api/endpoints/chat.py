@@ -19,6 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Conversational Intelligence imports
 from app.services.conversation.session_manager import SessionManager
 from app.services.conversation.intent_classifier import IntentClassifier
+from app.services.conversation.llm_intent_classifier import LLMIntentClassifier
+from app.services.conversation.entity_extractor import EntityExtractor
+from app.services.conversation.query_rewriter import QueryRewriter
+from app.services.conversation.response_adapter import ResponseAdapter
+from app.services.conversation.suggestion_engine import SuggestionEngine
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -63,7 +68,7 @@ class EvaluationData(BaseModel):
 
 
 class ChatResponseWithPlan(BaseModel):
-    """Enhanced chat response with observability and evaluation"""
+    """Enhanced chat response with observability, evaluation, and intelligence"""
     message: str
     sources: List[Dict]
     session_id: str
@@ -71,6 +76,11 @@ class ChatResponseWithPlan(BaseModel):
     evaluation: EvaluationData
     agents_used: List[str]
     confidence: float
+    # New intelligence fields
+    suggestions: Optional[List[Dict]] = []
+    entities: Optional[Dict] = {}
+    rewritten_query: Optional[str] = None
+    primary_intent: Optional[str] = None
 
 
 @router.post("/ask", response_model=ChatResponse)
@@ -216,7 +226,14 @@ async def ask_question_with_plan(
 
         # Initialize conversational intelligence services
         session_manager = SessionManager(db)
-        intent_classifier = IntentClassifier()
+        llm_service = get_llm_service()
+
+        # Initialize all 5 intelligence services
+        entity_extractor = EntityExtractor()
+        llm_intent_classifier = LLMIntentClassifier(llm_service)
+        query_rewriter = QueryRewriter(llm_service)
+        response_adapter = ResponseAdapter()
+        suggestion_engine = SuggestionEngine()
 
         # Generate conversation ID (use session_id or generate new)
         conversation_id = request.session_id or f"session-{uuid.uuid4().hex[:12]}"
@@ -245,24 +262,50 @@ async def ask_question_with_plan(
             current_topics=session.topics
         )
 
-        # Step 3: Classify intent with conversation context
-        intent_scores = intent_classifier.classify(
+        # Step 3: Extract entities from message (Phase 1)
+        extracted_entities = entity_extractor.extract_entities(request.message)
+
+        logger.info(
+            "entities_extracted",
+            entities_summary=entity_extractor.format_entities_summary(extracted_entities),
+            amounts=len(extracted_entities.get('amounts', [])),
+            dates=len(extracted_entities.get('dates', [])),
+            categories=len(extracted_entities.get('categories', []))
+        )
+
+        # Step 4: Rewrite query with context (Phase 3)
+        rewritten_message = await query_rewriter.rewrite(
             message=request.message,
-            conversation_context=conversation_history
+            context=conversation_history,
+            extracted_entities=extracted_entities
+        )
+
+        if rewritten_message != request.message:
+            logger.info(
+                "query_rewritten",
+                original=request.message[:50],
+                rewritten=rewritten_message[:50]
+            )
+
+        # Step 5: Classify intent with LLM fallback (Phase 2)
+        intent_scores = await llm_intent_classifier.classify_async(
+            message=rewritten_message,
+            conversation_context=conversation_history,
+            use_llm=True  # Enable LLM for better accuracy
         )
 
         primary_intent = max(intent_scores.items(), key=lambda x: x[1])[0]
         intent_confidence = intent_scores[primary_intent]
 
         logger.info(
-            "intent_classified",
+            "intent_classified_with_llm",
             primary_intent=primary_intent,
             confidence=intent_confidence,
             all_intents=intent_scores
         )
 
-        # Step 4: Check if clarification is needed
-        should_clarify, clarification_message = intent_classifier.should_ask_clarification(
+        # Step 6: Check if clarification is needed
+        should_clarify, clarification_message = llm_intent_classifier.should_ask_clarification(
             intent_scores
         )
 
@@ -275,7 +318,7 @@ async def ask_question_with_plan(
                 detected_intent=primary_intent,
                 intent_confidence=intent_confidence,
                 all_intents=intent_scores,
-                extracted_entities={},
+                extracted_entities=extracted_entities,
                 response_type="clarification"
             )
 
@@ -301,10 +344,14 @@ async def ask_question_with_plan(
                     failed_rules=[]
                 ),
                 agents_used=["clarification"],
-                confidence=0.5
+                confidence=0.5,
+                suggestions=[],
+                entities=extracted_entities,
+                rewritten_query=rewritten_message,
+                primary_intent=primary_intent
             )
 
-        # Step 5: Get user profile for personalization
+        # Step 7: Get user profile for personalization (Phase 4)
         user_profile = None
         if session.user_id:
             user_profile = await session_manager.get_user_profile(
@@ -318,25 +365,27 @@ async def ask_question_with_plan(
                 preferred_style=user_profile.preferred_response_style if user_profile else None
             )
 
-        # Step 6: Extract sub-intents for more granular understanding
-        sub_intents = intent_classifier.detect_sub_intents(
-            message=request.message,
+        # Step 8: Extract sub-intents for more granular understanding
+        sub_intents = llm_intent_classifier.detect_sub_intents(
+            message=rewritten_message,
             primary_intent=primary_intent
         )
 
         logger.info(
             "orchestrator_with_plan_processing",
-            question=request.message[:50],
+            question=rewritten_message[:50],
             conversation_id=conversation_id,
             primary_intent=primary_intent,
-            sub_intents=sub_intents
+            sub_intents=sub_intents,
+            entities=entity_extractor.format_entities_summary(extracted_entities)
         )
 
-        # Step 7: Process with enhanced orchestrator
+        # Step 9: Process with enhanced orchestrator
+        # Use rewritten message and pass entities for filtering
         orchestrator = OrchestratorAgent()
 
         response = await orchestrator.process_with_plan(
-            user_input=request.message,
+            user_input=rewritten_message,  # Use rewritten query
             db=db,
             conversation_id=conversation_id,
             conversation_history=[msg.dict() for msg in request.conversation_history],
@@ -367,15 +416,48 @@ async def ask_question_with_plan(
                 }
             }]
 
-        # Step 8: Save conversation turn to database
+        # Step 10: Adapt response to user profile (Phase 4)
+        adapted_message = response_adapter.adapt_response(
+            response=response.message,
+            user_profile=user_profile,
+            intent=primary_intent,
+            context={"entities": extracted_entities}
+        )
+
+        if adapted_message != response.message:
+            logger.info(
+                "response_adapted",
+                original_length=len(response.message),
+                adapted_length=len(adapted_message),
+                expertise=user_profile.expertise_level if user_profile else "none"
+            )
+
+        # Step 11: Generate smart suggestions (Phase 4)
+        suggestions = suggestion_engine.generate_suggestions(
+            intent=primary_intent,
+            query_result=response.data,
+            user_profile=user_profile,
+            extracted_entities=extracted_entities,
+            max_suggestions=3
+        )
+
+        suggestions_dict = [s.to_dict() for s in suggestions]
+
+        logger.info(
+            "suggestions_generated",
+            count=len(suggestions),
+            types=[s.type for s in suggestions]
+        )
+
+        # Step 12: Save conversation turn to database
         await session_manager.add_turn(
             session_id=session.session_id,
             user_message=request.message,
-            assistant_message=response.message,
+            assistant_message=adapted_message,
             detected_intent=primary_intent,
             intent_confidence=intent_confidence,
             all_intents=intent_scores,
-            extracted_entities={},  # TODO: Extract entities from message
+            extracted_entities=extracted_entities,
             sub_intents=sub_intents,
             response_type="answer",
             sources_used=sources,
@@ -390,15 +472,20 @@ async def ask_question_with_plan(
             turn_number=session.turns_count + 1
         )
 
-        # Build enhanced response
+        # Step 13: Build enhanced response with all intelligence features
         return ChatResponseWithPlan(
-            message=response.message,
+            message=adapted_message,  # Adapted response
             sources=sources,
             session_id=conversation_id,
             observability=ObservabilityData(**response.data["observability"]),
             evaluation=EvaluationData(**response.data["evaluation"]),
             agents_used=response.agents_used,
-            confidence=response.confidence
+            confidence=response.confidence,
+            # Intelligence enhancements
+            suggestions=suggestions_dict,
+            entities=extracted_entities,
+            rewritten_query=rewritten_message if rewritten_message != request.message else None,
+            primary_intent=primary_intent
         )
 
     except Exception as e:
