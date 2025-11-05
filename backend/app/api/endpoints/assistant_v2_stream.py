@@ -15,6 +15,7 @@ import asyncio
 from app.core.database import get_db
 from app.services.agents.orchestrator_agent import OrchestratorAgent
 from app.services.agents.thought_stream import get_thought_stream, cleanup_stream, ThoughtType
+from app.services.agents.state_registry import get_state_manager, cleanup_state_manager
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -31,6 +32,7 @@ class StreamChatRequest(BaseModel):
 async def assistant_chat_stream(
     message: str,
     conversation_history: str = "[]",
+    session_id: str = "default",  # Session ID for state tracking
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -68,7 +70,7 @@ async def assistant_chat_stream(
     });
     ```
     """
-    session_id = str(uuid.uuid4())
+    # Use provided session_id or default (for state tracking across upload and chat)
 
     async def event_generator():
         """Generate Server-Sent Events"""
@@ -86,17 +88,63 @@ async def assistant_chat_stream(
             # Start streaming thoughts in background
             async def process_and_stream():
                 try:
-                    # Initialize orchestrator
+                    # Initialize orchestrator and state manager
                     orchestrator = OrchestratorAgent()
+                    state_manager = get_state_manager(session_id)
+                    current_state = state_manager.get_state()
+
+                    # Extract context from history AND state
+                    context = None
+                    if parsed_history:
+                        # Look for last message with useful context data
+                        for msg in reversed(parsed_history):
+                            if msg.get("role") == "assistant" and msg.get("data"):
+                                msg_data = msg.get("data", {})
+
+                                # Check for email draft awaiting confirmation
+                                if "email_draft" in msg_data and msg_data.get("awaiting_confirmation"):
+                                    context = {"email_draft": msg_data["email_draft"]}
+                                    logger.info("context_extracted_from_history", has_draft=True)
+                                    break
+
+                                # Check for emails from SQL query
+                                if "emails_available" in msg_data:
+                                    context = context or {}
+                                    context["emails_available"] = msg_data["emails_available"]
+                                    logger.info("context_extracted_from_history", has_emails=True, count=len(msg_data["emails_available"]))
+                                    # Don't break - continue looking for email_draft which has priority
+
+                    # Enrich context with state information
+                    if not context:
+                        context = {}
+
+                    # Add recipients from state if available
+                    if current_state.recipients_identified and not context.get("emails_available"):
+                        context["emails_available"] = current_state.recipients_identified
+                        logger.info("context_enriched_from_state", emails_count=len(current_state.recipients_identified))
+
+                    # Add business context from state
+                    if current_state.business_context:
+                        context["business_context"] = current_state.business_context
+                        logger.info("context_enriched_with_business", keys=list(current_state.business_context.keys()))
+
+                    # Add topic from state for email modification preservation
+                    if current_state.topic:
+                        context["topic"] = current_state.topic
+                        logger.info("context_enriched_with_topic", topic=current_state.topic)
 
                     # Process request (this will emit thoughts)
                     result = await orchestrator.process(
                         user_input=message,
                         db=db,
-                        context=None,
+                        context=context,
                         conversation_history=parsed_history,
-                        thought_stream=thought_stream
+                        thought_stream=thought_stream,
+                        state_manager=state_manager  # Pass state manager to orchestrator
                     )
+
+                    # Update state from message and response
+                    state_manager.extract_and_update_from_message(message, result.data)
 
                     # Add completion thought
                     await thought_stream.add_thought(

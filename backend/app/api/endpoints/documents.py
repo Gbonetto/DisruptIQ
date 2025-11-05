@@ -2,7 +2,7 @@
 Document Management Endpoints
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from typing import List
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,30 +10,101 @@ from sqlalchemy import select
 from datetime import datetime
 import uuid
 import os
+import re
 from pathlib import Path
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.core.database import get_db
 from app.models.document import Document
 from app.services.document_service import DocumentService
 from app.services.rag_service import RAGService
+from app.services.agents.state_registry import get_state_manager
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+# Rate limiter for upload endpoint
+limiter = Limiter(key_func=get_remote_address)
 
 # Upload directory
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize filename to prevent path traversal and other security issues
+
+    Security measures:
+    - Remove path separators (/, \\)
+    - Remove parent directory references (..)
+    - Allow only alphanumeric, underscore, dash, and dot
+    - Preserve file extension
+    - Limit length to 255 characters
+
+    Args:
+        filename: Original filename
+
+    Returns:
+        Sanitized filename safe for filesystem storage
+    """
+    # Extract extension first
+    name_parts = filename.rsplit('.', 1)
+    name = name_parts[0] if len(name_parts) > 1 else filename
+    extension = f".{name_parts[1]}" if len(name_parts) > 1 else ""
+
+    # Remove path separators and parent refs
+    name = name.replace('/', '_').replace('\\', '_').replace('..', '_')
+
+    # Keep only safe characters (alphanumeric, underscore, dash)
+    name = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+
+    # Remove multiple consecutive underscores
+    name = re.sub(r'_+', '_', name)
+
+    # Remove leading/trailing underscores
+    name = name.strip('_')
+
+    # If name is empty after sanitization, use a default
+    if not name:
+        name = "document"
+
+    # Limit total length to 255 chars (filesystem limit)
+    max_length = 255 - len(extension)
+    if len(name) > max_length:
+        name = name[:max_length]
+
+    sanitized = f"{name}{extension}"
+
+    # Log if sanitization changed the filename
+    if sanitized != filename:
+        logger.info(
+            "filename_sanitized",
+            original=filename,
+            sanitized=sanitized
+        )
+
+    return sanitized
+
+
 @router.post("/upload")
+@limiter.limit("100/hour")  # SECURITY: Rate limit to prevent DoS via mass uploads (100/hour for dev)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
+    session_id: str = "default",  # Session ID for state tracking
     db: AsyncSession = Depends(get_db)
 ):
     """
     Upload and index a document
 
     Supported formats: PDF, DOCX, DOC, TXT
+
+    Rate limit: 100 uploads per hour per IP address (dev mode)
+
+    Args:
+        session_id: Session identifier for tracking uploaded documents
     """
     try:
         # Validate file type
@@ -52,10 +123,18 @@ async def upload_document(
                 detail=f"File too large. Maximum size: 10MB"
             )
 
-        logger.info("document_upload_started", filename=file.filename, size=len(file_content))
+        # SECURITY: Sanitize filename to prevent path traversal
+        sanitized_original_filename = sanitize_filename(file.filename)
 
-        # Generate unique filename
-        file_extension = Path(file.filename).suffix
+        logger.info(
+            "document_upload_started",
+            filename=file.filename,
+            sanitized_filename=sanitized_original_filename,
+            size=len(file_content)
+        )
+
+        # Generate unique filename with sanitized extension
+        file_extension = Path(sanitized_original_filename).suffix
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         file_path = UPLOAD_DIR / unique_filename
 
@@ -83,10 +162,10 @@ async def upload_document(
 
         logger.info("text_extracted", length=len(extracted_text))
 
-        # Create database record
+        # Create database record with sanitized filename
         db_document = Document(
             filename=unique_filename,
-            original_filename=file.filename,
+            original_filename=sanitized_original_filename,  # Store sanitized version
             file_path=str(file_path),
             file_size=len(file_content),
             mime_type=file.content_type,
@@ -113,6 +192,8 @@ async def upload_document(
                 chunks=chunks,
                 metadata={
                     "filename": file.filename,
+                    "original_filename": db_document.original_filename,  # For synthesis_agent
+                    "title": db_document.original_filename,  # Fallback for old code
                     "mime_type": file.content_type,
                     "uploaded_at": datetime.now().isoformat()
                 }
@@ -131,6 +212,18 @@ async def upload_document(
         await db.refresh(db_document)
 
         logger.info("document_upload_complete", document_id=db_document.id)
+
+        # Update conversation state to track uploaded document
+        state_manager = get_state_manager(session_id)
+        state_manager.state.add_uploaded_document(
+            filename=file.filename,
+            document_id=db_document.id,
+            mime_type=file.content_type
+        )
+        logger.info("document_added_to_state",
+                   session_id=session_id,
+                   document_id=db_document.id,
+                   filename=file.filename)
 
         return {
             "message": "Document uploaded and indexed successfully",
@@ -203,11 +296,13 @@ async def list_documents(
             "documents": [
                 {
                     "id": doc.id,
-                    "filename": doc.original_filename,
+                    "filename": doc.filename,  # UUID filename
+                    "original_filename": doc.original_filename,  # User's original filename
                     "mime_type": doc.mime_type,
                     "file_size": doc.file_size,
                     "indexed": doc.indexed,
-                    "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None
+                    "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+                    "chunk_count": None  # TODO: Add chunk count if needed
                 }
                 for doc in documents
             ],
@@ -313,4 +408,56 @@ async def delete_document(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete document: {str(e)}"
+        )
+
+
+@router.post("/active")
+async def set_active_documents(
+    request: Request,
+    session_id: str = "default"
+):
+    """
+    Set active documents for RAG filtering (checkbox selection)
+
+    Args:
+        document_ids: List of document IDs currently selected
+        session_id: Session identifier for state tracking
+    """
+    try:
+        # Parse JSON body
+        body = await request.json()
+        document_ids = body.get("document_ids", [])
+
+        # Validate that document_ids is a list
+        if not isinstance(document_ids, list):
+            raise HTTPException(
+                status_code=400,
+                detail="document_ids must be a list"
+            )
+
+        # Get state manager for session
+        state_manager = get_state_manager(session_id)
+
+        # Update active document IDs in state
+        state_manager.state.set_active_document_ids(document_ids)
+
+        logger.info("active_documents_updated",
+                   session_id=session_id,
+                   count=len(document_ids),
+                   ids=document_ids)
+
+        return {
+            "message": "Active documents updated successfully",
+            "session_id": session_id,
+            "document_ids": document_ids,
+            "count": len(document_ids)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("set_active_documents_failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to set active documents: {str(e)}"
         )

@@ -15,6 +15,16 @@ from app.models.professionnel import Professionnel
 
 logger = structlog.get_logger()
 
+# SECURITY: Whitelist of allowed tables to prevent SQL injection
+ALLOWED_TABLES = [
+    'coproprietes',
+    'coproprietaires',
+    'professionnels',
+    'emails',
+    'documents',
+    'professionnels_coproprietes'  # Junction table
+]
+
 
 class SQLAgent:
     """
@@ -109,14 +119,20 @@ TABLES DISPONIBLES:
                     "confidence": 0.0
                 }
 
-            logger.info("sql_generated", query=sql_query[:100])
+            logger.info("sql_generated", query=sql_query[:200], user_input=user_input[:100])
 
             # Step 2: Validate SQL (security check)
-            if not self._validate_sql(sql_query):
+            is_valid, validation_error = self._validate_sql(sql_query)
+            if not is_valid:
+                logger.warning("sql_validation_failed", error=validation_error, sql=sql_query[:200])
                 return {
                     "success": False,
-                    "message": "La requête générée n'est pas sûre. Veuillez reformuler votre question.",
-                    "sql_query": sql_query
+                    "message": f"La requête générée n'est pas sûre: {validation_error}. Veuillez reformuler votre question.",
+                    "sql_query": sql_query,
+                    "debug": {
+                        "validation_error": validation_error,
+                        "user_input": user_input
+                    }
                 }
 
             # Step 3: Execute SQL
@@ -152,7 +168,7 @@ TABLES DISPONIBLES:
             }
 
     async def _generate_sql(self, user_input: str) -> str:
-        """Generate SQL query from natural language"""
+        """Generate SQL query from natural language with few-shot examples"""
         prompt = f"""
 Tu es un expert SQL PostgreSQL. Génère une requête SQL SELECT UNIQUEMENT pour répondre à la question.
 
@@ -161,15 +177,62 @@ SCHÉMA DE BASE DE DONNÉES:
 
 RÈGLES IMPORTANTES:
 1. Utilise UNIQUEMENT des SELECT (pas INSERT, UPDATE, DELETE, DROP)
-2. Utilise des JOINs appropriés si nécessaire
-3. Limite les résultats à 100 rows max (LIMIT 100)
-4. Utilise des alias de table pour plus de clarté
-5. Retourne UNIQUEMENT le SQL, sans explication
+2. Pour rechercher des NOMS/PRÉNOMS: utilise TOUJOURS LOWER() et LIKE avec '%'
+3. Pour chercher une PERSONNE: regarde d'abord dans 'professionnels' (name), puis 'coproprietaires' (nom, prenom)
+4. Pour chercher un MÉTIER/CATÉGORIE: utilise table 'professionnels' colonne 'category'
+5. Utilise des JOINs appropriés si nécessaire
+6. Limite les résultats à 100 rows (LIMIT 100), SAUF si demandé explicitement "tous"
+7. Retourne UNIQUEMENT le SQL, sans explication, sans markdown
 
-QUESTION:
+⚠️ INFORMATIONS NON DISPONIBLES EN BASE DE DONNÉES:
+Les informations suivantes NE SONT PAS stockées dans la base et ne peuvent PAS être interrogées avec SQL:
+- Prix, tarifs, coûts, honoraires des professionnels
+- Conditions de paiement, modalités contractuelles
+- Devis, factures, montants financiers
+- Documents, contrats, conditions générales
+
+Si la question porte sur ces sujets, retourne une requête SQL vide ou indique que ces informations ne sont pas en base.
+
+EXEMPLES CONCRETS:
+
+PROFESSIONNELS (name en un seul champ):
+Q: "qui est nadege moussu ?"
+A: SELECT * FROM professionnels WHERE LOWER(name) LIKE '%nadege%' AND LOWER(name) LIKE '%moussu%' LIMIT 100
+
+Q: "qui est Gregori Bonetto ?"
+A: SELECT * FROM professionnels WHERE LOWER(name) LIKE '%gregori%' AND LOWER(name) LIKE '%bonetto%' LIMIT 100
+
+Q: "connaissons nous des consultants ?"
+A: SELECT * FROM professionnels WHERE LOWER(category) LIKE '%consultant%' LIMIT 100
+
+Q: "liste des plombiers"
+A: SELECT name, email, phone, city FROM professionnels WHERE LOWER(category) LIKE '%plombier%' LIMIT 100
+
+COPROPRIETAIRES (nom et prenom séparés - TRÈS IMPORTANT):
+Q: "Qui est Dupont Marie ?"
+A: SELECT * FROM coproprietaires WHERE LOWER(nom) LIKE '%dupont%' AND LOWER(prenom) LIKE '%marie%' LIMIT 100
+
+Q: "où vit Marie Dupont ?"
+A: SELECT nom, prenom, adresse_postale, ville, numero_lot FROM coproprietaires WHERE LOWER(prenom) LIKE '%marie%' AND LOWER(nom) LIKE '%dupont%' LIMIT 100
+
+Q: "qui est Michel Bertrand ?"
+A: SELECT * FROM coproprietaires WHERE (LOWER(prenom) LIKE '%michel%' AND LOWER(nom) LIKE '%bertrand%') OR (LOWER(nom) LIKE '%michel%' AND LOWER(prenom) LIKE '%bertrand%') LIMIT 100
+
+Q: "quel est l'email de Sophie Durant ?"
+A: SELECT nom, prenom, email, telephone FROM coproprietaires WHERE (LOWER(prenom) LIKE '%sophie%' AND LOWER(nom) LIKE '%durant%') OR (LOWER(nom) LIKE '%sophie%' AND LOWER(prenom) LIKE '%durant%') LIMIT 100
+
+COPROPRIETES:
+Q: "copropriétaires des Mimosas"
+A: SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE LOWER(co.nom) LIKE '%mimosas%' LIMIT 100
+
+VÉRIFICATION DE PRÉSENCE:
+Q: "dans la table professionnels, y a t-il Gregori Bonetto ?"
+A: SELECT * FROM professionnels WHERE LOWER(name) LIKE '%gregori%' AND LOWER(name) LIKE '%bonetto%' LIMIT 100
+
+QUESTION DE L'UTILISATEUR:
 {user_input}
 
-SQL QUERY:
+GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
 """
 
         try:
@@ -198,35 +261,97 @@ SQL QUERY:
             logger.error("sql_generation_failed", error=str(e))
             return ""
 
-    def _validate_sql(self, sql: str) -> bool:
+    def _validate_sql(self, sql: str) -> tuple[bool, str]:
         """
         Validate SQL query for security
 
         Checks:
         - Only SELECT statements allowed
         - No dangerous keywords (DROP, DELETE, UPDATE, INSERT, etc.)
+        - Only allowed tables can be queried (WHITELIST)
         - No SQL injection patterns
+
+        Returns:
+            tuple[bool, str]: (is_valid, error_message)
         """
+        import re
         sql_lower = sql.lower()
 
         # Must start with SELECT
         if not sql_lower.strip().startswith("select"):
-            logger.warning("sql_validation_failed", reason="Not a SELECT query")
-            return False
+            return (False, "Seules les requêtes SELECT sont autorisées")
 
-        # Blacklist dangerous keywords
-        dangerous_keywords = [
-            "drop", "delete", "update", "insert", "alter", "create",
-            "truncate", "grant", "revoke", "exec", "execute",
-            "sp_", "xp_", "--", "/*", "*/"
+        # Whitelist: Safe business keywords that might contain dangerous substrings
+        # Example: "prix" shouldn't trigger "update" in "prix_updated_at"
+        safe_business_keywords = [
+            'prix', 'tarif', 'coût', 'montant', 'facture', 'honoraire',  # Business terms
+            'updated_at', 'created_at', 'deleted_at', 'date_update',      # Common columns
+            'last_update', 'update_time', 'next_update'                   # Timestamp columns
         ]
 
-        for keyword in dangerous_keywords:
-            if keyword in sql_lower:
-                logger.warning("sql_validation_failed", reason=f"Dangerous keyword: {keyword}")
-                return False
+        # Blacklist dangerous keywords using WORD BOUNDARIES (not substrings!)
+        # This prevents false positives like "updated_at" triggering "update"
+        dangerous_patterns = [
+            r'\bdrop\b', r'\bdelete\b', r'\bupdate\b', r'\binsert\b',
+            r'\balter\b', r'\bcreate\b', r'\btruncate\b', r'\bgrant\b',
+            r'\brevoke\b', r'\bexec\b', r'\bexecute\b',
+            r'\bsp_', r'\bxp_',
+            r'--', r'/\*', r'\*/'
+        ]
 
-        return True
+        # Check for dangerous patterns
+        for pattern in dangerous_patterns:
+            matches = re.finditer(pattern, sql_lower)
+            for match in matches:
+                # Get the matched keyword
+                matched_keyword = match.group(0)
+
+                # Check if this is part of a safe business keyword
+                # Look at surrounding context (10 chars before and after)
+                start = max(0, match.start() - 10)
+                end = min(len(sql_lower), match.end() + 10)
+                context = sql_lower[start:end]
+
+                # If any safe keyword is in the context, skip this match
+                is_safe = any(safe_word in context for safe_word in safe_business_keywords)
+
+                if not is_safe:
+                    return (False, f"Mot-clé dangereux détecté: {matched_keyword.strip()}")
+
+        # SECURITY: Whitelist table validation
+        # Extract table names from SQL (improved parsing)
+        import re
+        table_patterns = [
+            r'\bfrom\s+(\w+)',        # FROM clause
+            r'\bjoin\s+(\w+)',        # JOIN clause
+            r'\binto\s+(\w+)',        # INTO clause
+            r'\bupdate\s+(\w+)',      # UPDATE clause
+            r'\btable\s+(\w+)',       # TABLE keyword
+        ]
+
+        found_tables = set()
+        for pattern in table_patterns:
+            matches = re.findall(pattern, sql_lower, re.IGNORECASE)
+            found_tables.update(matches)
+
+        # Also check for table names directly (case-insensitive)
+        for allowed_table in ALLOWED_TABLES:
+            if allowed_table.lower() in sql_lower:
+                found_tables.add(allowed_table)
+
+        # If no tables found but query looks valid, log warning but don't fail
+        if not found_tables and sql_lower.strip().startswith('select'):
+            logger.warning("no_tables_detected_in_sql", sql=sql_lower[:100])
+            # Don't fail - might be a simple SELECT with no FROM clause
+            return (True, "")
+
+        # Check if all found tables are in whitelist
+        for table in found_tables:
+            if table not in ALLOWED_TABLES:
+                return (False, f"Table non autorisée: '{table}'. Tables autorisées: {', '.join(ALLOWED_TABLES)}")
+
+        logger.info("sql_validated", tables_used=list(found_tables))
+        return (True, "")
 
     async def _execute_sql(self, sql: str, db: AsyncSession) -> List[Dict[str, Any]]:
         """
@@ -264,7 +389,7 @@ SQL QUERY:
         sql_query: str
     ) -> str:
         """
-        Format SQL results in natural language (simplified, no LLM call for speed)
+        Format SQL results as a Markdown table for better readability
 
         Args:
             original_question: User's original question
@@ -272,57 +397,75 @@ SQL QUERY:
             sql_query: SQL query executed
 
         Returns:
-            Formatted message in natural language
+            Formatted message with Markdown table
         """
         if not results:
+            # Check if query was about pricing/tarif
+            pricing_keywords = ["prix", "tarif", "coût", "combien", "facture", "honoraire"]
+            if any(word in original_question.lower() for word in pricing_keywords):
+                return ("Je n'ai trouvé aucun résultat dans la base de données.\n\n"
+                       "💡 **Astuce**: Les informations tarifaires sont souvent dans les contrats et documents. "
+                       "Essayez de rechercher dans les documents uploadés avec: `Cherche dans les documents: tarif plombier`")
             return "Je n'ai trouvé aucun résultat pour votre question."
 
-        # Simple, fast formatting without LLM
         count = len(results)
 
-        # Header
-        message_parts = [f"✅ J'ai trouvé **{count}** résultat{'s' if count > 1 else ''}:\n"]
+        # Determine which columns to display (max 6 columns for readability)
+        first_row = results[0]
+        all_columns = list(first_row.keys())
 
-        # Show first 5 results with key information
-        for i, row in enumerate(results[:5], 1):
-            message_parts.append(f"\n**{i}.** ")
+        # Prioritize important columns
+        priority_columns = ['id', 'nom', 'prenom', 'name', 'email', 'telephone',
+                           'phone', 'subject', 'ville', 'city', 'adresse', 'address',
+                           'numero_lot', 'type_lot', 'category', 'urgency', 'statut']
 
-            # Try to find a meaningful identifier (name, title, subject, etc.)
-            identifier = None
-            for key in ['name', 'nom', 'title', 'subject', 'email']:
-                if key in row and row[key]:
-                    identifier = str(row[key])
+        # Select columns: prioritize important ones, then others
+        selected_columns = []
+        for col in priority_columns:
+            if col in all_columns and col not in selected_columns:
+                selected_columns.append(col)
+                if len(selected_columns) >= 6:
                     break
 
-            if identifier:
-                message_parts.append(f"{identifier}")
+        # Add remaining columns if we have less than 6
+        for col in all_columns:
+            if col not in selected_columns:
+                selected_columns.append(col)
+                if len(selected_columns) >= 6:
+                    break
 
-            # Add other important fields
-            important_fields = []
-            for key, value in row.items():
-                if key in ['name', 'nom', 'title', 'subject']:
-                    continue  # Already shown as identifier
-                if value is not None and str(value).strip():
-                    # Limit field display
-                    if len(important_fields) < 4:
-                        important_fields.append(f"{key}: {value}")
+        # Build header
+        message_parts = [f"✅ **{count}** résultat{'s' if count > 1 else ''} trouvé{'s' if count > 1 else ''}\n\n"]
 
-            if important_fields:
-                message_parts.append(f"\n   {', '.join(important_fields)}")
+        # Build Markdown table
+        # Header row
+        header = "| " + " | ".join(selected_columns) + " |"
+        message_parts.append(header + "\n")
 
-        # Show count if more results
-        if count > 5:
-            message_parts.append(f"\n\n_... et {count - 5} autre{'s' if count - 5 > 1 else ''} résultat{'s' if count - 5 > 1 else ''}_")
+        # Separator row
+        separator = "|" + "|".join([" --- " for _ in selected_columns]) + "|"
+        message_parts.append(separator + "\n")
+
+        # Data rows (show max 10 rows)
+        max_display = min(10, count)
+        for row in results[:max_display]:
+            row_values = []
+            for col in selected_columns:
+                value = row.get(col, '')
+                # Format value for display
+                if value is None:
+                    formatted_value = '-'
+                elif isinstance(value, str):
+                    # Truncate long strings
+                    formatted_value = value[:50] + '...' if len(value) > 50 else value
+                else:
+                    formatted_value = str(value)
+                row_values.append(formatted_value)
+
+            message_parts.append("| " + " | ".join(row_values) + " |\n")
+
+        # Add footer if more results exist
+        if count > max_display:
+            message_parts.append(f"\n_... et {count - max_display} autre{'s' if count - max_display > 1 else ''} résultat{'s' if count - max_display > 1 else ''}_")
 
         return "".join(message_parts)
-
-        # Note: Old LLM formatting removed for speed. If needed for complex cases,
-        # can be re-enabled as an optional parameter.
-
-        try:
-            pass  # Keeping try-except structure for future use
-
-        except Exception as e:
-            logger.error("result_formatting_failed", error=str(e))
-            # Fallback to simple formatting
-            return f"J'ai trouvé {len(results)} résultat(s) pour votre question."

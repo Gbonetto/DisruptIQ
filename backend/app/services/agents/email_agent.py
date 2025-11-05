@@ -177,11 +177,17 @@ CONTEXTE:
 - Points clés: {', '.join(context.get('key_points', []))}
 - Nombre de destinataires: {len(recipients)}
 
+RÈGLES CRITIQUES:
+⚠️ N'INVENTE AUCUNE INFORMATION qui n'est pas explicitement fournie ci-dessus
+⚠️ Si des détails manquent (ampleur des dégâts, cause, solutions, etc.), NE PAS les inventer
+⚠️ Utilise des formulations prudentes : "nous évaluons", "nous vous tiendrons informés", "des détails suivront"
+⚠️ Ne mentionne PAS d'actions déjà prises si elles ne sont pas explicitement mentionnées dans la demande
+
 Génère:
 1. Un SUJET court et clair (max 60 caractères)
 2. Un CORPS d'email structuré avec:
    - Formule de politesse adaptée
-   - Corps du message clair et professionnel
+   - Corps du message clair et professionnel basé UNIQUEMENT sur les informations fournies
    - Points clés bien organisés
    - Signature "Le Syndic"
 

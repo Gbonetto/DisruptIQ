@@ -85,6 +85,10 @@ export const documentApi = {
   },
   list: () => api.get<DocumentListResponse>('/api/documents/'),
   delete: (id: number) => api.delete<{ message: string }>(`/api/documents/${id}`),
+  setActive: (documentIds: number[], sessionId: string = 'default') =>
+    api.post<{ message: string; count: number }>(`/api/documents/active?session_id=${sessionId}`, {
+      document_ids: documentIds,
+    }),
 }
 
 export const webhookApi = {

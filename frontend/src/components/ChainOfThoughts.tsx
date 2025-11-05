@@ -109,11 +109,11 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
           <span className="font-semibold text-gray-900">
             {isThinking ? 'Réflexion en cours...' : 'Chaîne de pensée'}
           </span>
-          {thoughts.length > 0 && (
-            <Badge variant="outline" className="ml-2">
-              {thoughts.length} étape{thoughts.length > 1 ? 's' : ''}
-            </Badge>
-          )}
+            {thoughts.length > 0 && (
+              <Badge variant="outline" className="ml-2">
+                {thoughts.length} étape{thoughts.length > 1 ? 's' : ''}
+              </Badge>
+            )}
         </div>
 
         <Button variant="ghost" size="sm">

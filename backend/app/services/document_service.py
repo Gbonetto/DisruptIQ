@@ -60,6 +60,7 @@ class DocumentService:
         """Extract text from PDF with OCR fallback"""
         try:
             from pypdf import PdfReader
+            import re
 
             pdf_file = io.BytesIO(content)
             reader = PdfReader(pdf_file)
@@ -72,12 +73,26 @@ class DocumentService:
 
             extracted_text = "\n\n".join(text_parts)
 
+            # CLEANUP: Remove extraction artifacts
+            if extracted_text:
+                # Remove excessive dots (form field placeholders, etc.)
+                extracted_text = re.sub(r'\.{3,}', ' ', extracted_text)
+
+                # Remove excessive spaces
+                extracted_text = re.sub(r'\s+', ' ', extracted_text)
+
+                # Remove isolated dots on their own lines
+                extracted_text = re.sub(r'^\s*\.\s*$', '', extracted_text, flags=re.MULTILINE)
+
+                # Clean up whitespace
+                extracted_text = extracted_text.strip()
+
             if not extracted_text.strip():
                 logger.warning("pdf_no_text_extracted_trying_ocr")
                 # Fallback to OCR for scanned PDFs
                 return await self._extract_pdf_with_ocr(content)
 
-            logger.info("pdf_text_extracted", pages=len(reader.pages))
+            logger.info("pdf_text_extracted", pages=len(reader.pages), length=len(extracted_text))
             return extracted_text, True
 
         except ImportError:

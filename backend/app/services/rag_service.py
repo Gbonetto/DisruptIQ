@@ -20,7 +20,8 @@ from qdrant_client.models import (
     PointStruct,
     Filter,
     FieldCondition,
-    MatchValue
+    MatchValue,
+    MatchAny
 )
 import uuid
 
@@ -277,7 +278,8 @@ class RAGService:
         self,
         query: str,
         limit: int = 5,
-        filter_conditions: Optional[Dict[str, Any]] = None
+        filter_conditions: Optional[Dict[str, Any]] = None,
+        document_ids: Optional[List[int]] = None
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant documents
@@ -286,6 +288,7 @@ class RAGService:
             query: Search query
             limit: Maximum results to return
             filter_conditions: Optional metadata filters
+            document_ids: Optional list of document IDs to filter by (from checkbox selection)
 
         Returns:
             List of search results with scores
@@ -306,14 +309,30 @@ class RAGService:
 
             # Build filter if provided
             search_filter = None
+            conditions = []
+
+            # Add custom filter conditions
             if filter_conditions:
-                conditions = [
+                conditions.extend([
                     FieldCondition(
                         key=key,
                         match=MatchValue(value=value)
                     )
                     for key, value in filter_conditions.items()
-                ]
+                ])
+
+            # Add document_ids filter (checkbox selection from frontend)
+            if document_ids is not None and len(document_ids) > 0:
+                conditions.append(
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchAny(any=document_ids)
+                    )
+                )
+                logger.info("rag_filtering_by_document_ids", document_ids=document_ids)
+
+            # Create filter if we have conditions
+            if conditions:
                 search_filter = Filter(must=conditions)
 
             # Search (async wrapper)

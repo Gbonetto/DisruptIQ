@@ -9,6 +9,7 @@ import { ChainOfThoughts } from '@/components/ChainOfThoughts';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { DocumentPanel } from '@/components/DocumentPanel/DocumentPanel';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -55,6 +56,8 @@ interface ConfirmationData {
 interface UploadedFile {
   file: File;
   preview: string;
+  documentId?: number;  // Backend document ID for tracking
+  filename?: string;     // Sanitized filename from backend
 }
 
 export function MainChatPage() {
@@ -66,35 +69,58 @@ export function MainChatPage() {
   const [pendingConfirmation, setPendingConfirmation] = useState<ConfirmationData | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [documents, setDocuments] = useState<any[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Load documents count for header badge
+  useEffect(() => {
+    const loadDocs = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/documents/');
+        const data = await response.json();
+        setDocuments(data.documents || []);
+      } catch (error) {
+        console.error('Failed to load documents count:', error);
+      }
+    };
+    loadDocs();
+    // Reload every 5 seconds to keep count updated
+    const interval = setInterval(loadDocs, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, currentThoughts]);
 
-  // Drag & drop handlers
+  // Drag & drop handlers (désactivé si panel ouvert)
   const handleDragEnter = (e: React.DragEvent) => {
+    if (isPanelOpen) return; // Ne pas intercepter si panel ouvert
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
+    if (isPanelOpen) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (isPanelOpen) return;
     e.preventDefault();
     e.stopPropagation();
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    if (isPanelOpen) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
@@ -150,17 +176,22 @@ export function MainChatPage() {
 
         xhr.addEventListener('load', () => {
           if (xhr.status === 200) {
-            JSON.parse(xhr.responseText); // Parse response but don't need to store it
+            const response = JSON.parse(xhr.responseText);
             setUploadedFiles(prev => [...prev, {
               file,
-              preview: file.name
+              preview: file.name,
+              documentId: response.document_id,
+              filename: response.filename
             }]);
             setUploadProgress(prev => {
               const newProgress = { ...prev };
               delete newProgress[file.name];
               return newProgress;
             });
-            toast.success(`${file.name} téléchargé avec succès`);
+            toast.success(`✅ ${file.name} uploadé et indexé`, {
+              description: "Vous pouvez maintenant l'interroger",
+              duration: 3000
+            });
           } else {
             toast.error(`Erreur lors du téléchargement de ${file.name}`);
             setUploadProgress(prev => {
@@ -180,7 +211,7 @@ export function MainChatPage() {
           });
         });
 
-        xhr.open('POST', `${API_BASE_URL}/api/documents/upload`);
+        xhr.open('POST', `${API_BASE_URL}/api/documents/upload?session_id=default`);
         xhr.send(formData);
 
       } catch (error) {
@@ -224,9 +255,11 @@ export function MainChatPage() {
       // Prepare request with files if any
       let messageToSend = input;
 
-      if (uploadedFiles.length > 0) {
-        // TODO: Upload files first, then include file IDs in message
-        messageToSend += `\n[Fichiers: ${uploadedFiles.map(f => f.file.name).join(', ')}]`;
+      // NOTE: Files are already uploaded in validateAndAddFiles() during drag & drop or file select
+      // Here we just add a reference to the uploaded files in the message if user didn't type anything
+      if (uploadedFiles.length > 0 && !messageToSend.trim()) {
+        const fileNames = uploadedFiles.map(f => f.file.name).join(', ');
+        messageToSend = `J'ai uploadé ${uploadedFiles.length} document(s): ${fileNames}. De quoi parle${uploadedFiles.length > 1 ? 'nt' : ''}-il${uploadedFiles.length > 1 ? 's' : ''} ?`;
       }
 
       // Stream SSE
@@ -234,6 +267,7 @@ export function MainChatPage() {
         `${API_BASE_URL}/api/assistant-v2/chat/stream?` +
         new URLSearchParams({
           message: messageToSend,
+          session_id: 'default',  // Use default session for state tracking
           conversation_history: JSON.stringify(messages.slice(-5).map(m => ({
             role: m.role,
             content: m.content
@@ -321,6 +355,9 @@ export function MainChatPage() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Document Panel */}
+      <DocumentPanel isOpen={isPanelOpen} onClose={() => setIsPanelOpen(false)} />
+
       {/* Drag & Drop Overlay */}
       {isDragging && (
         <div className="absolute inset-0 bg-blue-50 bg-opacity-90 z-50 flex items-center justify-center border-4 border-dashed border-blue-500">
@@ -332,7 +369,7 @@ export function MainChatPage() {
         </div>
       )}
 
-      {/* Header simple */}
+      {/* Header */}
       <header className="border-b border-gray-200 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">
@@ -340,7 +377,22 @@ export function MainChatPage() {
           </div>
           <h1 className="font-semibold text-gray-900">DisruptIQ</h1>
         </div>
-        <div className="text-sm text-gray-500">Assistant Intelligent</div>
+
+        <div className="flex items-center gap-4">
+          <div className="text-sm text-gray-500">Assistant Intelligent</div>
+          <button
+            onClick={() => setIsPanelOpen(!isPanelOpen)}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors"
+          >
+            <FileText className="w-4 h-4" />
+            <span>Documents</span>
+            {documents.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded">
+                {documents.length}
+              </span>
+            )}
+          </button>
+        </div>
       </header>
 
       {/* Messages area */}

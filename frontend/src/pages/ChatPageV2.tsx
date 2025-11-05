@@ -19,6 +19,7 @@ interface Message {
   agents_used?: string[];
   suggestions?: string[];
   thoughts?: Thought[];
+  data?: any;  // Include data for context passing (e.g., email_draft)
   timestamp: Date;
 }
 
@@ -68,7 +69,8 @@ export function ChatPageV2() {
           message: input,
           conversation_history: JSON.stringify(messages.slice(-5).map(m => ({
             role: m.role,
-            content: m.content
+            content: m.content,
+            data: m.data  // Include data for context (e.g., email_draft)
           })))
         })
       );
@@ -90,6 +92,7 @@ export function ChatPageV2() {
           content: response.message,
           agents_used: response.agents_used,
           suggestions: response.suggestions,
+          data: response.data,  // Store data for context persistence
           thoughts: currentThoughts,
           timestamp: new Date()
         };
