@@ -73,27 +73,34 @@ export function MainChatPageV2() {
   const [isPanelOpen, setIsPanelOpen] = useState(true); // Open by default in 3-col layout
   const [documents, setDocuments] = useState<any[]>([]);
 
-  // Conversations (mock pour l'instant)
-  const [conversations, _setConversations] = useState<Conversation[]>([
-    {
-      id: '1',
-      title: 'Analyse facture plomberie',
-      preview: 'Vérifier la facture de plomberie...',
-      timestamp: new Date(Date.now() - 3600000),
-      messageCount: 5
-    },
-    {
-      id: '2',
-      title: 'Digest emails',
-      preview: 'Générer le digest des emails...',
-      timestamp: new Date(Date.now() - 7200000),
-      messageCount: 3
-    }
-  ]);
+  // Conversations - loaded from backend
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | undefined>();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Load conversations
+  useEffect(() => {
+    fetchConversations();
+  }, []);
+
+  const fetchConversations = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/conversations`);
+      const data = await response.json();
+      setConversations(data.map((conv: any) => ({
+        id: conv.id.toString(),
+        title: conv.title,
+        preview: conv.preview,
+        timestamp: new Date(conv.timestamp),
+        messageCount: conv.message_count
+      })));
+    } catch (error) {
+      console.error('Failed to load conversations:', error);
+      toast.error('Erreur lors du chargement des conversations');
+    }
+  };
 
   // Load documents count
   useEffect(() => {
@@ -204,17 +211,100 @@ export function MainChatPageV2() {
     setInput(suggestion.action);
   };
 
-  const handleNewConversation = () => {
-    setMessages([]);
-    setCurrentThoughts([]);
-    setActiveConversationId(undefined);
-    toast.success('Nouvelle conversation');
+  const handleNewConversation = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Nouvelle conversation' })
+      });
+
+      if (!response.ok) throw new Error('Failed to create conversation');
+
+      const newConv = await response.json();
+
+      // Clear current messages
+      setMessages([]);
+      setCurrentThoughts([]);
+      setActiveConversationId(newConv.id.toString());
+
+      // Reload conversations list
+      await fetchConversations();
+
+      toast.success('Nouvelle conversation créée');
+    } catch (error) {
+      console.error('Failed to create conversation:', error);
+      toast.error('Erreur lors de la création de la conversation');
+    }
   };
 
-  const handleSelectConversation = (id: string) => {
-    setActiveConversationId(id);
-    // TODO: Load conversation messages from backend
-    toast.info('Chargement de la conversation...');
+  const handleSelectConversation = async (id: string) => {
+    try {
+      setActiveConversationId(id);
+
+      const response = await fetch(`${API_BASE_URL}/api/conversations/${id}`);
+      if (!response.ok) throw new Error('Failed to load conversation');
+
+      const data = await response.json();
+
+      // Load messages
+      const loadedMessages: Message[] = data.messages.map((msg: any) => ({
+        role: msg.role,
+        content: msg.content,
+        timestamp: new Date(msg.timestamp),
+        thoughts: msg.thoughts || [],
+        sources: msg.sources || [],
+        table_data: msg.table_data
+      }));
+
+      setMessages(loadedMessages);
+      setCurrentThoughts([]);
+
+      toast.success(`Conversation "${data.title}" chargée`);
+    } catch (error) {
+      console.error('Failed to load conversation:', error);
+      toast.error('Erreur lors du chargement de la conversation');
+    }
+  };
+
+  const handleRenameConversation = async (id: string, newTitle: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/conversations/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle })
+      });
+
+      if (!response.ok) throw new Error('Failed to rename conversation');
+
+      await fetchConversations();
+      toast.success('Conversation renommée');
+    } catch (error) {
+      console.error('Failed to rename conversation:', error);
+      toast.error('Erreur lors du renommage');
+    }
+  };
+
+  const handleDeleteConversation = async (id: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/conversations/${id}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) throw new Error('Failed to delete conversation');
+
+      // If deleting active conversation, clear messages
+      if (id === activeConversationId) {
+        setMessages([]);
+        setActiveConversationId(undefined);
+      }
+
+      await fetchConversations();
+      toast.success('Conversation supprimée');
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+      toast.error('Erreur lors de la suppression');
+    }
   };
 
   return (
@@ -225,6 +315,8 @@ export function MainChatPageV2() {
         activeConversationId={activeConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        onRenameConversation={handleRenameConversation}
+        onDeleteConversation={handleDeleteConversation}
         userName="Utilisateur"
         onSettingsClick={() => toast.info('Paramètres (à venir)')}
         onAdminClick={() => window.location.href = '/admin'}
