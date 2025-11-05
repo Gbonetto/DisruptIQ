@@ -57,12 +57,17 @@ class OrchestratorAgent:
         from .intent_classifier_v2 import IntentClassifierV2
         from .hybrid_executor import HybridExecutor
         from .response_fusion_agent import ResponseFusionAgent
+        # Import Phase 1 components (Planner + Evaluator)
+        from .planner_dag import PlannerDAG
+        from .evaluator import Evaluator
 
         self.intent_classifier_v2 = IntentClassifierV2()
         self.hybrid_executor = HybridExecutor()
         self.fusion_agent = ResponseFusionAgent()
+        self.planner = PlannerDAG()
+        self.evaluator = Evaluator()
 
-        logger.info("orchestrator_agent_initialized", version="v2.0_with_hybrid")
+        logger.info("orchestrator_agent_initialized", version="v2.1_with_planner_evaluator")
 
     async def classify_intention(self, user_input: str, context: Dict[str, Any] = None) -> IntentType:
         """
@@ -1380,3 +1385,488 @@ Réponds uniquement avec le contenu, sans préambule."""
 
             response_parts.append("\n---\n_Sources citées ci-dessus._")
             return "".join(response_parts)
+
+    # =========================================================================
+    # PHASE 1 INTEGRATION: Planner + Evaluator + Observability
+    # =========================================================================
+
+    async def _create_agent_run(
+        self,
+        db: AsyncSession,
+        conversation_id: str,
+        intent: str,
+        plan: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """
+        Create AgentRun record for observability tracking
+
+        Args:
+            db: Database session
+            conversation_id: Unique conversation identifier
+            intent: Detected intent (SQL_ONLY, RAG_ONLY, HYBRID, etc.)
+            plan: Execution plan JSON from Planner DAG
+
+        Returns:
+            run_id: ID of created AgentRun
+        """
+        from sqlalchemy import text
+        import json
+
+        try:
+            plan_json = json.dumps(plan) if plan else None
+
+            query = text("""
+                INSERT INTO agent_runs (conversation_id, intent, plan_json, status, started_at)
+                VALUES (:conversation_id, :intent, :plan_json, 'running', NOW())
+                RETURNING id
+            """)
+
+            result = await db.execute(
+                query,
+                {
+                    "conversation_id": conversation_id,
+                    "intent": intent,
+                    "plan_json": plan_json
+                }
+            )
+            await db.commit()
+
+            run_id = result.scalar_one()
+            logger.info("agent_run_created", run_id=run_id, intent=intent, conversation_id=conversation_id)
+            return run_id
+
+        except Exception as e:
+            logger.error("agent_run_creation_failed", error=str(e), exc_info=True)
+            await db.rollback()
+            return None
+
+    async def _log_agent_step(
+        self,
+        db: AsyncSession,
+        run_id: int,
+        step_number: int,
+        tool: str,
+        input_data: Optional[Dict[str, Any]] = None,
+        output_data: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        latency_ms: Optional[int] = None
+    ):
+        """
+        Log individual agent step for observability
+
+        Args:
+            db: Database session
+            run_id: AgentRun ID
+            step_number: Step number in execution plan
+            tool: Tool/skill name (e.g., "sql.execute", "rag.search")
+            input_data: Input parameters (hashed for caching)
+            output_data: Output results
+            error: Error message if step failed
+            latency_ms: Execution time in milliseconds
+        """
+        from sqlalchemy import text
+        import json
+        import hashlib
+
+        try:
+            # Generate input hash for cache lookup
+            input_hash = None
+            if input_data:
+                input_str = json.dumps(input_data, sort_keys=True)
+                input_hash = hashlib.sha256(input_str.encode()).hexdigest()
+
+            output_json = json.dumps(output_data) if output_data else None
+
+            query = text("""
+                INSERT INTO agent_steps (
+                    run_id, step_number, tool, input_hash,
+                    output_json, error, latency_ms, executed_at
+                )
+                VALUES (
+                    :run_id, :step_number, :tool, :input_hash,
+                    :output_json, :error, :latency_ms, NOW()
+                )
+            """)
+
+            await db.execute(
+                query,
+                {
+                    "run_id": run_id,
+                    "step_number": step_number,
+                    "tool": tool,
+                    "input_hash": input_hash,
+                    "output_json": output_json,
+                    "error": error,
+                    "latency_ms": latency_ms
+                }
+            )
+            await db.commit()
+
+            logger.info(
+                "agent_step_logged",
+                run_id=run_id,
+                step_number=step_number,
+                tool=tool,
+                latency_ms=latency_ms,
+                has_error=error is not None
+            )
+
+        except Exception as e:
+            logger.error("agent_step_logging_failed", error=str(e), exc_info=True)
+            await db.rollback()
+
+    async def _finalize_agent_run(
+        self,
+        db: AsyncSession,
+        run_id: int,
+        status: str,
+        cost_tokens: Optional[int] = None,
+        citations_json: Optional[Dict] = None,
+        has_conflicts: bool = False,
+        evaluator_passed: Optional[bool] = None
+    ):
+        """
+        Finalize AgentRun with results and evaluation
+
+        Args:
+            db: Database session
+            run_id: AgentRun ID
+            status: Final status ('success', 'failed', 'partial')
+            cost_tokens: Total tokens consumed
+            citations_json: Citations/sources used
+            has_conflicts: Whether SQL/RAG conflicts detected
+            evaluator_passed: Whether evaluation rules passed
+        """
+        from sqlalchemy import text
+        import json
+
+        try:
+            citations_str = json.dumps(citations_json) if citations_json else None
+
+            query = text("""
+                UPDATE agent_runs
+                SET status = :status,
+                    cost_tokens = :cost_tokens,
+                    citations_json = :citations_json,
+                    has_conflicts = :has_conflicts,
+                    evaluator_passed = :evaluator_passed,
+                    finished_at = NOW()
+                WHERE id = :run_id
+            """)
+
+            await db.execute(
+                query,
+                {
+                    "run_id": run_id,
+                    "status": status,
+                    "cost_tokens": cost_tokens,
+                    "citations_json": citations_str,
+                    "has_conflicts": has_conflicts,
+                    "evaluator_passed": evaluator_passed
+                }
+            )
+            await db.commit()
+
+            logger.info(
+                "agent_run_finalized",
+                run_id=run_id,
+                status=status,
+                evaluator_passed=evaluator_passed,
+                has_conflicts=has_conflicts
+            )
+
+        except Exception as e:
+            logger.error("agent_run_finalization_failed", error=str(e), exc_info=True)
+            await db.rollback()
+
+    async def process_with_plan(
+        self,
+        user_input: str,
+        db: AsyncSession,
+        conversation_id: str,
+        context: Dict[str, Any] = None,
+        conversation_history: List[Dict[str, str]] = None,
+        thought_stream: ThoughtStream = None,
+        state_manager = None
+    ) -> AgentResponse:
+        """
+        Enhanced processing with Planner DAG + Evaluator + Observability
+
+        This is the Phase 1 integration that adds:
+        - Execution plan generation (Planner DAG)
+        - Rule-based validation (Evaluator)
+        - Complete observability tracking (AgentRun, AgentSteps)
+
+        Flow:
+        1. Classify intent
+        2. Generate execution plan (Planner DAG)
+        3. Create AgentRun for tracking
+        4. Execute plan steps (with logging)
+        5. Evaluate results (Evaluator)
+        6. Finalize AgentRun with evaluation
+
+        Args:
+            user_input: User's message
+            db: Database session
+            conversation_id: Unique conversation identifier
+            context: Optional context
+            conversation_history: Previous messages
+            thought_stream: Real-time thought stream
+            state_manager: State manager for context
+
+        Returns:
+            AgentResponse with enhanced tracking
+        """
+        import time
+
+        run_id = None
+        start_time = time.time()
+
+        try:
+            # Step 1: Classify intent (reuse existing method)
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.CLASSIFYING,
+                    title="Classification de l'intention",
+                    content="Je détermine le type d'action nécessaire...",
+                    agent="orchestrator",
+                    progress=0.1
+                )
+
+            intent = await self.classify_intention(user_input, context)
+
+            # Map old IntentType to Phase 1 intents
+            intent_map = {
+                IntentType.QUERY_DATA: "SQL_ONLY",
+                IntentType.SEARCH_DOCUMENTS: "RAG_ONLY",  # Will be refined by classifier_v2
+                IntentType.SEND_EMAIL: "EMAIL",
+                IntentType.TRIGGER_WORKFLOW: "N8N",
+                IntentType.ANALYZE_DOCUMENT: "OCR",
+                IntentType.GENERAL_QUESTION: "GENERAL"
+            }
+
+            phase1_intent = intent_map.get(intent, "GENERAL")
+
+            # Step 2: Generate execution plan
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.PLANNING,
+                    title="Génération du plan d'exécution",
+                    content=f"Je crée un plan structuré pour l'intent **{phase1_intent}**...",
+                    agent="planner_dag",
+                    progress=0.2
+                )
+
+            plan = await self.planner.generate_plan(
+                intent=phase1_intent,
+                query=user_input,
+                context=context
+            )
+
+            logger.info(
+                "execution_plan_generated",
+                intent=phase1_intent,
+                steps_count=len(plan.steps),
+                estimated_tokens=plan.estimated_tokens
+            )
+
+            # Step 3: Create AgentRun for observability
+            run_id = await self._create_agent_run(
+                db=db,
+                conversation_id=conversation_id,
+                intent=phase1_intent,
+                plan=plan.dict()
+            )
+
+            # Step 4: Execute using existing process method
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.EXECUTING,
+                    title="Exécution du plan",
+                    content=f"J'exécute {len(plan.steps)} étapes...",
+                    agent="orchestrator",
+                    progress=0.3
+                )
+
+            # Log initial step
+            if run_id:
+                await self._log_agent_step(
+                    db=db,
+                    run_id=run_id,
+                    step_number=0,
+                    tool="orchestrator.classify",
+                    input_data={"query": user_input},
+                    output_data={"intent": phase1_intent},
+                    latency_ms=int((time.time() - start_time) * 1000)
+                )
+
+            # Execute via existing process method
+            execution_start = time.time()
+            response = await self.process(
+                user_input=user_input,
+                db=db,
+                context=context,
+                conversation_history=conversation_history,
+                thought_stream=thought_stream,
+                state_manager=state_manager
+            )
+            execution_latency = int((time.time() - execution_start) * 1000)
+
+            # Log execution step
+            if run_id:
+                await self._log_agent_step(
+                    db=db,
+                    run_id=run_id,
+                    step_number=1,
+                    tool="orchestrator.execute",
+                    input_data={"intent": phase1_intent},
+                    output_data={"success": response.success},
+                    error=None if response.success else response.message,
+                    latency_ms=execution_latency
+                )
+
+            # Step 5: Evaluate results
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.VALIDATING,
+                    title="Validation des résultats",
+                    content="Je vérifie que les règles de conformité sont respectées...",
+                    agent="evaluator",
+                    progress=0.9
+                )
+
+            # Determine rules based on intent
+            rules_to_check = self._get_evaluation_rules(phase1_intent, response)
+
+            eval_start = time.time()
+            evaluation = await self.evaluator.evaluate(
+                rules=rules_to_check,
+                context={
+                    "response": response.message,
+                    "data": response.data or {},
+                    "intent": phase1_intent,
+                    "citations": response.data.get("sources", []) if response.data else []
+                }
+            )
+            eval_latency = int((time.time() - eval_start) * 1000)
+
+            logger.info(
+                "evaluation_complete",
+                passed=evaluation.passed,
+                rules_checked=evaluation.rules_checked,
+                critical_failures=evaluation.critical_failures,
+                warnings=evaluation.warnings
+            )
+
+            # Log evaluation step
+            if run_id:
+                await self._log_agent_step(
+                    db=db,
+                    run_id=run_id,
+                    step_number=2,
+                    tool="evaluator.check",
+                    input_data={"rules": rules_to_check},
+                    output_data=evaluation.dict(),
+                    latency_ms=eval_latency
+                )
+
+            # Step 6: Finalize AgentRun
+            total_latency = int((time.time() - start_time) * 1000)
+
+            if run_id:
+                await self._finalize_agent_run(
+                    db=db,
+                    run_id=run_id,
+                    status="success" if response.success and evaluation.passed else "failed",
+                    cost_tokens=plan.estimated_tokens,
+                    citations_json=response.data.get("sources") if response.data else None,
+                    has_conflicts=response.data.get("has_contradictions", False) if response.data else False,
+                    evaluator_passed=evaluation.passed
+                )
+
+            # Add evaluation results to response
+            if response.data is None:
+                response.data = {}
+
+            response.data["evaluation"] = {
+                "passed": evaluation.passed,
+                "rules_checked": evaluation.rules_checked,
+                "rules_passed": evaluation.rules_passed,
+                "critical_failures": evaluation.critical_failures,
+                "warnings": evaluation.warnings,
+                "failed_rules": evaluation.rules_failed
+            }
+            response.data["observability"] = {
+                "run_id": run_id,
+                "plan_steps": len(plan.steps),
+                "total_latency_ms": total_latency,
+                "estimated_tokens": plan.estimated_tokens
+            }
+
+            # Add warning message if evaluation failed
+            if not evaluation.passed:
+                warning_msg = f"\n\n⚠️ **Attention**: {evaluation.critical_failures} règle(s) critique(s) non respectée(s)."
+                response.message += warning_msg
+
+            return response
+
+        except Exception as e:
+            logger.error("process_with_plan_failed", error=str(e), exc_info=True)
+
+            # Log failure if run_id exists
+            if run_id:
+                await self._finalize_agent_run(
+                    db=db,
+                    run_id=run_id,
+                    status="failed",
+                    evaluator_passed=False
+                )
+
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors du traitement avec plan : {str(e)}",
+                agents_used=["orchestrator", "planner", "evaluator"]
+            )
+
+    def _get_evaluation_rules(self, intent: str, response: AgentResponse) -> List[str]:
+        """
+        Determine which evaluation rules to apply based on intent
+
+        Args:
+            intent: Phase 1 intent (SQL_ONLY, RAG_ONLY, HYBRID, etc.)
+            response: Agent response to evaluate
+
+        Returns:
+            List of rule IDs to check
+        """
+        rules = []
+
+        if intent == "SQL_ONLY":
+            rules = ["sql_no_error", "sql_results_not_empty"]
+
+        elif intent == "RAG_ONLY":
+            rules = ["rag_has_citations", "rag_min_sources_2"]
+
+        elif intent == "HYBRID":
+            rules = [
+                "rag_has_citations",
+                "sql_no_error",
+                "hybrid_no_contradiction",
+                "hybrid_sources_attributed"
+            ]
+
+        elif intent == "EMAIL":
+            rules = ["email_has_evidence", "email_preview_shown"]
+
+        elif intent == "N8N":
+            rules = ["n8n_preview_if_danger_high", "n8n_correlation_id"]
+
+        elif intent == "WEB":
+            rules = ["web_urls_cited"]
+
+        # Add SQL whitelist check if SQL was used
+        if "sql_agent" in response.agents_used:
+            if "sql_whitelist_tables" not in rules:
+                rules.append("sql_whitelist_tables")
+
+        return rules

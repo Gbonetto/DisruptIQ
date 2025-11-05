@@ -15,14 +15,23 @@ from app.models.professionnel import Professionnel
 
 logger = structlog.get_logger()
 
-# SECURITY: Whitelist of allowed tables to prevent SQL injection
+# SECURITY: Whitelist of allowed views/tables - CANONICAL VIEWS for SQL agent isolation
 ALLOWED_TABLES = [
+    # Phase 1 canonical views (read-only, security hardened)
+    'vw_professionnels_min',        # Professionnels (sans infos sensibles)
+    'vw_professionnels_full',       # Professionnels (avec détails complets)
+    'vw_coproprietaires_contact',   # Copropriétaires (contacts uniquement)
+    'vw_emails_urgents',             # Emails urgents
+    'vw_coproprietes_stats',         # Copropriétés (avec stats)
+    'vw_documents_active',           # Documents actifs
+
+    # Legacy raw tables (kept for backward compatibility, to be deprecated)
     'coproprietes',
     'coproprietaires',
     'professionnels',
     'emails',
     'documents',
-    'professionnels_coproprietes'  # Junction table
+    'professionnels_coproprietes'
 ]
 
 
@@ -41,9 +50,32 @@ class SQLAgent:
         self.llm_service = LLMService()
         logger.info("sql_agent_initialized")
 
-        # Database schema for context
+        # Database schema for context - CANONICAL VIEWS (Phase 1)
         self.schema = """
-TABLES DISPONIBLES:
+VIEWS CANONIQUES (RECOMMANDÉES - Phase 1):
+
+1. vw_professionnels_min (Professionnels - Vue minimaliste sans infos sensibles)
+   - id, name, company_name, category, email, phone, city, rating, statut, created_at, updated_at
+   - Filtre: statut = 'active' uniquement
+   - ⚠️ IMPORTANT: Pas de siret, description, hashed_password → Vue sécurisée
+
+2. vw_coproprietaires_contact (Copropriétaires - Contacts uniquement)
+   - id, nom, prenom, email, telephone, copropriete_id, numero_lot, statut, created_at
+   - ⚠️ IMPORTANT: Pas d'infos bancaires/sensibles → Vue sécurisée
+
+3. vw_coproprietes_stats (Copropriétés avec statistiques)
+   - id, nom, adresse, ville, code_postal, nombre_lots, nombre_batiments, created_at
+   - nombre_coproprietaires (calculé dynamiquement)
+
+4. vw_emails_urgents (Emails urgents uniquement)
+   - id, sender, subject, received_at, urgency
+   - Filtre: urgency = 'URGENT' uniquement
+
+5. vw_documents_active (Documents actifs uniquement)
+   - id, filename, content_type, collection_name, uploaded_at, file_size_kb
+   - Filtre: is_deleted = false
+
+TABLES RAW (Legacy - À utiliser uniquement si nécessaire):
 
 1. coproprietes
    - id: Integer (PK)
