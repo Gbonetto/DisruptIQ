@@ -56,8 +56,8 @@ CREATE TABLE IF NOT EXISTS factures_global (
     -- Notes
     notes TEXT,
 
-    -- Métadonnées
-    metadata JSONB DEFAULT '{}'::jsonb,
+    -- Métadonnées (renamed from 'metadata' to avoid SQLAlchemy reserved keyword)
+    metadata_json JSONB DEFAULT '{}'::jsonb,
 
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -114,8 +114,8 @@ CREATE TABLE IF NOT EXISTS factures_details (
     code_analytique VARCHAR(100),
     compte_comptable VARCHAR(50),
 
-    -- Métadonnées
-    metadata JSONB DEFAULT '{}'::jsonb,
+    -- Métadonnées (renamed from 'metadata' to avoid SQLAlchemy reserved keyword)
+    metadata_json JSONB DEFAULT '{}'::jsonb,
 
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -183,8 +183,8 @@ CREATE INDEX IF NOT EXISTS idx_factures_global_copro_date ON factures_global(cop
 CREATE INDEX IF NOT EXISTS idx_factures_global_categorie ON factures_global(categorie);
 CREATE INDEX IF NOT EXISTS idx_factures_global_created ON factures_global(created_at DESC);
 
--- Index GIN sur JSONB metadata
-CREATE INDEX IF NOT EXISTS idx_factures_global_metadata_gin ON factures_global USING GIN (metadata);
+-- Index GIN sur JSONB metadata_json
+CREATE INDEX IF NOT EXISTS idx_factures_global_metadata_gin ON factures_global USING GIN (metadata_json);
 
 -- Index sur factures_details
 CREATE INDEX IF NOT EXISTS idx_factures_details_facture ON factures_details(facture_id);
@@ -192,8 +192,8 @@ CREATE INDEX IF NOT EXISTS idx_factures_details_ligne ON factures_details(factur
 CREATE INDEX IF NOT EXISTS idx_factures_details_article ON factures_details(article);
 CREATE INDEX IF NOT EXISTS idx_factures_details_centre_cout ON factures_details(centre_cout);
 
--- Index GIN sur JSONB metadata
-CREATE INDEX IF NOT EXISTS idx_factures_details_metadata_gin ON factures_details USING GIN (metadata);
+-- Index GIN sur JSONB metadata_json
+CREATE INDEX IF NOT EXISTS idx_factures_details_metadata_gin ON factures_details USING GIN (metadata_json);
 
 -- ============================================================================
 -- ÉTAPE 5: Vue pour reporting factures

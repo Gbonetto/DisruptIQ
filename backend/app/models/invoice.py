@@ -106,8 +106,8 @@ class FactureGlobal(Base):
     # Notes
     notes = Column(Text)
 
-    # Métadonnées
-    metadata = Column(JSONB, default={})
+    # Métadonnées (renamed from 'metadata' to avoid SQLAlchemy reserved keyword)
+    metadata_json = Column(JSONB, default={})
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
@@ -242,8 +242,8 @@ class FactureDetail(Base):
     code_analytique = Column(String(100))
     compte_comptable = Column(String(50))
 
-    # Métadonnées
-    metadata = Column(JSONB, default={})
+    # Métadonnées (renamed from 'metadata' to avoid SQLAlchemy reserved keyword)
+    metadata_json = Column(JSONB, default={})
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
