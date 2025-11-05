@@ -57,146 +57,71 @@ class OrchestratorAgent:
         from .intent_classifier_v2 import IntentClassifierV2
         from .hybrid_executor import HybridExecutor
         from .response_fusion_agent import ResponseFusionAgent
+        # Import v3 enhanced classifier
+        from .intent_classifier_v3 import EnhancedIntentClassifierV3
 
         self.intent_classifier_v2 = IntentClassifierV2()
+        self.intent_classifier_v3 = EnhancedIntentClassifierV3()
         self.hybrid_executor = HybridExecutor()
         self.fusion_agent = ResponseFusionAgent()
 
-        logger.info("orchestrator_agent_initialized", version="v2.0_with_hybrid")
+        logger.info("orchestrator_agent_initialized", version="v3.0_with_enhanced_classifier")
 
-    async def classify_intention(self, user_input: str, context: Dict[str, Any] = None, state_manager = None) -> IntentType:
+    async def classify_intention(
+        self,
+        user_input: str,
+        context: Dict[str, Any] = None,
+        state_manager = None,
+        conversation_history: List[Dict[str, str]] = None
+    ) -> IntentType:
         """
-        Classify user intention using LLM
+        Classify user intention using Enhanced v3 Classifier
 
         Args:
             user_input: User's message
             context: Optional context (uploaded files, conversation history)
             state_manager: State manager for accessing recent uploads
+            conversation_history: Recent conversation messages
 
         Returns:
             IntentType enum
         """
-        # Build enhanced context with recent uploads
-        enhanced_context = []
-        if context:
-            enhanced_context.append(str(context))
-
-        # Add recently uploaded documents to context
-        if state_manager and state_manager.state.last_uploaded_documents:
-            doc_names = [doc["filename"] for doc in state_manager.state.last_uploaded_documents[:5]]
-            enhanced_context.append(f"Documents récemment uploadés: {', '.join(doc_names)}")
-
-        context_str = "\n".join(enhanced_context) if enhanced_context else "Aucun"
-
-        classification_prompt = f"""
-Analyse l'intention de l'utilisateur et classifie-la dans UNE de ces catégories:
-
-CATÉGORIES:
-- query_data: Questions sur données structurées UNIQUEMENT (coordonnées contacts, informations personnelles)
-  Exemples: "Combien de copropriétaires?", "Email du plombier?", "Téléphone de Marie Dupont?", "Adresse de la copropriété?"
-
-  ⚠️ NE PAS UTILISER pour: prix, tarifs, coûts, conditions contractuelles → utiliser search_documents
-
-- search_documents: Recherche dans documents DÉJÀ UPLOADÉS et indexés (RAG)
-  ⚠️ RÈGLE CRITIQUE: Si des documents ont été récemment uploadés ET la question semble liée à leur contenu, utiliser search_documents
-
-  Exemples généraux:
-    * "Que contient le fichier X?"
-    * "Recherche dans les documents: [mot-clé]"
-    * "Que disent les documents sur [sujet]?"
-    * "Trouve-moi des infos dans les docs"
-    * "Contenu du document X"
-    * "Résume le document X"
-    * "Procédure dégât des eaux"
-    * "Règlement copropriété article 5"
-    * "Quels sont les X?" (si X correspond au nom d'un document uploadé)
-    * "Quelles sont les Y?" (si Y correspond au contenu probable d'un document uploadé)
-
-  Exemples PRIX/TARIFS (TRÈS IMPORTANT):
-    * "Quel est le prix du plombier?"
-    * "Tarif du jardinier?"
-    * "Coût de l'entretien?"
-    * "Combien coûte la maintenance?"
-    * "Conditions de paiement du fournisseur?"
-    * "Devis pour les travaux?"
-    * "Honoraires du syndic?"
-
-  NOTE IMPORTANTE: Si l'utilisateur mentionne un nom de fichier ou demande le contenu d'un document,
-  c'est TOUJOURS search_documents (sauf si un fichier est actuellement attaché à la requête)
-
-  NOTE CRITIQUE: Les informations financières (prix, tarifs, devis) ne sont PAS dans la BDD structurée,
-  elles sont dans les documents/contrats → TOUJOURS utiliser search_documents pour ces questions
-
-- send_email: Générer et envoyer emails (première génération de brouillon)
-  Exemples: "Envoyer email aux copropriétaires", "Alerter pour urgence", "Convocation AG", "Préviens les voisins", "Répondons à", "Contact les copropriétaires", "Contacte les pour", "Informe-les", "Avertir de"
-
-  ⚠️ ATTENTION - NE PAS CONFONDRE avec questions de suivi:
-  * "Lesquelles?" après une question → query_data (demande détails)
-  * "Qui sont-ils?" → query_data (demande informations)
-  * "C'est quoi?" → query_data ou search_documents
-  * Questions courtes sans verbe d'email explicite → probablement query_data
-
-- confirm_email: Confirmer l'envoi d'un email après révision du brouillon
-  Exemples: "Envoyer cet email", "Oui envoie", "OK envoie", "Valider l'envoi", "Confirmer"
-
-- request_quotes: Demander devis aux fournisseurs (workflow automatique sans email)
-  Exemples: "Lancer workflow devis", "Déclencher demande devis automatique"
-
-  NOTE: Si l'utilisateur dit "contacte les X pour demander un devis" → utiliser send_email (pas request_quotes)
-
-- analyze_document: Analyser NOUVEAU document uploadé MAINTENANT (OCR, extraction données)
-  Exemples: Détecté UNIQUEMENT si fichier ATTACHÉ dans le context actuel
-
-  NOTE IMPORTANTE: Si pas de fichier attaché mais mention de nom de fichier → search_documents (pas analyze_document)
-
-- generate_digest: Générer digest quotidien/hebdomadaire des emails
-  Exemples: "Générer le digest", "Digest des emails", "Résumé emails", "Mail digest"
-
-- trigger_workflow: Déclencher workflow N8N spécifique
-  Exemples: "Créer brouillon Gmail", "Lancer workflow facturation", "Déclencher alerte SMS"
-
-- general_question: Question générale assistant (DERNIER RECOURS - utiliser seulement si aucune autre catégorie ne convient)
-  Exemples: "Comment ça marche?", "Aide-moi", "Qu'est-ce que tu peux faire?"
-
-MESSAGE UTILISATEUR:
-"{user_input}"
-
-CONTEXTE:
-{context_str}
-
-Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explication.
-"""
-
         try:
-            response = await self.llm_service.generate_response(
-                prompt=classification_prompt,
-                max_tokens=20,
-                temperature=0.1
+            # Use v3 enhanced classifier
+            classification_result = await self.intent_classifier_v3.classify(
+                user_input=user_input,
+                conversation_history=conversation_history,
+                state_manager=state_manager,
+                context=context
             )
 
-            # Clean response
-            intent_str = response.strip().lower().replace('"', '').replace("'", "")
+            # Log detailed classification info
+            logger.info("intention_classified_v3",
+                       user_input=user_input[:50],
+                       intent=classification_result.intent.value,
+                       confidence=classification_result.confidence,
+                       quick_rule=classification_result.quick_rule_used,
+                       time_ms=classification_result.processing_time_ms,
+                       context_used=classification_result.context_used)
 
-            # Map to IntentType
-            intent_mapping = {
-                "query_data": IntentType.QUERY_DATA,
-                "search_documents": IntentType.SEARCH_DOCUMENTS,
-                "send_email": IntentType.SEND_EMAIL,
-                "confirm_email": IntentType.CONFIRM_EMAIL,
-                "request_quotes": IntentType.REQUEST_QUOTES,
-                "analyze_document": IntentType.ANALYZE_DOCUMENT,
-                "generate_digest": IntentType.GENERATE_DIGEST,
-                "trigger_workflow": IntentType.TRIGGER_WORKFLOW,
-                "general_question": IntentType.GENERAL_QUESTION,
-            }
+            # Log alternatives for debugging
+            if classification_result.alternatives:
+                alt_summary = [
+                    f"{alt.intent.value}({alt.confidence:.2f})"
+                    for alt in classification_result.alternatives
+                ]
+                logger.debug("alternative_intents", alternatives=alt_summary)
 
-            intent = intent_mapping.get(intent_str, IntentType.GENERAL_QUESTION)
+            # If requires clarification, log it
+            if classification_result.requires_clarification:
+                logger.warning("low_confidence_classification",
+                             confidence=classification_result.confidence,
+                             clarification=classification_result.clarification_question)
 
-            logger.info("intention_classified", user_input=user_input[:50], intent=intent.value)
-            return intent
+            return classification_result.intent
 
         except Exception as e:
-            logger.error("intention_classification_failed", error=str(e))
+            logger.error("intention_classification_failed", error=str(e), exc_info=True)
             return IntentType.GENERAL_QUESTION
 
     async def process(
@@ -287,7 +212,12 @@ Réponds UNIQUEMENT avec le nom de la catégorie (ex: query_data), sans explicat
                     progress=0.2
                 )
 
-            intent = await self.classify_intention(user_input, context, state_manager)
+            intent = await self.classify_intention(
+                user_input,
+                context,
+                state_manager,
+                conversation_history
+            )
 
             logger.info("processing_request", intent=intent.value, input=user_input[:50])
 
