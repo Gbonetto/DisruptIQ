@@ -355,7 +355,9 @@ async def delete_conversation(
 
 async def _get_or_generate_title(session: ConversationSession, db: AsyncSession) -> str:
     """
-    Get conversation title or generate one
+    Get conversation title or generate one using LLM
+
+    Generates smart titles after 2+ exchanges using LLM analysis
 
     Args:
         session: Conversation session
@@ -364,11 +366,52 @@ async def _get_or_generate_title(session: ConversationSession, db: AsyncSession)
     Returns:
         Conversation title
     """
-    # If title stored in current_topic, use it
+    # If title already stored, use it
     if session.current_topic:
         return session.current_topic
 
-    # Generate from first message
+    # Generate smart title if we have at least 2 exchanges (2 turns = 4 messages)
+    if session.turns_count >= 2:
+        # Get first 3 turns for title generation
+        turns_result = await db.execute(
+            select(ConversationTurn)
+            .where(ConversationTurn.session_id == session.id)
+            .order_by(ConversationTurn.turn_number)
+            .limit(3)
+        )
+        turns = turns_result.scalars().all()
+
+        if len(turns) >= 2:
+            # Format messages for title service
+            messages = []
+            for turn in turns:
+                messages.append({"role": "user", "content": turn.user_message})
+                messages.append({"role": "assistant", "content": turn.assistant_message})
+
+            # Generate title using LLM
+            try:
+                from app.services.conversation_title_service import get_title_service
+                title_service = get_title_service()
+                title = await title_service.generate_title(messages, max_length=50)
+
+                # Store generated title (auto-save for future calls)
+                session.current_topic = title
+                await db.commit()
+
+                logger.info("title_auto_generated",
+                           conversation_id=session.id,
+                           title=title,
+                           turn_count=session.turns_count)
+
+                return title
+
+            except Exception as e:
+                logger.error("title_generation_failed",
+                            conversation_id=session.id,
+                            error=str(e))
+                # Fall through to simple generation
+
+    # Fallback: Generate from first message (simple truncation)
     if session.turns_count > 0:
         first_turn = await db.execute(
             select(ConversationTurn)
@@ -379,11 +422,10 @@ async def _get_or_generate_title(session: ConversationSession, db: AsyncSession)
         first_message = first_turn.scalar_one_or_none()
 
         if first_message:
-            # Simple title from first 50 chars
             title = first_message.user_message[:50]
             if len(first_message.user_message) > 50:
                 title += "..."
             return title
 
-    # Default
+    # Default for empty conversations
     return "Nouvelle conversation"
