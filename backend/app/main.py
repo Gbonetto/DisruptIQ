@@ -13,7 +13,7 @@ import structlog
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, workflows, email_safe_send, invoices
+from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, workflows, email_safe_send, invoices, enrichment
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document
 from app.services.scheduler_service import get_scheduler
@@ -176,3 +176,6 @@ app.include_router(email_safe_send.router, prefix="/api/email-safe-send", tags=[
 
 # Phase 3: OCR Invoice Extraction
 app.include_router(invoices.router, prefix="/api/invoices", tags=["Invoice OCR"])
+
+# Phase 3: Advanced Enrichment & ML
+app.include_router(enrichment.router, prefix="/api/enrichment", tags=["Enrichment & ML"])
