@@ -165,16 +165,33 @@ class HybridExecutor:
 
         # Get active document IDs from state
         document_ids = None
-        if state_manager and state_manager.state.active_document_ids:
-            document_ids = state_manager.state.active_document_ids
+        if state_manager and state_manager.state.active_document_ids is not None:
+            # Only use filter if there are actual IDs (non-empty list)
+            if len(state_manager.state.active_document_ids) > 0:
+                document_ids = state_manager.state.active_document_ids
+                logger.info("rag_filtering_by_active_docs", count=len(document_ids))
+            else:
+                logger.info("rag_no_active_docs_set_searching_all")
 
         # Retrieve chunks
         chunks = await rag_service.search(query, limit=5, document_ids=document_ids)
 
+        logger.info("rag_search_returned", chunks_count=len(chunks), query=query[:50])
+
+        # If no results AND we used a document_ids filter, try without filter
+        if not chunks and document_ids is not None:
+            logger.warning("rag_no_results_with_filter_retrying_without",
+                          document_ids=document_ids)
+            chunks = await rag_service.search(query, limit=5, document_ids=None)
+            logger.info("rag_search_without_filter_returned", chunks_count=len(chunks))
+
         if not chunks:
+            # Provide more helpful error message
+            message = "Je n'ai trouvé aucune information pertinente pour répondre à votre question.\n\n**Suggestions** :\n1. Vérifiez que des documents sont bien uploadés dans le panneau de droite\n2. Reformulez votre question avec d'autres mots\n3. Précisez le contexte (noms, dates, catégories)\n\nSi vous cherchez dans les documents, assurez-vous qu'ils contiennent l'information recherchée."
+
             rag_result = RAGResult(
                 success=True,
-                message="Aucun document pertinent trouvé.",
+                message=message,
                 chunks_retrieved=0,
                 confidence=0.0
             )

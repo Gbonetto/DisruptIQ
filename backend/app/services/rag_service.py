@@ -359,11 +359,22 @@ class RAGService:
                 for result in results
             ]
 
-            logger.info(
-                "search_completed",
-                query=query[:50],
-                results_count=len(formatted_results)
-            )
+            # Log detailed search results
+            if formatted_results:
+                logger.info(
+                    "search_completed",
+                    query=query[:50],
+                    results_count=len(formatted_results),
+                    top_score=formatted_results[0]["score"] if formatted_results else 0,
+                    document_ids_found=[r["document_id"] for r in formatted_results[:3]]
+                )
+            else:
+                logger.warning(
+                    "search_returned_no_results",
+                    query=query[:50],
+                    filter_used=search_filter is not None,
+                    document_ids_filter=document_ids
+                )
 
             return formatted_results
 
