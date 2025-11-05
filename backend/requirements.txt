@@ -39,6 +39,7 @@ pillow==10.4.0
 
 # Data Processing
 pandas==2.2.2
+scikit-learn==1.5.1
 
 # Utilities
 python-jose[cryptography]==3.3.0
