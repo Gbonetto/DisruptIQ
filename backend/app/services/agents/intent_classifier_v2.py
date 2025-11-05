@@ -100,16 +100,23 @@ class IntentClassifierV2:
 
         # RAG indicator keywords with weights
         self.rag_keywords = {
-            # Documents
+            # Documents (STRONG signals)
             "document": 0.90,
+            "document sélectionné": 1.0,  # VERY STRONG
+            "ce document": 1.0,  # VERY STRONG
+            "le document": 0.95,
+            "dans le document": 1.0,  # VERY STRONG
             "fichier": 0.90,
+            "ce fichier": 0.95,
             "pdf": 0.95,
             "contrat": 0.85,
             "règlement": 0.85,
             "procédure": 0.90,
             "charte": 0.90,
+            "uploadé": 0.90,
 
-            # Content queries
+            # Content queries (STRONG)
+            "de quoi parle": 1.0,  # VERY STRONG
             "que dit": 0.95,
             "que contient": 0.95,
             "contenu": 0.85,
@@ -362,11 +369,11 @@ Réponds UNIQUEMENT avec les scores, rien d'autre."""
         """
         Determine final intent based on scores
 
-        Decision thresholds:
-        - SQL_ONLY: sql > 0.85 AND rag < 0.4
-        - RAG_ONLY: rag > 0.85 AND sql < 0.4
-        - HYBRID: both > 0.5 OR (sql > 0.4 AND rag > 0.4)
-        - AMBIGUOUS: both < 0.5 OR very close scores
+        IMPROVED Decision thresholds (less strict, more intelligent):
+        - SQL_ONLY: sql > 0.65 AND rag < 0.5 AND (sql - rag > 0.2)
+        - RAG_ONLY: rag > 0.65 AND sql < 0.5 AND (rag - sql > 0.2)
+        - HYBRID: both > 0.5 OR (sql > 0.4 AND rag > 0.4 AND close scores)
+        - AMBIGUOUS: ONLY if both < 0.35 (very low confidence)
 
         Args:
             query: User question
@@ -377,51 +384,99 @@ Réponds UNIQUEMENT avec les scores, rien d'autre."""
         Returns:
             ClassificationResult
         """
-        # Decision logic
-        if sql_score > 0.85 and rag_score < 0.4:
-            # Strong SQL, weak RAG → SQL_ONLY
+        # Calculate score difference
+        score_diff = abs(sql_score - rag_score)
+
+        # Decision logic (IMPROVED - less AMBIGUOUS, more decisive)
+
+        # 1. Strong SQL dominance
+        if sql_score > 0.65 and rag_score < 0.5 and (sql_score - rag_score > 0.2):
             return ClassificationResult(
                 intent=ExecutionIntent.SQL_ONLY,
                 confidence=sql_score,
                 sql_score=sql_score,
                 rag_score=rag_score,
-                reasoning=f"Strong SQL indicators (score: {sql_score:.2f}), weak RAG (score: {rag_score:.2f})",
+                reasoning=f"Clear SQL intent (SQL: {sql_score:.2f} >> RAG: {rag_score:.2f})",
                 suggested_action="execute_sql"
             )
 
-        elif rag_score > 0.85 and sql_score < 0.4:
-            # Strong RAG, weak SQL → RAG_ONLY
+        # 2. Strong RAG dominance
+        elif rag_score > 0.65 and sql_score < 0.5 and (rag_score - sql_score > 0.2):
             return ClassificationResult(
                 intent=ExecutionIntent.RAG_ONLY,
                 confidence=rag_score,
                 sql_score=sql_score,
                 rag_score=rag_score,
-                reasoning=f"Strong RAG indicators (score: {rag_score:.2f}), weak SQL (score: {sql_score:.2f})",
+                reasoning=f"Clear RAG intent (RAG: {rag_score:.2f} >> SQL: {sql_score:.2f})",
                 suggested_action="execute_rag"
             )
 
-        elif (sql_score > 0.5 and rag_score > 0.5) or (sql_score > 0.4 and rag_score > 0.4):
-            # Both moderate to high → HYBRID
+        # 3. Moderate SQL preference (lower threshold)
+        elif sql_score > 0.5 and sql_score > rag_score and score_diff > 0.15:
+            return ClassificationResult(
+                intent=ExecutionIntent.SQL_ONLY,
+                confidence=sql_score,
+                sql_score=sql_score,
+                rag_score=rag_score,
+                reasoning=f"SQL preferred (SQL: {sql_score:.2f} > RAG: {rag_score:.2f})",
+                suggested_action="execute_sql"
+            )
+
+        # 4. Moderate RAG preference (lower threshold)
+        elif rag_score > 0.5 and rag_score > sql_score and score_diff > 0.15:
+            return ClassificationResult(
+                intent=ExecutionIntent.RAG_ONLY,
+                confidence=rag_score,
+                sql_score=sql_score,
+                rag_score=rag_score,
+                reasoning=f"RAG preferred (RAG: {rag_score:.2f} > SQL: {sql_score:.2f})",
+                suggested_action="execute_rag"
+            )
+
+        # 5. Both applicable → HYBRID
+        elif sql_score > 0.4 and rag_score > 0.4:
             confidence = (sql_score + rag_score) / 2
             return ClassificationResult(
                 intent=ExecutionIntent.HYBRID,
                 confidence=confidence,
                 sql_score=sql_score,
                 rag_score=rag_score,
-                reasoning=f"Both SQL ({sql_score:.2f}) and RAG ({rag_score:.2f}) applicable → hybrid approach",
+                reasoning=f"Both applicable (SQL: {sql_score:.2f}, RAG: {rag_score:.2f}) → hybrid",
                 suggested_action="execute_both"
             )
 
-        else:
-            # Both low OR very ambiguous → AMBIGUOUS
+        # 6. AMBIGUOUS only if BOTH very low (< 0.35)
+        elif sql_score < 0.35 and rag_score < 0.35:
             return ClassificationResult(
                 intent=ExecutionIntent.AMBIGUOUS,
                 confidence=max(sql_score, rag_score),
                 sql_score=sql_score,
                 rag_score=rag_score,
-                reasoning=f"Unclear intent (SQL: {sql_score:.2f}, RAG: {rag_score:.2f})",
+                reasoning=f"Very low confidence (SQL: {sql_score:.2f}, RAG: {rag_score:.2f})",
                 suggested_action="ask_clarification",
                 clarification_options=self._generate_clarification_options(query, sql_score, rag_score)
+            )
+
+        # 7. Fallback: choose the higher score (even if low)
+        else:
+            if sql_score > rag_score:
+                intent = ExecutionIntent.SQL_ONLY
+                confidence = sql_score
+                action = "execute_sql"
+                reasoning = f"SQL slightly preferred (SQL: {sql_score:.2f} vs RAG: {rag_score:.2f})"
+            else:
+                intent = ExecutionIntent.RAG_ONLY
+                confidence = rag_score
+                action = "execute_rag"
+                reasoning = f"RAG slightly preferred (RAG: {rag_score:.2f} vs SQL: {sql_score:.2f})"
+
+            return ClassificationResult(
+                intent=intent,
+                confidence=confidence,
+                sql_score=sql_score,
+                rag_score=rag_score,
+                reasoning=reasoning,
+                suggested_action=action
             )
 
     def _generate_clarification_options(
