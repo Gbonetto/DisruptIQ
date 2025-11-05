@@ -1,0 +1,532 @@
+# N8N Workflows Manifest
+# Configuration déclarative des workflows automatisés
+#
+# Format:
+#   - id: Identifiant unique du workflow
+#   - name: Nom lisible
+#   - description: Description détaillée
+#   - webhook_url: URL du webhook N8N
+#   - inputs: Paramètres requis avec types et validation
+#   - outputs: Sorties attendues
+#   - danger_level: low | medium | high | critical
+#   - dry_run_supported: true/false (preview possible)
+#   - requires_confirmation: true/false (validation utilisateur)
+#   - category: Type de workflow
+
+version: "1.0"
+
+workflows:
+  # =========================================================================
+  # WORKFLOWS HIGH DANGER (Require preview + confirmation)
+  # =========================================================================
+
+  - id: incident_water_damage
+    name: "Incident dégât des eaux"
+    description: |
+      Workflow complet pour gestion dégât des eaux:
+      1. Notifier tous les copropriétaires affectés
+      2. Alerter le conseil syndical
+      3. Contacter plombier d'urgence
+      4. Créer ticket incident dans système
+      5. Générer rapport initial
+    webhook_url: /webhook/incident-water-damage
+    category: emergency
+    danger_level: high
+    dry_run_supported: true
+    requires_confirmation: true
+    timeout_seconds: 300
+
+    inputs:
+      - name: copropriete_id
+        type: integer
+        required: true
+        description: "ID de la copropriété concernée"
+        validation:
+          min: 1
+
+      - name: lot_numbers
+        type: array
+        required: true
+        description: "Numéros des lots affectés"
+        validation:
+          min_items: 1
+          max_items: 50
+
+      - name: severity
+        type: string
+        required: true
+        description: "Gravité de l'incident"
+        validation:
+          enum: ["low", "medium", "high", "critical"]
+
+      - name: description
+        type: string
+        required: true
+        description: "Description détaillée de l'incident"
+        validation:
+          min_length: 10
+          max_length: 2000
+
+      - name: contact_urgency
+        type: string
+        required: false
+        default: "immediate"
+        description: "Délai de contact"
+        validation:
+          enum: ["immediate", "within_1h", "within_24h"]
+
+    outputs:
+      - name: notification_sent_count
+        type: integer
+        description: "Nombre de notifications envoyées"
+
+      - name: professional_contacted
+        type: boolean
+        description: "Professionnel contacté avec succès"
+
+      - name: ticket_id
+        type: string
+        description: "ID du ticket créé"
+
+      - name: report_url
+        type: string
+        description: "URL du rapport généré"
+
+    preview_template: |
+      🚨 INCIDENT DÉGÂT DES EAUX
+
+      Copropriété: {{copropriete_name}}
+      Lots affectés: {{lot_numbers}}
+      Gravité: {{severity}}
+
+      Actions déclenchées:
+      ✉️  Notifier {{residents_count}} copropriétaire(s)
+      ⚠️  Alerter le conseil syndical ({{council_members_count}} membres)
+      🔧 Contacter plombier d'urgence: {{plumber_name}} ({{plumber_phone}})
+      📋 Créer ticket incident
+      📄 Générer rapport initial
+
+      Délai d'intervention: {{contact_urgency}}
+
+  - id: send_ag_convocation
+    name: "Convocation AG"
+    description: |
+      Envoi convocation assemblée générale à tous copropriétaires:
+      1. Vérifier liste copropriétaires à jour
+      2. Générer convocation personnalisée par lot
+      3. Envoyer emails + SMS si urgence
+      4. Tracker accusés de réception
+      5. Relancer non-répondants J-7
+    webhook_url: /webhook/send-ag-convocation
+    category: legal
+    danger_level: high
+    dry_run_supported: true
+    requires_confirmation: true
+    timeout_seconds: 600
+
+    inputs:
+      - name: copropriete_id
+        type: integer
+        required: true
+        description: "ID de la copropriété"
+
+      - name: ag_date
+        type: date
+        required: true
+        description: "Date de l'AG (format ISO: YYYY-MM-DD)"
+        validation:
+          format: "date"
+          future: true
+
+      - name: ag_location
+        type: string
+        required: true
+        description: "Lieu de l'AG"
+
+      - name: agenda_items
+        type: array
+        required: true
+        description: "Points à l'ordre du jour"
+        validation:
+          min_items: 1
+
+      - name: documents_urls
+        type: array
+        required: false
+        description: "URLs des documents joints"
+
+      - name: send_sms
+        type: boolean
+        required: false
+        default: false
+        description: "Envoyer aussi par SMS"
+
+      - name: reminder_days_before
+        type: integer
+        required: false
+        default: 7
+        description: "Relance X jours avant"
+        validation:
+          min: 1
+          max: 30
+
+    outputs:
+      - name: emails_sent
+        type: integer
+      - name: sms_sent
+        type: integer
+      - name: failed_contacts
+        type: array
+      - name: convocation_pdf_url
+        type: string
+
+    preview_template: |
+      📨 CONVOCATION ASSEMBLÉE GÉNÉRALE
+
+      Copropriété: {{copropriete_name}}
+      Date AG: {{ag_date}} à {{ag_location}}
+
+      Destinataires: {{total_residents}} copropriétaire(s)
+      - Emails: {{emails_count}}
+      - SMS: {{sms_count}} ({{send_sms}})
+
+      Ordre du jour ({{agenda_items_count}} points):
+      {{#agenda_items}}
+      • {{.}}
+      {{/agenda_items}}
+
+      Documents joints: {{documents_count}}
+      Relance automatique: J-{{reminder_days_before}}
+
+  - id: mass_vendor_request
+    name: "Demande devis massive"
+    description: |
+      Envoyer demande de devis à plusieurs professionnels:
+      1. Filtrer professionnels par catégorie et localisation
+      2. Personnaliser demande par professionnel
+      3. Envoyer emails avec cahier des charges
+      4. Tracker ouvertures et réponses
+      5. Agréger devis reçus
+    webhook_url: /webhook/mass-vendor-request
+    category: procurement
+    danger_level: medium
+    dry_run_supported: true
+    requires_confirmation: true
+    timeout_seconds: 180
+
+    inputs:
+      - name: copropriete_id
+        type: integer
+        required: true
+
+      - name: category
+        type: string
+        required: true
+        description: "Catégorie de professionnel"
+        validation:
+          enum: ["plombier", "électricien", "jardinier", "peintre", "couvreur", "autre"]
+
+      - name: work_description
+        type: string
+        required: true
+        description: "Description des travaux"
+        validation:
+          min_length: 50
+          max_length: 5000
+
+      - name: budget_range
+        type: object
+        required: false
+        description: "Fourchette budgétaire"
+        properties:
+          min: {type: integer}
+          max: {type: integer}
+
+      - name: deadline
+        type: date
+        required: true
+        description: "Date limite de réponse"
+
+      - name: max_recipients
+        type: integer
+        required: false
+        default: 10
+        description: "Nombre maximum de pros à contacter"
+        validation:
+          min: 1
+          max: 50
+
+    outputs:
+      - name: vendors_contacted
+        type: integer
+      - name: emails_sent
+        type: integer
+      - name: tracking_urls
+        type: array
+
+    preview_template: |
+      🔨 DEMANDE DE DEVIS MASSIVE
+
+      Catégorie: {{category}}
+      Copropriété: {{copropriete_name}}
+
+      Professionnels ciblés: {{vendors_count}}
+      Emails envoyés: {{max_recipients}}
+
+      Travaux:
+      {{work_description}}
+
+      Budget indicatif: {{budget_min}}€ - {{budget_max}}€
+      Réponse avant: {{deadline}}
+
+  # =========================================================================
+  # WORKFLOWS MEDIUM DANGER (Preview recommended)
+  # =========================================================================
+
+  - id: email_residents_announcement
+    name: "Annonce aux résidents"
+    description: |
+      Envoyer annonce/information à tous résidents d'une copropriété
+    webhook_url: /webhook/email-residents-announcement
+    category: communication
+    danger_level: medium
+    dry_run_supported: true
+    requires_confirmation: false
+    timeout_seconds: 120
+
+    inputs:
+      - name: copropriete_id
+        type: integer
+        required: true
+
+      - name: subject
+        type: string
+        required: true
+        validation:
+          min_length: 5
+          max_length: 200
+
+      - name: message
+        type: string
+        required: true
+        validation:
+          min_length: 20
+          max_length: 10000
+
+      - name: filter_residents
+        type: object
+        required: false
+        description: "Filtrer par critères"
+        properties:
+          etages: {type: array}
+          statuts: {type: array}
+
+      - name: attachments
+        type: array
+        required: false
+
+    outputs:
+      - name: sent_count
+        type: integer
+      - name: failed_count
+        type: integer
+
+    preview_template: |
+      📢 ANNONCE AUX RÉSIDENTS
+
+      Copropriété: {{copropriete_name}}
+      Objet: {{subject}}
+
+      Destinataires: {{recipients_count}} résident(s)
+      {{#filter_residents}}
+      Filtre: {{filter_residents}}
+      {{/filter_residents}}
+
+      Message:
+      {{message}}
+
+  - id: schedule_maintenance
+    name: "Planifier maintenance"
+    description: |
+      Planifier intervention maintenance et notifier résidents
+    webhook_url: /webhook/schedule-maintenance
+    category: maintenance
+    danger_level: medium
+    dry_run_supported: true
+    requires_confirmation: false
+    timeout_seconds: 90
+
+    inputs:
+      - name: copropriete_id
+        type: integer
+        required: true
+
+      - name: maintenance_type
+        type: string
+        required: true
+        validation:
+          enum: ["ascenseur", "chauffage", "espaces_verts", "nettoyage", "autre"]
+
+      - name: scheduled_date
+        type: datetime
+        required: true
+
+      - name: duration_hours
+        type: integer
+        required: true
+        validation:
+          min: 1
+          max: 48
+
+      - name: vendor_id
+        type: integer
+        required: false
+
+      - name: notify_residents
+        type: boolean
+        default: true
+
+    outputs:
+      - name: maintenance_id
+        type: string
+      - name: notifications_sent
+        type: integer
+
+    preview_template: |
+      🔧 PLANIFICATION MAINTENANCE
+
+      Type: {{maintenance_type}}
+      Date: {{scheduled_date}}
+      Durée: {{duration_hours}}h
+
+      Prestataire: {{vendor_name}}
+      Notification résidents: {{notify_residents}}
+
+  # =========================================================================
+  # WORKFLOWS LOW DANGER (Auto-execute, no preview)
+  # =========================================================================
+
+  - id: archive_old_documents
+    name: "Archiver anciens documents"
+    description: |
+      Archiver documents de plus de X années dans stockage froid
+    webhook_url: /webhook/archive-old-documents
+    category: maintenance
+    danger_level: low
+    dry_run_supported: false
+    requires_confirmation: false
+    timeout_seconds: 300
+
+    inputs:
+      - name: age_years
+        type: integer
+        required: true
+        default: 5
+        validation:
+          min: 1
+          max: 50
+
+      - name: document_types
+        type: array
+        required: false
+        description: "Types de documents à archiver"
+
+      - name: dry_run
+        type: boolean
+        default: false
+        description: "Simuler seulement (pas d'archivage)"
+
+    outputs:
+      - name: documents_archived
+        type: integer
+      - name: storage_saved_mb
+        type: integer
+
+  - id: sync_vendors_index
+    name: "Synchroniser index professionnels"
+    description: |
+      Re-indexer tous les professionnels dans Qdrant pour RAG
+    webhook_url: /webhook/sync-vendors-index
+    category: maintenance
+    danger_level: low
+    dry_run_supported: false
+    requires_confirmation: false
+    timeout_seconds: 600
+
+    inputs:
+      - name: full_reindex
+        type: boolean
+        default: false
+        description: "Ré-indexation complète ou incrémentale"
+
+      - name: categories
+        type: array
+        required: false
+        description: "Limiter à certaines catégories"
+
+    outputs:
+      - name: vendors_indexed
+        type: integer
+      - name: errors_count
+        type: integer
+
+  - id: generate_monthly_report
+    name: "Générer rapport mensuel"
+    description: |
+      Générer rapport d'activité mensuel (emails, incidents, dépenses)
+    webhook_url: /webhook/generate-monthly-report
+    category: reporting
+    danger_level: low
+    dry_run_supported: false
+    requires_confirmation: false
+    timeout_seconds: 180
+
+    inputs:
+      - name: copropriete_id
+        type: integer
+        required: false
+        description: "Si null, rapport global toutes copropriétés"
+
+      - name: year
+        type: integer
+        required: true
+
+      - name: month
+        type: integer
+        required: true
+        validation:
+          min: 1
+          max: 12
+
+      - name: format
+        type: string
+        default: "pdf"
+        validation:
+          enum: ["pdf", "excel", "html"]
+
+    outputs:
+      - name: report_url
+        type: string
+      - name: report_size_kb
+        type: integer
+
+# Métadonnées globales
+metadata:
+  total_workflows: 9
+  categories:
+    - emergency
+    - legal
+    - procurement
+    - communication
+    - maintenance
+    - reporting
+
+  danger_levels:
+    critical: 0
+    high: 3
+    medium: 3
+    low: 3
+
+  maintainer: "DisruptIQ Team"
+  last_updated: "2025-11-05"
+  schema_version: "1.0"
