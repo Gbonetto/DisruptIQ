@@ -27,6 +27,8 @@ from app.services.ocr_invoice_service import (
     OCRBackend,
     ExtractedInvoice
 )
+from app.services.enrichment_pipeline import EnrichmentPipeline
+from app.models.enrichment import EnrichmentConfig, EnrichmentResult
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -42,6 +44,10 @@ class InvoiceUploadResponse(BaseModel):
     needs_review: bool
     extraction_notes: List[str]
     processing_time_ms: int
+    enrichment: Optional[EnrichmentResult] = Field(
+        None,
+        description="Résultats de l'enrichissement automatique"
+    )
 
 
 class InvoiceListItem(BaseModel):
@@ -170,6 +176,38 @@ async def upload_and_extract_invoice(
             fournisseur_id=fournisseur_id
         )
 
+        # Enrichissement automatique
+        enrichment_result = None
+        try:
+            logger.info(
+                "starting_enrichment",
+                facture_id=facture_id
+            )
+            enrichment_pipeline = EnrichmentPipeline(
+                db=db,
+                config=EnrichmentConfig()  # Use default config
+            )
+            enrichment_result = await enrichment_pipeline.enrich_invoice(facture_id)
+
+            # Update needs_review if enrichment flagged issues
+            if enrichment_result.needs_review_reasons:
+                extracted_invoice.needs_review = True
+                extracted_invoice.extraction_notes.extend(enrichment_result.needs_review_reasons)
+
+            logger.info(
+                "enrichment_complete",
+                facture_id=facture_id,
+                actions_taken=len(enrichment_result.actions_taken),
+                warnings=len(enrichment_result.warnings)
+            )
+        except Exception as e:
+            logger.error(
+                "enrichment_failed",
+                facture_id=facture_id,
+                error=str(e)
+            )
+            # Continue anyway - enrichment is optional
+
         # Nettoyage fichier temporaire
         tmp_path.unlink()
 
@@ -191,7 +229,8 @@ async def upload_and_extract_invoice(
             ocr_confidence=extracted_invoice.ocr_confidence,
             needs_review=extracted_invoice.needs_review,
             extraction_notes=extracted_invoice.extraction_notes,
-            processing_time_ms=processing_time
+            processing_time_ms=processing_time,
+            enrichment=enrichment_result
         )
 
     except Exception as e:
