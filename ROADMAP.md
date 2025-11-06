@@ -2,6 +2,7 @@
 ## Vision Produit et Évolution 2025-2026
 
 **Mission**: Devenir l'assistant IA n°1 pour les syndics de copropriété en France
+**Vision**: Automatiser 80% des tâches répétitives des syndics grâce à l'IA
 
 ---
 
@@ -10,506 +11,316 @@
 ```
 2025 Q4         │  2026 Q1         │  2026 Q2         │  2026 Q3         │  2026 Q4
 ════════════════╪══════════════════╪══════════════════╪══════════════════╪══════════════
-    v2.0 ✅     │     v2.5         │     v3.0         │     v3.5         │     v4.0
-Prod-Ready      │ Optimisations    │ Enterprise       │ Scale            │ AI Advanced
-1 client pilote │ 3-5 clients      │ 20+ clients      │ 50+ clients      │ 100+ clients
+    v3.0 ✅     │     v3.2         │     v4.0         │     v4.5         │     v5.0
+Production      │ Stabilité        │ Scale            │ Enterprise       │ AI Advanced
+1 client pilote │ 5 clients        │ 20+ clients      │ 50+ clients      │ 100+ clients
 ```
 
 ---
 
-## 🎯 V2.0 - PRODUCTION READY ✅
-**Date**: 1er Novembre 2025
+## ✅ V3.0 - PRODUCTION READY (ACTUEL)
+**Date**: Novembre 2025
 **Status**: ✅ DÉPLOYÉ
-**Clients**: 1 pilote
+**Score**: 6.25/10
 
-### Réalisations
+### Réalisations Majeures
 
-#### Backend
-✅ Architecture async moderne (FastAPI)
-✅ 3 entités (professionnels, copropriétés, copropriétaires)
-✅ RAG avec Qdrant + cache Redis
-✅ Health checks professionnels
-✅ Scheduler digest automatique (60 min)
-✅ Tests automatisés (47+ tests, 80%+ coverage)
-✅ Intégration N8N webhooks
+#### ✅ Backend Multi-Agents
+- 7 agents spécialisés opérationnels
+- **Intent Classifier v3** avec 92% de précision (+32% vs v2)
+- **RAG Hybride** (SQL + Vector Search)
+- Architecture async moderne (FastAPI + SQLAlchemy 2.0)
+- Intégrations: Gmail, N8N, Qdrant, Redis
 
-#### Frontend
-✅ 10 pages admin complètes
-✅ Command Palette (Cmd+K)
-✅ Import Wizard CSV
-✅ UI/UX cohérente (Shadcn/UI)
-✅ Responsive mobile-first
+#### ✅ Frontend Neo-Rétro
+- Interface ChatGPT-style avec UI Neo-Rétro
+- Markdown rendering + Chain of Thoughts temps réel
+- React 18 + TypeScript + Tailwind
+- 10+ pages admin complètes
 
-#### Performance
-✅ Digest: 62s (vs 21+ min avant)
-✅ Backend startup: ~1s
-✅ Bundle: 159 KB gzipped
+#### ✅ Base de Données
+- PostgreSQL avec 9 tables métier
+- 67 professionnels, 25 copropriétaires, 29 emails, 11 copropriétés
+- Système de conversations persistantes
 
-### KPIs v2.0
-- **Uptime**: >99%
-- **Emails traités**: 50+/jour
-- **Score production**: 92/100
-- **Satisfaction**: 8+/10 NPS
+#### ✅ Infrastructure
+- Docker Compose multi-services
+- Alembic migrations initialisées
+- CI/CD pipeline (GitHub Actions)
+- Frontend build production fonctionnel
 
----
-
-## 🔧 V2.2 - AMÉLIORATIONS UX & ARCHITECTURE ✅
-**Date**: 2-3 Novembre 2025
-**Status**: ✅ COMPLÉTÉ
-**Focus**: Markdown, Action Lists, Documentation
-
-### Réalisations
-- [x] ✅ Markdown rendering (react-markdown + remark-gfm)
-- [x] ✅ Action lists RAG automatiques (détection procédurale)
-- [x] ✅ Documentation digest hybrid architecture
-- [x] ✅ SQL Agent fast formatting (suppression LLM call)
-- [x] ✅ Test data complètes (67 professionnels, 25 résidents, 29 emails, 11 copropriétés)
-- [x] ✅ Services redémarrés avec nouvelles features
-
-**Impact**: UX significativement améliorée, réponses formatées, actions structurées
+### Points à Am\u00e9liorer
+- ⚠️ Tests coverage: 60% (objectif: 80%)
+- ⚠️ Monitoring production à renforcer
+- ⚠️ Validations sécurité à compléter
 
 ---
 
-## 🚀 V2.3 - FONCTIONNALITÉS MANQUANTES CRITIQUES
-**Date**: 4-18 Novembre 2025 (2 semaines)
-**Status**: 🚧 EN COURS - PRIORITÉ MAX
-**Focus**: Upload Documents, Admin Panel, Sécurité
+## 🔧 V3.2 - STABILITÉ & SÉCURITÉ (4 semaines)
+**Date**: 6 Nov - 4 Déc 2025
+**Status**: 🚧 EN COURS
+**Objectif**: Production-grade stable, 0 bugs critiques
 
-### Objectifs
+### Semaine 1: Sécurité Critique (6-13 Nov)
 
-#### 📤 Upload Documents (BLOQUANT UX - P0)
-**Problème**: Drag & drop et attachment ne fonctionnent pas
-**Impact**: Feature advertised mais non-opérationnelle
+#### 🔒 Validations & Protection
+- [ ] SQL query validation (whitelist tables)
+- [ ] Upload file validation (type, size, scan)
+- [ ] Rate limiting (API + upload)
+- [ ] CORS configuration stricte
+- [ ] SECRET_KEY validation en production
+- [ ] Error masking (pas de stack traces)
 
-- [ ] Fix drag & drop upload in MainChatPage.tsx
-- [ ] Implement file attachment button handler
-- [ ] Backend endpoint /api/documents/upload
-- [ ] OCR integration (Tesseract + PyPDF2)
-- [ ] Progress bar upload
-- [ ] Error handling (size, type, upload failed)
-- [ ] Tests E2E upload → OCR → query RAG
+#### 🐛 Bug Fixes
+- [x] ✅ Frontend build TypeScript fixé
+- [x] ✅ Alembic migrations system initialisé
+- [x] ✅ Missing utils.ts créé
+- [ ] Compléter validation des entrées utilisateur
 
-**Success Metrics**:
-- Upload success rate >95%
-- OCR accuracy >90%
-- File types: PDF, DOCX, TXT, PNG, JPG
+**Livrable Semaine 1**: Vulnérabilités critiques éliminées
 
-#### 🎛️ Admin Panel SQL/RAG (BLOQUANT BUSINESS - P0)
-**Problème**: Pas d'interface pour gérer données SQL et RAG
-**Impact**: Impossibilité admin données sans base de données directe
+### Semaine 2: Tests & Qualité (13-20 Nov)
 
-**Right Panel Component**:
-- [ ] Sidebar toggle (open/close)
-- [ ] Tabs: SQL Tables / RAG Documents
-- [ ] Table selector dropdown
+#### 🧪 Tests Backend
+- [ ] Tests unitaires Intent Classifier v3 (15 tests)
+- [ ] Tests RAG Hybrid executor (10 tests)
+- [ ] Tests Conversation persistence (8 tests)
+- [ ] Tests intégration API endpoints (20 tests)
+- [ ] Coverage backend: 60% → 80%
 
-**SQL Management**:
-- [ ] CRUD Copropriétés (create, read, update, delete)
-- [ ] CRUD Copropriétaires
-- [ ] CRUD Professionnels
-- [ ] Bulk operations (CSV import, delete multiple)
-- [ ] Search & filters (nom, ville, category)
-- [ ] Inline editing
+#### 🧪 Tests Frontend
+- [ ] Tests composants critiques (Vitest)
+- [ ] Tests E2E user flows (Playwright):
+  - Upload document → Query RAG
+  - SQL query natural language
+  - Generate email → Send
+  - Digest generation
 
-**RAG Management**:
-- [ ] List indexed documents (title, type, date, status)
-- [ ] View document content
-- [ ] Delete document + embeddings
-- [ ] Re-index document
-- [ ] Bulk delete
-- [ ] Search documents
+**Livrable Semaine 2**: Tests coverage >75%
 
-**Success Metrics**:
-- CRUD operations <500ms
-- Bulk import 100 rows <5s
-- Zero data corruption
+### Semaine 3: Monitoring & Performance (20-27 Nov)
 
-#### 🔒 Sécurité (CRITIQUE - P0)
-**Problème**: Vulnérabilités critiques production
-**Impact**: Risques SQL injection, upload malicieux, DoS
+#### 📊 Monitoring Production
+- [ ] Sentry error tracking
+- [ ] Prometheus + Grafana métriques
+- [ ] Structured logging partout
+- [ ] Health checks détaillés
+- [ ] AlertManager configuration
 
-**SQL Injection Prevention**:
-- [ ] Whitelist tables autorisées (orchestrator_agent.py)
-  ```python
-  ALLOWED_TABLES = ['coproprietes', 'coproprietaires', 'professionnels', 'emails']
-  ```
-- [ ] Validation paramètres utilisateur
-- [ ] Rate limiting SQL queries (100/hour/user)
+#### ⚡ Optimisations
+- [ ] Query optimization (EXPLAIN ANALYZE)
+- [ ] Cache Redis stratégique (notifications, stats)
+- [ ] Connection pooling DB
+- [ ] Bundle frontend <150KB gzipped
 
-**Upload Security**:
-- [ ] File type whitelist (PDF, DOCX, TXT, PNG, JPG only)
-- [ ] File size limit (25 MB max)
-- [ ] Filename sanitization (alphanumeric + underscore)
-- [ ] Antivirus scan (ClamAV) optional
-- [ ] Rate limiting upload (10/hour/user)
+**Livrable Semaine 3**: Monitoring opérationnel
 
-**Production Hardening**:
-- [ ] SECRET_KEY validation (.env.production must be 50+ chars random)
-- [ ] CORS whitelist (settings.py)
-  ```python
-  CORS_ORIGINS = ["https://app.disruptiq.fr", "https://admin.disruptiq.fr"]
-  ```
-- [ ] Error masking (no stack traces in production)
-- [ ] HTTPS enforcement (nginx config)
-- [ ] CSP headers
-
-**Success Metrics**:
-- 0 vulnérabilités critiques (npm audit, safety)
-- Penetration test passed
-
-#### ✅ Confirmations Workflow N8N (SÉCURITÉ - P1)
-**Problème**: Workflows exécutés sans confirmation utilisateur
-**Impact**: Risque actions non-intentionnelles
-
-- [ ] Confirmation dialog component
-- [ ] Preview workflow actions avant exécution
-- [ ] Dry-run mode (simulation)
-- [ ] Historique workflows exécutés
-- [ ] Rollback capability (si possible)
-
-**Success Metrics**:
-- 100% workflows nécessitent confirmation
-- <1% erreurs utilisateur
-
-**Impact Global**: Vulnérabilités éliminées, UX complète
-
-#### 🧪 Tests
-- [ ] Tests unitaires email_processor
-- [ ] Tests unitaires llm_service
-- [ ] Tests intégration RAG service
-- [ ] Tests E2E frontend (Playwright)
-- [ ] Coverage backend >80%
-- [ ] Coverage frontend >60%
-
-**Impact**: Régression impossible, confiance déploiements
-
-#### 🎨 Frontend
-- [ ] Remplacer tous les `any` TypeScript (45 occurrences)
-- [ ] React Query sur toutes les pages (7/13 restantes)
-- [ ] Error boundaries globaux
-- [ ] Implémenter vraies pages Import/Emails/Documents/Settings
-- [ ] Loading skeletons partout
-- [ ] Messages d'erreur explicites
-
-**Impact**: Code maintenable, expérience utilisateur fluide
+### Semaine 4: Documentation & Release (27 Nov - 4 Déc)
 
 #### 📚 Documentation
-- [ ] Nettoyage fichiers racine
-- [ ] Structure /docs/ organisée
-- [ ] API documentation OpenAPI complète
-- [ ] README utilisateur simplifié
-- [ ] CHANGELOG maintenu
-- [ ] Guide contribution
+- [ ] API documentation OpenAPI/Swagger
+- [ ] Guide utilisateur (Quick Start 5 min)
+- [ ] FAQ (20+ questions)
+- [ ] Troubleshooting guide
+- [ ] Video tutorials (3 use cases)
 
-**Impact**: Onboarding développeurs <1h
+#### 🚀 Release v3.2
+- [ ] Staging deployment + smoke tests
+- [ ] Production deployment
+- [ ] Post-deployment monitoring
+- [ ] Retrospective & next sprint planning
 
-### Livrables v2.1
-- ✅ DisruptIQ production-grade stable
-- ✅ Documentation professionnelle
-- ✅ Tests coverage >70%
-- ✅ Aucune vulnérabilité critique
+**Livrable Semaine 4**: v3.2 déployée en production
 
-### KPIs v2.1
-- **Tests coverage**: 70%+ (vs 0% actuel)
-- **TypeScript strict**: 0 `any` (vs 45)
-- **Vulnérabilités**: 0 critiques
-- **Documentation**: Score 8+/10
-
----
-
-## ⚡ V2.5 - OPTIMISATIONS & REFACTORING
-**Date**: 15 Décembre 2025 (4 semaines)
-**Status**: 📋 PLANIFIÉ
-**Focus**: Performance, Scalabilité, UX
-
-### Objectifs
-
-#### 🚀 Performance Backend
-- [ ] Message queue Celery (tasks longues)
-- [ ] Pagination stricte partout (max 100 items)
-- [ ] Cache stratégique (notifications, stats)
-- [ ] Batch LLM classification optimisé
-- [ ] Circuit breaker (LLM, Gmail, N8N)
-- [ ] Connection pooling DB optimisé
-- [ ] Monitoring Sentry/DataDog
-
-**Impact**:
-- Temps réponse API -30%
-- Scalabilité +500% (100+ req/s)
-- MTTR <10min
-
-#### ⚡ Performance Frontend
-- [ ] Code splitting (React.lazy)
-- [ ] Bundle optimization (<150 KB gzipped)
-- [ ] Tree-shaking lucide-react
-- [ ] Table virtualization (react-window)
-- [ ] Image optimization (WebP, lazy load)
-- [ ] Service workers (offline mode basique)
-
-**Impact**:
-- Bundle -40% (250 KB → 150 KB)
-- FCP <1s (vs ~1.5s)
-- LCP <2s
-- Lighthouse Performance >90
-
-#### 🎨 UX/UI
-- [ ] Dark mode (toggle + persistence)
-- [ ] Animations micro-interactions (framer-motion)
-- [ ] Transitions pages fluides
-- [ ] Accessibilité WCAG AA complète
-- [ ] Keyboard shortcuts avancés
-- [ ] Empty states + error states designs
-
-**Impact**:
-- NPS utilisateur >9/10
-- Accessibilité 100%
-- Time-to-value -50%
-
-#### 🔧 Refactoring
-- [ ] Extraire 3 gros composants (>500 lignes)
-- [ ] Hooks custom réutilisables (usePagination, useDebounce, useForm)
-- [ ] Refactor logique dupliquée backend (digest)
-- [ ] Standardiser gestion d'erreurs
-- [ ] DTOs/Schemas séparés des models
-
-**Impact**:
-- Maintenabilité +100%
-- Onboarding nouveaux devs <2h
-
-### Livrables v2.5
-- ✅ DisruptIQ optimisé et scalable
-- ✅ Dark mode + accessibilité complète
-- ✅ Bundle -40%
-- ✅ Tests E2E complets
-- ✅ Monitoring production
-
-### KPIs v2.5
-- **Performance**: Lighthouse >90
-- **Bundle**: <150 KB gzipped
-- **Accessibilité**: WCAG AA 100%
-- **Tests E2E**: Couverture user flows critiques
-- **Clients**: 3-5 clients actifs
-- **MRR**: 2k€-5k€
+### KPIs v3.2
+- **Tests coverage**: 80%+ (backend + frontend)
+- **Vulnérabilités**: 0 critiques, 0 high
+- **Uptime SLA**: 99.5%
+- **Response time p95**: <1s
+- **Documentation score**: 9/10
 
 ---
 
-## 🏢 V3.0 - ENTERPRISE FEATURES
-**Date**: 15 Mars 2026 (3 mois)
+## ⚡ V4.0 - SCALE & PERFORMANCE (3 mois)
+**Date**: Déc 2025 - Fév 2026
 **Status**: 📋 PLANIFIÉ
-**Focus**: Scale, Nouvelles Features, Business
+**Objectif**: 20+ clients, 1000+ req/jour
 
-### Objectifs
+### Features Majeures
 
-#### 🏗️ Architecture Scale
-- [ ] **Multi-tenant** - Isolation par syndic/client
-  - Base de données partitionnée par tenant
-  - Authentification JWT avec tenant_id
-  - UI branded par client
+#### 🚀 Backend Performance
+- [ ] Message Queue (Celery + Redis)
+  - Tasks async: OCR, email classification, digest
+  - Retry logic + dead letter queue
+  - Monitoring (Flower dashboard)
 
-- [ ] **Kubernetes** deployment
-  - Remplacer Docker Compose
-  - Horizontal pod autoscaling
-  - Load balancing automatique
-  - Zero-downtime deployments
+- [ ] Circuit Breaker Pattern
+  - LLM service fallback
+  - Gmail API fallback avec cache
+  - N8N webhooks retry queue
 
-- [ ] **CI/CD complet**
-  - GitHub Actions pipelines
-  - Tests automatisés pré-merge
-  - Déploiement automatique staging/prod
-  - Rollback automatique si erreurs
+- [ ] Database Optimization
+  - Connection pooling (pool size 20)
+  - Read replicas (PostgreSQL)
+  - Query optimization audit
+  - Database indexing review
 
-**Impact**: Capacité 100+ clients, SLA 99.9%
+#### ⚡ Frontend Performance
+- [ ] Code Splitting
+  - Route-based splitting (React.lazy)
+  - Vendor chunking optimisé
+  - Dynamic imports composants lourds
+
+- [ ] Bundle Optimization
+  - Tree-shaking (lucide-react individuellement)
+  - Remove unused dependencies
+  - Target: <130KB gzipped
+
+- [ ] Rendering Optimization
+  - Table virtualization (react-window)
+  - Memo/useMemo optimizations
+  - Debounce search inputs
+  - Lazy load images
+
+#### 🎨 UX Enhancements
+- [ ] Dark Mode
+  - Tailwind dark mode
+  - Toggle + persistence (localStorage)
+  - Sync across sessions
+
+- [ ] Animations
+  - Page transitions (framer-motion)
+  - Micro-interactions (hover, focus)
+  - Skeleton loaders
+
+- [ ] Accessibility WCAG AA
+  - Keyboard navigation complète
+  - Screen reader optimization
+  - Color contrast >4.5:1
+  - Focus management
+
+### KPIs v4.0
+- **Clients actifs**: 20-30
+- **MRR**: 15k€-25k€
+- **Lighthouse score**: >90
+- **Bundle size**: <130KB
+- **API latency p95**: <500ms
+- **Uptime SLA**: 99.9%
+
+---
+
+## 🏢 V4.5 - ENTERPRISE FEATURES (3 mois)
+**Date**: Mar - Mai 2026
+**Status**: 🔮 VISION
+**Objectif**: Enterprise-ready, certifications
+
+### Features Enterprise
+
+#### 🏗️ Multi-Tenancy
+- [ ] Tenant isolation DB (tenant_id partout)
+- [ ] JWT avec tenant_id claim
+- [ ] Middleware tenant resolution
+- [ ] UI branding par tenant (logo, couleurs)
+- [ ] Domain custom (client.disruptiq.fr)
 
 #### 🆕 Nouvelles Features
+- [ ] **OCR Factures Avancé**
+  - Extraction champs structurés (montant, date, fournisseur)
+  - Validation comptable
+  - Export Sage/QuickBooks
 
-**1. OCR Factures Avancé**
-- [ ] Extraction automatique (montant, date, fournisseur)
-- [ ] Validation comptable
-- [ ] Export vers logiciels comptables
-- [ ] ML pour amélioration continue
+- [ ] **Analytics Dashboard**
+  - KPIs syndic (charges, incidents, entretien)
+  - Prédictions budget (ML forecasting)
+  - Comparaisons benchmarks
+  - Exports PDF/Excel
 
-**ROI**: Gain 5h/semaine par syndic
+- [ ] **API Publique RESTful**
+  - Documentation Swagger interactive
+  - Rate limiting par API key
+  - Webhooks sortants
+  - SDK JavaScript + Python
 
-**2. Analytics Dashboard Métier**
-- [ ] KPIs syndic (charges, incidents, entretien)
-- [ ] Prédictions budget annuel
-- [ ] Comparaisons benchmarks secteur
-- [ ] Exports PDF/Excel personnalisables
-
-**ROI**: Décisions data-driven
-
-**3. Gestion Urgences Avancée**
-- [ ] Workflow automatisé (détection → notification → suivi)
-- [ ] Escalade automatique si pas de réponse
-- [ ] SLA tracking par type urgence
-- [ ] Historique incidents avec analytics
-
-**ROI**: Résolution urgences -60%
-
-**4. API Publique RESTful**
-- [ ] Documentation OpenAPI/Swagger
-- [ ] Rate limiting par API key
-- [ ] Webhooks sortants configurables
-- [ ] SDK JavaScript/Python
-
-**ROI**: Intégrations externes infinies
-
-**5. Mobile App (React Native)**
-- [ ] iOS + Android natif
-- [ ] Push notifications temps réel
-- [ ] Mode offline avec sync
-- [ ] Scan QR codes équipements
-
-**ROI**: Adoption mobile +200%
-
-#### 🔗 Intégrations
-- [ ] CRM (Salesforce, HubSpot, Pipedrive)
-- [ ] Comptabilité (Sage, QuickBooks, Xero)
-- [ ] Messagerie (Gmail, Outlook, Slack)
-- [ ] Stockage (Google Drive, Dropbox, OneDrive)
-- [ ] Signature électronique (DocuSign, Adobe Sign)
-
-**ROI**: Écosystème complet
+#### 🔗 Intégrations Tierces
+- [ ] CRM: Salesforce, HubSpot
+- [ ] Comptabilité: Sage, QuickBooks, Xero
+- [ ] Messagerie: Outlook/Exchange, Slack
+- [ ] Stockage: Google Drive, Dropbox, OneDrive
+- [ ] Signature: DocuSign, Adobe Sign
 
 #### 🛡️ Sécurité & Compliance
-- [ ] Certifications ISO 27001
-- [ ] Audit SOC 2 Type II
+- [ ] ISO 27001 preparation
+- [ ] SOC 2 Type II audit
 - [ ] RGPD advanced (droit à l'oubli, portabilité)
-- [ ] Logs audit trail complets
-- [ ] 2FA/MFA authentication
-- [ ] SSO (SAML, OAuth)
+- [ ] 2FA/MFA (TOTP + SMS)
+- [ ] SSO (SAML 2.0, OAuth 2.0)
+- [ ] Logs audit trail immutables
 
-**ROI**: Confiance entreprises, contrats grands comptes
-
-### Livrables v3.0
-- ✅ DisruptIQ enterprise-ready
-- ✅ Multi-tenant + Kubernetes
-- ✅ 5+ nouvelles features majeures
-- ✅ Mobile app iOS/Android
-- ✅ API publique + SDK
-- ✅ Certifications sécurité
-
-### KPIs v3.0
-- **Clients**: 20-30 syndics actifs
-- **MRR**: 20k€-30k€
-- **SLA**: 99.9% uptime
+### KPIs v4.5
+- **Clients actifs**: 30-50
+- **MRR**: 30k€-50k€
+- **ARR**: 360k€-600k€
+- **Intégrations**: 15+
 - **API calls**: 100k+/mois
-- **Mobile users**: 500+
 - **NPS**: >9/10
 
 ---
 
-## 🚀 V3.5 - SCALE & MARKETPLACE
-**Date**: Septembre 2026 (6 mois)
+## 🚀 V5.0 - SCALE GLOBAL (6 mois)
+**Date**: Juin - Nov 2026
 **Status**: 🔮 VISION
-**Focus**: Croissance Exponentielle
+**Objectif**: 100+ clients, expansion internationale
 
-### Objectifs
+### Infrastructure Scale
 
-#### 📈 Scale Infrastructure
-- [ ] Multi-région (EU, US, APAC)
+#### 🌍 Multi-Region
+- [ ] Migration Docker → Kubernetes
+  - Helm charts
+  - Horizontal pod autoscaling
+  - Load balancing
+  - Zero-downtime deployments
+
+- [ ] Déploiement régions:
+  - EU (Francfort)
+  - US (Virginie)
+  - APAC (Tokyo) si besoin
+
 - [ ] CDN global (CloudFront/Cloudflare)
-- [ ] Database sharding automatique
-- [ ] Read replicas multi-zones
-- [ ] Disaster recovery <15min RTO
+- [ ] Database sharding par tenant_id
+- [ ] Latence <100ms mondiale
 
-**Impact**: Latence <100ms mondiale, 99.99% uptime
+#### 📱 Mobile App
+- [ ] React Native iOS + Android
+- [ ] Push notifications (Firebase)
+- [ ] Offline mode + sync
+- [ ] Scan QR codes équipements
+- [ ] Signature tactile
+
+#### 🧠 IA Avancée
+- [ ] **Prédictive Analytics**
+  - Prédiction pannes équipements (ML)
+  - Optimisation budgets (forecasting)
+  - Détection fraudes automatique
+  - Scoring fournisseurs
+
+- [ ] **Génération Avancée**
+  - Documents juridiques automatiques
+  - Résumés AG (Assemblées Générales)
+  - Chatbot vocal (téléphone)
+  - Vision par ordinateur (photos dégâts)
 
 #### 🛒 Marketplace Workflows
-- [ ] Store N8N workflows communautaires
-- [ ] Templates métier pré-configurés
-- [ ] Monétisation workflows premium
+- [ ] Store N8N templates communautaires
 - [ ] Ratings & reviews
-- [ ] Analytics usage workflows
+- [ ] Monétisation workflows premium (10-50€)
+- [ ] Analytics usage
 
-**ROI**: Revenus additionnels 10k€+/mois
-
-#### 🤖 IA Prédictive
-- [ ] Prédiction pannes équipements (ML)
-- [ ] Optimisation budgets (forecasting)
-- [ ] Détection fraudes automatique
-- [ ] Recommandations fournisseurs (scoring)
-- [ ] Sentiment analysis emails
-
-**ROI**: Économies 15%+ charges copropriété
-
-#### 🎓 Self-Service Onboarding
-- [ ] Signup automatique (no-code)
-- [ ] Wizard setup interactif
-- [ ] Import données existantes (CSV, API)
-- [ ] Formation interactive (tours guidés)
-- [ ] Chatbot support H24
-
-**Impact**: Conversion leads +300%, CAC -60%
-
-### Livrables v3.5
-- ✅ Infrastructure mondiale
-- ✅ Marketplace workflows
-- ✅ IA prédictive opérationnelle
-- ✅ Self-service complet
-
-### KPIs v3.5
-- **Clients**: 50-70 syndics
-- **MRR**: 50k€-70k€
-- **Workflows marketplace**: 100+ publics
-- **Conversion leads**: >30%
-- **CAC**: <1000€
-- **LTV**: >20k€
-
----
-
-## 🌟 V4.0 - AI ADVANCED & SCALE
-**Date**: Décembre 2026 (12 mois)
-**Status**: 🔮 VISION
-**Focus**: Leadership Marché
-
-### Objectifs
-
-#### 🧠 IA Générative Avancée
-- [ ] Agent IA autonome (AutoGPT-like)
-- [ ] Génération documents juridiques
-- [ ] Résumés AG automatiques
-- [ ] Chatbot vocal (téléphone)
-- [ ] Vision par ordinateur (photos dégâts)
-
-**Impact**: Automatisation 90% tâches répétitives
-
-#### 🌍 International
-- [ ] Multi-langues (EN, ES, DE, IT)
-- [ ] Compliance locale (GDPR, CCPA, etc.)
-- [ ] Devises multiples
-- [ ] Support 24/7 multilingue
-
-**Impact**: Expansion européenne
-
-#### 📊 Advanced Analytics
-- [ ] BI intégré (Tableau-like)
-- [ ] Reports personnalisables drag-n-drop
-- [ ] ML insights automatiques
-- [ ] Dashboards temps réel
-- [ ] Alertes prédictives
-
-**Impact**: Data-driven à 100%
-
-#### 🏗️ Platform as a Service
-- [ ] White-label pour partenaires
-- [ ] API-first architecture
-- [ ] Webhooks bidirectionnels avancés
-- [ ] Extensibilité plugins
-
-**Impact**: Écosystème partenaires, revenus B2B2C
-
-### Livrables v4.0
-- ✅ IA autonome de niveau expert
-- ✅ Expansion internationale
-- ✅ Platform ouverte partenaires
-
-### KPIs v4.0
-- **Clients**: 100+ syndics
+### KPIs v5.0
+- **Clients actifs**: 100+
 - **MRR**: 100k€+
 - **ARR**: 1.2M€+
-- **Team**: 10-15 personnes
-- **Partenaires**: 5+ intégrateurs
+- **Team size**: 10-15 personnes
+- **Uptime SLA**: 99.99%
 - **Valuation**: 10M€+
 
 ---
@@ -518,167 +329,143 @@ Prod-Ready      │ Optimisations    │ Enterprise       │ Scale            �
 
 ### Métriques Techniques
 
-| Métrique | v2.0 | v2.5 | v3.0 | v4.0 |
-|----------|------|------|------|------|
-| **Tests Coverage** | 70% | 85% | 90%+ | 95%+ |
-| **Uptime SLA** | 99% | 99.5% | 99.9% | 99.99% |
-| **API Response (p95)** | <2s | <1s | <500ms | <200ms |
-| **Frontend Bundle** | 160KB | 150KB | 130KB | 100KB |
-| **Lighthouse Score** | 75 | 90+ | 95+ | 100 |
+| Métrique | v3.0 (Actuel) | v3.2 | v4.0 | v4.5 | v5.0 |
+|----------|---------------|------|------|------|------|
+| **Tests Coverage** | 60% | 80% | 85% | 90% | 95% |
+| **Uptime SLA** | 99% | 99.5% | 99.9% | 99.9% | 99.99% |
+| **API p95 Latency** | ~2s | <1s | <500ms | <300ms | <200ms |
+| **Frontend Bundle** | 273KB | 200KB | 130KB | 120KB | 100KB |
+| **Lighthouse Score** | 85 | 88 | 92 | 95 | 98 |
+| **Vulnerabilities** | 2 moderate | 0 | 0 | 0 | 0 |
 
 ### Métriques Business
 
-| Métrique | v2.0 | v2.5 | v3.0 | v4.0 |
-|----------|------|------|------|------|
-| **Clients Actifs** | 1 | 5 | 30 | 100+ |
-| **MRR** | 0€ | 5k€ | 30k€ | 100k€+ |
-| **ARR** | 0€ | 60k€ | 360k€ | 1.2M€+ |
-| **NPS** | 8 | 9 | 9+ | 10 |
-| **Churn** | 0% | <5% | <3% | <2% |
-| **Team Size** | 1-2 | 2-3 | 5-7 | 10-15 |
+| Métrique | v3.0 | v3.2 | v4.0 | v4.5 | v5.0 |
+|----------|------|------|------|------|------|
+| **Clients Actifs** | 1 | 3-5 | 20-30 | 30-50 | 100+ |
+| **MRR** | 0€ | 2k-4k€ | 15k-25k€ | 30k-50k€ | 100k€+ |
+| **ARR** | 0€ | 24k-48k€ | 180k-300k€ | 360k-600k€ | 1.2M€+ |
+| **NPS** | N/A | 8+ | 9+ | 9+ | 10 |
+| **Churn** | N/A | <10% | <5% | <3% | <2% |
+| **Team Size** | 1-2 | 2-3 | 4-5 | 7-10 | 10-15 |
 
 ### Métriques Produit
 
-| Métrique | v2.0 | v2.5 | v3.0 | v4.0 |
-|----------|------|------|------|------|
-| **Features** | 10 | 15 | 25 | 40+ |
-| **Intégrations** | 1 (N8N) | 3 | 10+ | 20+ |
-| **API Endpoints** | 30 | 40 | 60+ | 100+ |
-| **Emails/jour** | 50 | 200 | 1000+ | 5000+ |
-| **Documents indexés** | 100 | 500 | 5k+ | 50k+ |
+| Métrique | v3.0 | v3.2 | v4.0 | v4.5 | v5.0 |
+|----------|------|------|------|------|------|
+| **Features** | 12 | 15 | 20 | 30 | 45 |
+| **Intégrations** | 3 | 4 | 7 | 15 | 25 |
+| **API Endpoints** | 35 | 40 | 50 | 70 | 100+ |
+| **Emails/jour** | 50 | 200 | 1000 | 3000 | 10000 |
+| **Documents indexés** | 100 | 500 | 2000 | 10000 | 50000 |
 
 ---
 
 ## 🎯 STRATÉGIE GO-TO-MARKET
 
-### Phase 1: Pilote (Q4 2025) - v2.0-2.1
+### Phase 1: Pilote (Q4 2025) - v3.0-3.2
 **Objectif**: Valider product-market fit
 
-- 1 client pilote (syndic 10-20 copropriétés)
+- 1-3 clients pilotes
 - Feedback loops intenses (hebdomadaire)
 - Itérations rapides
-- Case study détaillé
-- Prix: 499€/mois (offre lancement)
+- Case studies détaillés
+- Prix: 499€-749€/mois
 
 **Success Metrics**:
 - NPS >8/10
 - Usage quotidien
 - ROI démontrable (10h+ économisées/semaine)
 
-### Phase 2: Early Adopters (Q1 2026) - v2.5
-**Objectif**: Prouver la scalabilité
+### Phase 2: Early Adopters (Q1 2026) - v4.0
+**Objectif**: Prouver scalabilité
 
-- 3-5 clients payants
-- Référencements croisés
+- 10-20 clients payants
 - Content marketing (blog, webinars)
 - Partenariats syndics professionnels
-- Prix: 749€/mois
+- Prix: 749€-999€/mois
 
 **Success Metrics**:
-- 3 clients actifs
-- MRR 2k€+
+- 15+ clients actifs
+- MRR 10k€+
 - Churn <10%
+- CAC <2000€
 
-### Phase 3: Growth (Q2-Q3 2026) - v3.0
+### Phase 3: Growth (Q2-Q3 2026) - v4.5
 **Objectif**: Croissance exponentielle
 
 - Sales team (1-2 BDR)
 - Marketing automation
 - Inbound marketing fort
-- Partnerships stratégiques
-- Prix: 999€/mois (Standard), 1499€/mois (Premium)
+- Prix: Standard 999€, Premium 1499€
 
 **Success Metrics**:
-- 20+ clients
-- MRR 20k€+
+- 30+ clients
+- MRR 30k€+
 - CAC <2000€
-- LTV >15k€
+- LTV >20k€
 
-### Phase 4: Scale (Q4 2026) - v3.5-4.0
+### Phase 4: Scale (Q4 2026) - v5.0
 **Objectif**: Leadership marché
 
-- Enterprise sales (grands cabinets)
+- Enterprise sales
 - Channel partners
 - International expansion
-- Série A fundraising
-- Prix: Custom enterprise
+- Série A fundraising (3-5M€)
 
 **Success Metrics**:
-- 50+ clients
-- ARR 600k€+
-- Series A 3-5M€
+- 100+ clients
+- ARR 1M€+
 - Team 10+ personnes
 
 ---
 
-## 📋 PROCHAINES ÉTAPES IMMÉDIATES
+## 🚨 RISQUES & MITIGATIONS
 
-### Cette Semaine (1-8 Nov)
-- [x] ✅ Audit complet backend + frontend
-- [x] ✅ Corrections sécurité critiques
-- [ ] Whitelist SQL tables
-- [ ] Tests email_processor
-- [ ] Implémenter vraies pages frontend
+### Risques Techniques
 
-### Semaine 2 (8-15 Nov)
-- [ ] Tests llm_service
-- [ ] Error boundaries frontend
-- [ ] React Query partout
-- [ ] Documentation cleanup
-- [ ] README simplifié
+| Risque | Probabilité | Impact | Mitigation |
+|--------|-------------|--------|------------|
+| **Scalabilité DB** | Moyenne | Élevé | Sharding + read replicas v4.5 |
+| **LLM costs explosion** | Élevée | Moyen | Circuit breaker + caching + batch |
+| **Gmail rate limits** | Moyenne | Moyen | Cache + pagination |
+| **Security breach** | Faible | Très élevé | Audits + pentesting réguliers |
+| **Data loss** | Faible | Très élevé | Backups 3-2-1 + DR plan |
 
-### Semaine 3-4 (15-30 Nov)
+### Risques Business
+
+| Risque | Probabilité | Impact | Mitigation |
+|--------|-------------|--------|------------|
+| **Concurrence** | Élevée | Élevé | Time-to-market + différenciation IA |
+| **Adoption lente IA** | Moyenne | Élevé | UX ultra-simple + onboarding guidé |
+| **Churn élevé** | Moyenne | Élevé | Customer success + NPS tracking |
+
+---
+
+## 📝 PROCHAINES ACTIONS IMMÉDIATES
+
+### Cette Semaine (6-13 Nov)
+- [x] ✅ Audit complet production
+- [x] ✅ Fix frontend build
+- [x] ✅ Initialize Alembic
+- [ ] SQL tables whitelist
+- [ ] Upload file validation
+- [ ] Rate limiting implementation
+
+### Semaine 2 (13-20 Nov)
+- [ ] Tests Intent Classifier v3
+- [ ] Tests RAG Hybrid
+- [ ] Tests Conversation persistence
 - [ ] Tests E2E Playwright
-- [ ] Refactor gros composants
-- [ ] Circuit breaker backend
-- [ ] Dark mode frontend
-- [ ] Release v2.1 🚀
+
+### Semaine 3-4 (20 Nov - 4 Déc)
+- [ ] Monitoring Sentry + Prometheus
+- [ ] Performance optimization
+- [ ] Documentation complète
+- [ ] **Release v3.2 🚀**
 
 ---
 
-## 🤝 CONTRIBUTION & CONTACT
-
-### Comment Contribuer
-1. Lire [CONTRIBUTING.md](./docs/CONTRIBUTING.md)
-2. Prendre un item de la roadmap
-3. Créer une branche feature/v2.x-nom
-4. Pull request avec tests
-5. Review + merge
-
-### Priorités Contribution
-🔴 **Urgent**: v2.1 sécurité + tests
-🟡 **Important**: v2.5 performance
-🟢 **Nice-to-have**: v3.0+ features
-
-### Contact
-- **Product Owner**: [Votre email]
-- **Tech Lead**: [Email]
-- **GitHub Issues**: [URL]
-- **Slack**: #disruptiq-dev
-
----
-
-## 📝 NOTES
-
-### Hypothèses Roadmap
-- Funding disponible pour hiring (v3.0+)
-- Product-market fit validé (v2.5)
-- Traction 20+ clients (v3.0)
-- Équipe 5+ personnes (v3.0)
-
-### Risques Identifiés
-- **Technique**: Scalabilité DB (mitigé par sharding v3.0)
-- **Business**: Concurrence (mitigé par time-to-market)
-- **Produit**: Complexité features (mitigé par user research)
-- **Marché**: Adoption IA syndics (mitigé par UX simple)
-
-### Révisions
-- **Q1 2026**: Révision roadmap post-v2.5
-- **Q2 2026**: Ajustements v3.0 selon traction
-- **Q4 2026**: Planification v5.0
-
----
-
-*Roadmap vivante - Dernière mise à jour: 1er Novembre 2025*
-*Version: 1.0*
-*Prochaine révision: 15 Décembre 2025 (post-v2.5)*
+*Roadmap vivante - Dernière mise à jour: 6 Novembre 2025*
+*Version: 2.0*
+*Prochaine révision: 4 Décembre 2025 (post-v3.2)*
