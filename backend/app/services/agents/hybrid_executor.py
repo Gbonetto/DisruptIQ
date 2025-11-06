@@ -204,9 +204,10 @@ class HybridExecutor:
                 is_procedural=is_procedural
             )
 
-            # Prepare sources
+            # Prepare sources with proper frontend format
             sources = [
                 {
+                    "type": "rag",  # Add type field for frontend display
                     "id": s.id,
                     "title": s.title,
                     "page": s.page,

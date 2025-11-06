@@ -455,7 +455,7 @@ export function MainChatPage() {
                     <ChainOfThoughts
                       thoughts={message.thoughts}
                       isThinking={false}
-                      collapsed={true}
+                      collapsed={false}  // Show expanded by default
                     />
                   )}
 
