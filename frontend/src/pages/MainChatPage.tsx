@@ -20,6 +20,7 @@ interface Message {
   sources?: Source[];
   suggestions?: Suggestion[];
   confirmation_required?: ConfirmationData;
+  data?: any;  // Store response data (email_draft, emails_available, etc.)
   timestamp: Date;
 }
 
@@ -270,7 +271,8 @@ export function MainChatPage() {
           session_id: 'default',  // Use default session for state tracking
           conversation_history: JSON.stringify(messages.slice(-5).map(m => ({
             role: m.role,
-            content: m.content
+            content: m.content,
+            data: m.data  // Include data for context preservation (email_draft, emails_available, etc.)
           })))
         })
       );
@@ -304,6 +306,7 @@ export function MainChatPage() {
           thoughts: validThoughts.length > 0 ? validThoughts : undefined,
           sources: Array.isArray(response.sources) ? response.sources : undefined,
           suggestions: Array.isArray(response.suggestions) ? response.suggestions : undefined,
+          data: response.data,  // Store full response data for context preservation
           timestamp: new Date()
         };
 

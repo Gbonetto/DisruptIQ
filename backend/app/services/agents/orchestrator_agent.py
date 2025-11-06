@@ -110,7 +110,9 @@ class OrchestratorAgent:
                     f"{alt.intent.value}({alt.confidence:.2f})"
                     for alt in classification_result.alternatives
                 ]
-                logger.debug("alternative_intents", alternatives=alt_summary)
+                logger.info("alternative_intents", alternatives=alt_summary)
+            else:
+                logger.info("no_alternative_intents")
 
             # If requires clarification, log it
             if classification_result.requires_clarification:
@@ -269,6 +271,9 @@ class OrchestratorAgent:
                 return await self._handle_trigger_workflow(user_input, db)
 
             else:  # GENERAL_QUESTION
+                logger.info("handling_general_question",
+                           query=user_input[:100],
+                           has_history=len(conversation_history) if conversation_history else 0)
                 return await self._handle_general_question(user_input, conversation_history)
 
         except Exception as e:
