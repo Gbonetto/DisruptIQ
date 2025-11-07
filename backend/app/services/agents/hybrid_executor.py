@@ -173,21 +173,38 @@ class HybridExecutor:
             else:
                 logger.info("rag_no_active_docs_set_searching_all")
 
-        # Retrieve chunks
-        chunks = await rag_service.search(query, limit=5, document_ids=document_ids)
+        # Retrieve chunks (increased from 5 to 15 for better precision)
+        chunks = await rag_service.search(
+            query=query,
+            limit=15,
+            document_ids=document_ids,
+            use_hybrid=True,  # Enable hybrid search (vector + keyword)
+            use_reranker=True,  # Enable cross-encoder re-ranking
+            use_query_expansion=True  # Generate query variants for better recall
+        )
 
-        logger.info("rag_search_returned", chunks_count=len(chunks), query=query[:50])
+        logger.info("rag_search_returned", chunks_count=len(chunks), query=query[:50], filtered_by_docs=document_ids is not None)
 
-        # If no results AND we used a document_ids filter, try without filter
+        # 🔴 CRITICAL FIX: NEVER ignore user's explicit document selection!
+        # If user selected documents and we get no results, it means:
+        # 1. Documents don't contain relevant info → tell user honestly
+        # 2. OR embedding mismatch → needs investigation
+        # DO NOT retry without filter - it breaks user trust!
         if not chunks and document_ids is not None:
-            logger.warning("rag_no_results_with_filter_retrying_without",
-                          document_ids=document_ids)
-            chunks = await rag_service.search(query, limit=5, document_ids=None)
-            logger.info("rag_search_without_filter_returned", chunks_count=len(chunks))
+            logger.warning("rag_no_results_in_selected_documents",
+                          document_ids=document_ids,
+                          query=query[:50],
+                          message="User selected specific documents but they don't contain relevant info")
+            # DO NOT RETRY - respect user's selection!
 
         if not chunks:
-            # Provide more helpful error message
-            message = "Je n'ai trouvé aucune information pertinente pour répondre à votre question.\n\n**Suggestions** :\n1. Vérifiez que des documents sont bien uploadés dans le panneau de droite\n2. Reformulez votre question avec d'autres mots\n3. Précisez le contexte (noms, dates, catégories)\n\nSi vous cherchez dans les documents, assurez-vous qu'ils contiennent l'information recherchée."
+            # Provide context-aware error message
+            if document_ids is not None:
+                # User selected specific documents
+                message = f"❌ Je n'ai trouvé aucune information pertinente dans les {len(document_ids)} document(s) sélectionné(s).\n\n**Raisons possibles** :\n1. Ces documents ne contiennent pas l'information recherchée\n2. L'information existe mais est formulée différemment\n3. Les documents n'ont peut-être pas été correctement indexés\n\n**Suggestions** :\n- Reformulez votre question avec d'autres mots\n- Vérifiez que vous avez sélectionné les bons documents\n- Décochez les filtres pour rechercher dans tous les documents"
+            else:
+                # General search across all documents
+                message = "Je n'ai trouvé aucune information pertinente pour répondre à votre question.\n\n**Suggestions** :\n1. Vérifiez que des documents sont bien uploadés dans le panneau de droite\n2. Reformulez votre question avec d'autres mots\n3. Précisez le contexte (noms, dates, catégories)\n\nSi vous cherchez dans les documents, assurez-vous qu'ils contiennent l'information recherchée."
 
             rag_result = RAGResult(
                 success=True,
@@ -204,7 +221,7 @@ class HybridExecutor:
                 is_procedural=is_procedural
             )
 
-            # Prepare sources with proper frontend format
+            # Prepare sources with proper frontend format (preserve all scoring metadata)
             sources = [
                 {
                     "type": "rag",  # Add type field for frontend display
@@ -212,7 +229,11 @@ class HybridExecutor:
                     "title": s.title,
                     "page": s.page,
                     "confidence": s.confidence,
-                    "document_id": s.document_id
+                    "document_id": s.document_id,
+                    "text": s.excerpt,  # Add text for display
+                    "score": s.vector_score if s.vector_score else s.confidence,  # Fallback to confidence
+                    "rrf_score": s.rrf_score,
+                    "cross_encoder_score": s.cross_encoder_score
                 }
                 for s in synthesized.sources
             ]

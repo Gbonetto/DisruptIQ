@@ -6,9 +6,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, FileText, X } from 'lucide-react';
 import { ChainOfThoughts } from '@/components/ChainOfThoughts';
+import { ConversationSidebar } from '@/components/ConversationSidebar';
 import { toast } from 'sonner';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MessageRenderer } from '@/components/MessageRenderer';
 import { DocumentPanel } from '@/components/DocumentPanel/DocumentPanel';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -72,6 +72,8 @@ export function MainChatPage() {
   const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [documents, setDocuments] = useState<any[]>([]);
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<number | undefined>(undefined);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -93,6 +95,83 @@ export function MainChatPage() {
     const interval = setInterval(loadDocs, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // Load conversations
+  useEffect(() => {
+    const loadConversations = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/conversations/`);
+        const data = await response.json();
+        setConversations(data || []);
+      } catch (error) {
+        console.error('Failed to load conversations:', error);
+      }
+    };
+    loadConversations();
+  }, []);
+
+  // Conversation handlers
+  const handleNewConversation = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/conversations/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Nouvelle conversation' })
+      });
+      const newConv = await response.json();
+      setConversations(prev => [newConv, ...prev]);
+      setCurrentConversationId(newConv.id);
+      setMessages([]);
+      toast.success('Nouvelle conversation créée');
+    } catch (error) {
+      console.error('Failed to create conversation:', error);
+      toast.error('Erreur lors de la création');
+    }
+  };
+
+  const handleSelectConversation = async (id: number) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/conversations/${id}`);
+      const data = await response.json();
+      setCurrentConversationId(id);
+      setMessages(data.messages || []);
+    } catch (error) {
+      console.error('Failed to load conversation:', error);
+      toast.error('Erreur lors du chargement');
+    }
+  };
+
+  const handleRenameConversation = async (id: number, newTitle: string) => {
+    try {
+      await fetch(`${API_BASE_URL}/api/conversations/${id}/title?title=${encodeURIComponent(newTitle)}`, {
+        method: 'PUT'
+      });
+      setConversations(prev =>
+        prev.map(c => c.id === id ? { ...c, title: newTitle } : c)
+      );
+      toast.success('Conversation renommée');
+    } catch (error) {
+      console.error('Failed to rename conversation:', error);
+      toast.error('Erreur lors du renommage');
+    }
+  };
+
+  const handleDeleteConversation = async (id: number) => {
+    try {
+      await fetch(`${API_BASE_URL}/api/conversations/${id}`, {
+        method: 'DELETE'
+      });
+      setConversations(prev => prev.filter(c => c.id !== id));
+      if (currentConversationId === id) {
+        setCurrentConversationId(undefined);
+        setMessages([]);
+      }
+      toast.success('Conversation supprimée');
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+      toast.error('Erreur lors de la suppression');
+    }
+  };
 
   // Auto-scroll
   useEffect(() => {
@@ -356,15 +435,27 @@ export function MainChatPage() {
   };
 
   return (
-    <div
-      className="flex flex-col h-screen bg-retro-dark relative"
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
-      {/* Document Panel */}
-      <DocumentPanel isOpen={isPanelOpen} onClose={() => setIsPanelOpen(false)} />
+    <div className="flex h-screen bg-retro-dark">
+      {/* Sidebar */}
+      <ConversationSidebar
+        conversations={conversations}
+        currentConversationId={currentConversationId}
+        onSelectConversation={handleSelectConversation}
+        onNewConversation={handleNewConversation}
+        onRenameConversation={handleRenameConversation}
+        onDeleteConversation={handleDeleteConversation}
+      />
+
+      {/* Main Chat Area */}
+      <div
+        className="flex-1 flex flex-col bg-retro-dark relative"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* Document Panel */}
+        <DocumentPanel isOpen={isPanelOpen} onClose={() => setIsPanelOpen(false)} />
 
       {/* Drag & Drop Overlay */}
       {isDragging && (
@@ -448,128 +539,25 @@ export function MainChatPage() {
                   <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                 </div>
               ) : (
-                /* Assistant message */
-                <div className="space-y-3 max-w-full">
-                  {/* Chain of Thoughts */}
-                  {message.thoughts && message.thoughts.length > 0 && (
-                    <ChainOfThoughts
-                      thoughts={message.thoughts}
-                      isThinking={false}
-                      collapsed={false}  // Show expanded by default
-                    />
-                  )}
-
-                  {/* Main response */}
-                  <div className="prose prose-sm max-w-none prose-invert">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        // Custom styling for links
-                        a: ({ node, ...props }) => (
-                          <a {...props} className="text-neon-cyan hover:neon-glow-cyan transition-all" target="_blank" rel="noopener noreferrer" />
-                        ),
-                        // Code blocks
-                        code: ({ node, inline, ...props }: any) => (
-                          inline
-                            ? <code className="bg-retro-gray px-1.5 py-0.5 rounded text-sm font-mono text-neon-green border border-neon-green/30" {...props} />
-                            : <code className="block bg-retro-gray p-3 rounded text-sm font-mono overflow-x-auto text-neon-green border border-neon-green/30" {...props} />
-                        ),
-                        // Lists
-                        ul: ({ node, ...props }) => (
-                          <ul className="list-disc list-inside space-y-1 my-2 text-gray-300" {...props} />
-                        ),
-                        ol: ({ node, ...props }) => (
-                          <ol className="list-decimal list-inside space-y-1 my-2 text-gray-300" {...props} />
-                        ),
-                        // Paragraphs
-                        p: ({ node, ...props }) => (
-                          <p className="mb-2 text-gray-200" {...props} />
-                        ),
-                      }}
-                    >
-                      {message.content}
-                    </ReactMarkdown>
-                  </div>
-
-                  {/* Sources */}
-                  {message.sources && Array.isArray(message.sources) && message.sources.length > 0 && (
-                    <div className="bg-retro-gray/50 rounded-lg p-3 space-y-2 border border-neon-cyan/30">
-                      <div className="text-xs font-medium text-neon-cyan font-pixel">Sources :</div>
-                      {message.sources.filter(s => s && s.title).map((source, i) => (
-                        <div key={i} className="text-xs text-gray-400">
-                          <span className="font-medium">
-                            {source.type === 'sql' && '📊'}
-                            {source.type === 'rag' && '📄'}
-                            {source.type === 'web' && '🌐'}
-                            {' '}{source.title}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Contextual suggestions */}
-                  {message.suggestions && message.suggestions.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {message.suggestions.map((suggestion, i) => (
-                        <button
-                          key={i}
-                          onClick={() => handleSuggestionClick(suggestion)}
-                          className="px-3 py-1.5 text-sm bg-retro-gray text-white border border-neon-violet/50 hover-neon-violet rounded-full transition-colors pixel-border-sm"
-                        >
-                          {suggestion.icon && <span className="mr-1">{suggestion.icon}</span>}
-                          {suggestion.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Confirmation required */}
-                  {message.confirmation_required && (
-                    <div className="bg-retro-gray/80 border border-neon-pink rounded-lg p-4 space-y-3 neon-border-pink">
-                      <div className="flex items-start gap-2">
-                        <div className="text-neon-pink mt-0.5">⚠️</div>
-                        <div className="flex-1">
-                          <div className="font-medium text-neon-pink mb-1 font-pixel">
-                            Confirmation requise
-                          </div>
-                          <div className="text-sm text-gray-200 mb-2">
-                            {message.confirmation_required.action}
-                          </div>
-                          <div className="text-xs text-gray-400 space-y-1">
-                            {message.confirmation_required.impact.map((item, i) => (
-                              <div key={i}>• {item}</div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleConfirm}
-                          className="px-4 py-2 bg-neon-pink hover:animate-neon-pulse text-white rounded-lg text-sm font-medium pixel-border-sm"
-                        >
-                          Confirmer
-                        </button>
-                        <button
-                          onClick={handleCancel}
-                          className="px-4 py-2 bg-retro-gray border border-gray-600 hover:border-gray-400 text-gray-300 rounded-lg text-sm font-medium"
-                        >
-                          Annuler
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                /* Assistant message - Clean structure with MessageRenderer */
+                <article className="assistant-message" data-message-id={idx}>
+                  <MessageRenderer
+                    message={message.content}
+                    isStreaming={false}
+                  />
+                </article>
               )}
             </div>
           ))}
 
-          {/* Current thinking (streaming) */}
+          {/* Current thinking (streaming) - Only show if there's no content yet */}
           {isStreaming && currentThoughts.length > 0 && (
-            <ChainOfThoughts
-              thoughts={currentThoughts}
-              isThinking={true}
-            />
+            <div className="animate-pixel-fade-in">
+              <ChainOfThoughts
+                thoughts={currentThoughts}
+                isThinking={true}
+              />
+            </div>
           )}
 
           <div ref={messagesEndRef} />
@@ -683,6 +671,7 @@ export function MainChatPage() {
             Tapez votre demande en langage naturel • Shift + Enter pour nouvelle ligne
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

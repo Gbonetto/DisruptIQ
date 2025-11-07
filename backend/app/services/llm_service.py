@@ -1,11 +1,12 @@
 """
 LLM Service
-Wrapper for OpenAI and Anthropic APIs with LangChain
+Wrapper for Mistral AI (primary), OpenAI/Anthropic (fallback)
+Migrated to Mistral for better French support, GDPR compliance, and lower costs
 """
 
 import structlog
 from typing import List, Dict, Any, Optional
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_mistralai import ChatMistralAI, MistralAIEmbeddings
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema import HumanMessage, SystemMessage
 
@@ -15,37 +16,41 @@ logger = structlog.get_logger()
 
 
 class LLMService:
-    """Service for LLM operations"""
+    """Service for LLM operations (Mistral AI primary)"""
 
     def __init__(self):
-        # Initialize OpenAI (primary)
-        self.chat_model = ChatOpenAI(
-            model=settings.OPENAI_MODEL,
-            api_key=settings.OPENAI_API_KEY,
+        # Initialize Mistral AI (primary) - European, GDPR-compliant, French-optimized
+        self.chat_model = ChatMistralAI(
+            model=settings.MISTRAL_MODEL,
+            api_key=settings.MISTRAL_API_KEY,
             temperature=0.1,
+            timeout=120,  # 120 seconds timeout
         )
 
-        # Initialize embeddings
-        self.embeddings = OpenAIEmbeddings(
-            model=settings.OPENAI_EMBEDDING_MODEL,
-            api_key=settings.OPENAI_API_KEY,
+        # Initialize Mistral embeddings (1024 dimensions)
+        self.embeddings = MistralAIEmbeddings(
+            model=settings.MISTRAL_EMBEDDING_MODEL,
+            api_key=settings.MISTRAL_API_KEY
         )
 
-        # Fallback to Claude if configured
+        logger.info("mistral_ai_initialized", model=settings.MISTRAL_MODEL, embedding_model=settings.MISTRAL_EMBEDDING_MODEL)
+
+        # OpenAI fallback (deprecated but kept for compatibility)
         self.fallback_model = None
-        if settings.ANTHROPIC_API_KEY and settings.ANTHROPIC_API_KEY != "sk-ant-your-anthropic-key-here":
+        if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY != "":
             try:
-                from langchain_anthropic import ChatAnthropic
-                self.fallback_model = ChatAnthropic(
-                    model=settings.ANTHROPIC_MODEL,
-                    api_key=settings.ANTHROPIC_API_KEY,
+                from langchain_openai import ChatOpenAI
+                self.fallback_model = ChatOpenAI(
+                    model=settings.OPENAI_MODEL,
+                    api_key=settings.OPENAI_API_KEY,
                     temperature=0.1,
+                    request_timeout=120.0
                 )
-                logger.info("anthropic_fallback_enabled")
-            except ImportError:
-                logger.warning("anthropic_not_installed", message="Install langchain-anthropic for fallback support")
+                logger.info("openai_fallback_enabled")
+            except Exception as e:
+                logger.warning("openai_fallback_init_failed", error=str(e))
         else:
-            logger.info("anthropic_fallback_disabled")
+            logger.info("openai_fallback_disabled")
 
     async def classify_email_urgency(
         self,
@@ -55,7 +60,7 @@ class LLMService:
         snippet: str
     ) -> str:
         """
-        Classify email urgency using LLM
+        Classify email urgency using Mistral AI
 
         Returns: "urgent", "important", or "routine"
         """
@@ -90,10 +95,11 @@ Urgence:""")
             return urgency
 
         except Exception as e:
-            logger.error("llm_classification_error", error=str(e))
+            logger.error("llm_classification_error", error=str(e), provider="mistral")
             # Try fallback model
             if self.fallback_model:
                 try:
+                    logger.info("using_openai_fallback")
                     messages = prompt.format_messages()
                     response = await self.fallback_model.ainvoke(messages)
                     return response.content.strip().lower()
@@ -144,11 +150,11 @@ Réponds au format JSON:
             import json
             result = json.loads(response.content)
 
-            logger.info("email_generated", prompt=prompt[:50])
+            logger.info("email_generated", prompt=prompt[:50], provider="mistral")
             return result
 
         except Exception as e:
-            logger.error("email_generation_error", error=str(e))
+            logger.error("email_generation_error", error=str(e), provider="mistral")
             return {
                 "subject": "Email",
                 "body": "Erreur lors de la génération de l'email."
@@ -160,7 +166,7 @@ Réponds au format JSON:
         document_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Extract structured information from document text
+        Extract structured information from document text using Mistral AI
 
         Returns:
             Dict with extracted fields
@@ -189,11 +195,11 @@ Extrait les informations pertinentes et retourne au format JSON:
             import json
             result = json.loads(response.content)
 
-            logger.info("document_analyzed", doc_type=result.get('document_type'))
+            logger.info("document_analyzed", doc_type=result.get('document_type'), provider="mistral")
             return result
 
         except Exception as e:
-            logger.error("document_analysis_error", error=str(e))
+            logger.error("document_analysis_error", error=str(e), provider="mistral")
             return {
                 "document_type": "autre",
                 "summary": "Analyse non disponible"
@@ -201,21 +207,21 @@ Extrait les informations pertinentes et retourne au format JSON:
 
     async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Get embeddings for a list of texts
+        Get embeddings for a list of texts using Mistral AI (1024 dimensions)
 
         Args:
             texts: List of text strings
 
         Returns:
-            List of embedding vectors
+            List of embedding vectors (1024-dimensional)
         """
         try:
             embeddings = await self.embeddings.aembed_documents(texts)
-            logger.info("embeddings_generated", count=len(texts))
+            logger.info("embeddings_generated", count=len(texts), dimensions=1024, provider="mistral")
             return embeddings
 
         except Exception as e:
-            logger.error("embeddings_error", error=str(e))
+            logger.error("embeddings_error", error=str(e), provider="mistral")
             return []
 
     async def answer_question(
@@ -225,7 +231,7 @@ Extrait les informations pertinentes et retourne au format JSON:
         conversation_history: Optional[List[Dict]] = None
     ) -> str:
         """
-        Answer a question based on context (RAG)
+        Answer a question based on context (RAG) using Mistral AI
 
         Args:
             question: User's question
@@ -262,11 +268,11 @@ Réponse:"""
 
         try:
             response = await self.chat_model.ainvoke(messages)
-            logger.info("question_answered", question=question[:50])
+            logger.info("question_answered", question=question[:50], provider="mistral")
             return response.content
 
         except Exception as e:
-            logger.error("answer_error", error=str(e))
+            logger.error("answer_error", error=str(e), provider="mistral")
             return "Désolé, je n'ai pas pu répondre à votre question."
 
     async def generate_response(
@@ -276,7 +282,7 @@ Réponse:"""
         temperature: float = 0.7
     ) -> str:
         """
-        Generic text generation method
+        Generic text generation method using Mistral AI
 
         Args:
             prompt: The input prompt
@@ -292,15 +298,16 @@ Réponse:"""
                 max_tokens=max_tokens,
                 temperature=temperature
             )
+            logger.info("response_generated", provider="mistral")
             return response.content
 
         except Exception as e:
-            logger.error("generate_response_error", error=str(e))
+            logger.error("generate_response_error", error=str(e), provider="mistral")
 
-            # Try fallback if available
+            # Try OpenAI fallback if available
             if self.fallback_model:
                 try:
-                    logger.info("using_anthropic_fallback")
+                    logger.info("using_openai_fallback")
                     response = await self.fallback_model.ainvoke(
                         [HumanMessage(content=prompt)],
                         max_tokens=max_tokens,

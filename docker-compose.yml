@@ -54,13 +54,24 @@ services:
       DATABASE_URL: postgresql+asyncpg://disruptiq:disruptiq_password@postgres:5432/disruptiq
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
+      # Mistral AI (Primary)
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY}
+      MISTRAL_MODEL: ${MISTRAL_MODEL}
+      MISTRAL_EMBEDDING_MODEL: ${MISTRAL_EMBEDDING_MODEL}
+      MISTRAL_VISION_MODEL: ${MISTRAL_VISION_MODEL}
+      # OpenAI (Fallback)
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # Anthropic (Deprecated)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # N8N
       N8N_WEBHOOK_BASE_URL: ${N8N_WEBHOOK_BASE_URL}
       N8N_WEBHOOK_AUTH_TOKEN: ${N8N_WEBHOOK_AUTH_TOKEN}
+      # Security
       SECRET_KEY: ${SECRET_KEY}
+      # Gmail
       GMAIL_CREDENTIALS_PATH: ${GMAIL_CREDENTIALS_PATH}
       GMAIL_TOKEN_PATH: ${GMAIL_TOKEN_PATH}
+      # SSL
       REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
     volumes:

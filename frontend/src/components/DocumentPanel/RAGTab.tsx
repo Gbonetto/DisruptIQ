@@ -350,8 +350,8 @@ export function RAGTab() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Chargement des documents...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-neon-cyan mx-auto mb-4"></div>
+          <p className="text-gray-400 font-pixel">Chargement des documents...</p>
         </div>
       </div>
     );
@@ -364,17 +364,17 @@ export function RAGTab() {
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+        className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors pixel-border-sm ${
           isDragging
-            ? 'border-indigo-500 bg-indigo-50'
-            : 'border-gray-300 hover:border-indigo-400 hover:bg-gray-50'
+            ? 'border-neon-cyan bg-retro-dark/50 neon-glow-cyan'
+            : 'border-neon-violet/50 hover:border-neon-cyan/70 hover:bg-retro-dark/30'
         }`}
       >
-        <Upload className={`w-10 h-10 mx-auto mb-3 ${isDragging ? 'text-indigo-600' : 'text-gray-400'}`} />
-        <p className="text-sm font-medium text-gray-700 mb-1">
+        <Upload className={`w-10 h-10 mx-auto mb-3 ${isDragging ? 'text-neon-cyan' : 'text-gray-400'}`} />
+        <p className="text-sm font-medium text-white mb-1">
           Déposez vos fichiers ici ou cliquez pour parcourir
         </p>
-        <p className="text-xs text-gray-500 mb-3">
+        <p className="text-xs text-gray-400 mb-3">
           PDF, DOCX, TXT (max 10 MB)
         </p>
         <input
@@ -387,7 +387,7 @@ export function RAGTab() {
         />
         <label
           htmlFor="file-upload"
-          className="inline-block px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 cursor-pointer transition-colors"
+          className="inline-block px-4 py-2 retro-gradient-cyber text-white text-sm font-medium rounded-lg hover:animate-neon-pulse cursor-pointer transition-colors pixel-border-sm"
         >
           Parcourir
         </label>
@@ -397,14 +397,14 @@ export function RAGTab() {
       {Object.keys(uploadProgress).length > 0 && (
         <div className="space-y-2">
           {Object.entries(uploadProgress).map(([filename, progress]) => (
-            <div key={filename} className="bg-blue-50 p-3 rounded-lg">
+            <div key={filename} className="bg-retro-dark p-3 rounded-lg border border-neon-cyan/50 pixel-border-sm">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-700">{filename}</span>
-                <span className="text-xs text-gray-600">{Math.round(progress)}%</span>
+                <span className="text-sm font-medium text-white">{filename}</span>
+                <span className="text-xs text-neon-cyan font-pixel">{Math.round(progress)}%</span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-1.5">
+              <div className="w-full bg-retro-gray rounded-full h-1.5">
                 <div
-                  className="bg-indigo-600 h-1.5 rounded-full transition-all"
+                  className="bg-neon-cyan h-1.5 rounded-full transition-all animate-neon-pulse"
                   style={{ width: `${progress}%` }}
                 />
               </div>
@@ -415,19 +415,19 @@ export function RAGTab() {
 
       {/* En-tête Liste Documents */}
       <div className="flex items-center justify-between pt-2">
-        <h3 className="text-sm font-semibold text-gray-900">
+        <h3 className="text-sm font-semibold text-white font-pixel">
           Documents Actifs ({activeDocIds.size}/{documents.length})
         </h3>
         <div className="flex gap-2">
           <button
             onClick={selectAll}
-            className="text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+            className="text-xs text-neon-cyan hover:neon-glow-cyan font-medium transition-all"
           >
             Tout sélectionner
           </button>
           <button
             onClick={clearAll}
-            className="text-xs text-gray-600 hover:text-gray-700 font-medium"
+            className="text-xs text-gray-400 hover:text-white font-medium transition-all"
           >
             Tout désélectionner
           </button>
@@ -437,8 +437,8 @@ export function RAGTab() {
       {/* Liste Documents */}
       {documents.length === 0 ? (
         <div className="text-center py-12">
-          <FileText className="w-16 h-16 mx-auto text-gray-300 mb-4" />
-          <p className="text-gray-600 font-medium mb-2">Aucun document</p>
+          <FileText className="w-16 h-16 mx-auto text-gray-600 mb-4" />
+          <p className="text-gray-400 font-medium mb-2 font-pixel">Aucun document</p>
           <p className="text-sm text-gray-500">Uploadez votre premier document pour commencer</p>
         </div>
       ) : (
@@ -449,10 +449,10 @@ export function RAGTab() {
             return (
               <div
                 key={doc.id}
-                className={`p-3 rounded-lg border transition-all ${
+                className={`p-3 rounded-lg border transition-all pixel-border-sm ${
                   isActive
-                    ? 'border-indigo-200 bg-indigo-50'
-                    : 'border-gray-200 bg-white opacity-60'
+                    ? 'border-neon-cyan bg-retro-dark neon-border-cyan'
+                    : 'border-neon-violet/20 bg-retro-dark/50 opacity-60'
                 }`}
               >
                 <div className="flex items-start gap-3">
@@ -471,24 +471,24 @@ export function RAGTab() {
                   {/* Document Info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2 mb-1">
-                      <h4 className="text-sm font-medium text-gray-900 truncate">
+                      <h4 className="text-sm font-medium text-white truncate">
                         {doc.original_filename}
                       </h4>
                       {isActive && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 whitespace-nowrap">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-neon-green/20 text-neon-green whitespace-nowrap pixel-border-sm border border-neon-green/50">
                           Actif
                         </span>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+                    <div className="flex items-center gap-2 text-xs text-gray-400 mb-2">
                       <span>{formatFileSize(doc.file_size)}</span>
                       <span>•</span>
                       <span>{formatDate(doc.uploaded_at)}</span>
                       {doc.indexed && (
                         <>
                           <span>•</span>
-                          <span className="text-green-600 font-medium">Indexé</span>
+                          <span className="text-neon-green font-medium">Indexé</span>
                         </>
                       )}
                     </div>
@@ -497,7 +497,7 @@ export function RAGTab() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleDelete(doc)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 rounded transition-colors"
+                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-neon-pink hover:bg-retro-dark hover:border-neon-pink/50 rounded transition-colors border border-transparent"
                       >
                         <Trash2 className="w-3 h-3" />
                         Supprimer
@@ -513,11 +513,11 @@ export function RAGTab() {
 
       {/* Bannière Info */}
       {documents.length > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+        <div className="bg-retro-dark/50 border border-neon-violet/50 rounded-lg p-3 pixel-border-sm">
           <div className="flex gap-2">
-            <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-            <div className="text-xs text-blue-800">
-              <p className="font-medium mb-1">Comment ça fonctionne</p>
+            <AlertCircle className="w-4 h-4 text-neon-violet mt-0.5 flex-shrink-0" />
+            <div className="text-xs text-gray-300">
+              <p className="font-medium mb-1 text-neon-violet font-pixel">Comment ça fonctionne</p>
               <p>Seuls les documents cochés seront interrogés lors de vos recherches. Décochez les documents que vous souhaitez exclure des résultats.</p>
             </div>
           </div>

@@ -14,7 +14,11 @@ import re
 import structlog
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel
+from datetime import datetime
+import uuid
 from app.services.llm_service import LLMService
+from app.services.table_generation_service import TableGenerationService
+from app.api.endpoints.export import cache_table_data
 
 logger = structlog.get_logger()
 
@@ -28,6 +32,9 @@ class Source(BaseModel):
     excerpt: str  # First 200 chars of chunk
     confidence: float  # Reranked score (0-1)
     chunk_text: str  # Full chunk text
+    rrf_score: Optional[float] = None  # Reciprocal Rank Fusion score
+    cross_encoder_score: Optional[float] = None  # Cross-encoder re-ranking score
+    vector_score: Optional[float] = None  # Original vector similarity score
 
 
 class CitedSentence(BaseModel):
@@ -120,11 +127,17 @@ class SynthesisAgent:
                 max_tokens=800
             )
 
-            # Step 5: Parse citations and sentences
+            # Step 5: Check if table was requested and generate if needed
+            if self._detect_table_request(query):
+                table_html = await self._generate_table_from_response(response_text, sources, query)
+                if table_html:
+                    response_text += f"\n\n{table_html}"
+
+            # Step 6: Parse citations and sentences
             sentences = self._parse_sentences_with_citations(response_text)
 
-            # Step 6: Format final response with source footer
-            formatted_text = self._format_with_source_footer(response_text, sources)
+            # Step 7: Format final response with IEEE citations, CoT, and professional markdown
+            formatted_text = self._format_response_with_sources(response_text, sources, enable_cot=True)
 
             # Step 7: Compute overall confidence
             overall_confidence = self._compute_overall_confidence(sources, sentences)
@@ -181,7 +194,10 @@ class SynthesisAgent:
                 page=metadata.get("page"),
                 excerpt=chunk.get("text", "")[:200],
                 confidence=chunk.get("score", 0.0),
-                chunk_text=chunk.get("text", "")
+                chunk_text=chunk.get("text", ""),
+                rrf_score=chunk.get("rrf_score"),
+                cross_encoder_score=chunk.get("cross_encoder_score"),
+                vector_score=chunk.get("score", 0.0)  # Original vector score
             )
             sources.append(source)
 
@@ -212,15 +228,32 @@ class SynthesisAgent:
         # Format sources for prompt
         sources_text = self._format_sources_for_prompt(sources)
 
-        # Base rules
+        # Base rules with Chain-of-Thought
         base_rules = """
-RÈGLES IMPÉRATIVES DE CITATION :
-1. Chaque affirmation factuelle DOIT être suivie de [N] où N est le numéro de la source
-2. Format exact : "Le délai est de 24 heures[1]." (citation AVANT le point)
-3. Si plusieurs sources confirment la même info : [1,2]
-4. Si aucune source ne contient l'info, DIS "Je n'ai pas trouvé cette information dans les documents"
-5. N'invente JAMAIS d'information non présente dans les sources
-6. Si sources se contredisent, SIGNALE-LE explicitement avec les deux versions citées
+CONSIGNES DE RÉPONSE :
+1. **Chain-of-Thought (CoT)** :
+   - Commence par réfléchir dans <thinking>...</thinking>
+   - Explique ton raisonnement étape par étape (style Deepseek)
+   - Analyse : Que demande l'utilisateur ? Quelles sources sont pertinentes ?
+   - Synthèse : Comment structurer la réponse optimale ?
+
+2. **Réponse finale** (après le </thinking>) :
+   - Utilise un markdown sobre et élégant
+   - Structure avec ##, **, listes à puces/numéros selon besoin
+   - Cite chaque affirmation factuelle avec [N]
+   - N'ajoute AUCUNE section "Sources :" ou "📄" - sera géré automatiquement
+   - N'ajoute AUCUN titre comme "Factures dans votre contrat" - juste la réponse directe
+
+3. **Citations IEEE** :
+   - Format exact : "Le délai est de 24 heures[1]." (citation AVANT le point)
+   - Si plusieurs sources : [1,2]
+   - Si aucune source : "Je n'ai pas trouvé cette information"
+   - Si contradictions : SIGNALE-LE avec les deux versions citées
+
+4. **Règles absolues** :
+   - N'invente JAMAIS d'information non présente dans les sources
+   - Reste professionnel, clair, et structuré
+   - N'ajoute AUCUNE décoration type "Sources :" ou liens - c'est géré automatiquement
 """
 
         # Procedural-specific rules
@@ -233,10 +266,10 @@ RÈGLES IMPÉRATIVES DE CITATION :
 
         # Informational-specific rules
         informational_rules = """
-7. Réponds de manière naturelle et conversationnelle
+7. Réponds de manière naturelle et directe
 8. Synthétise les informations de plusieurs sources si pertinent
-9. Utilise markdown pour structurer (**, listes si approprié)
-10. Reste concis mais complet
+9. Pour les tableaux : génère UNIQUEMENT le tableau, sans texte explicatif avant/après
+10. Reste concis, sobre et élégant
 """
 
         # Context section
@@ -404,38 +437,171 @@ Réponds :"""
         logger.debug("sentences_parsed", count=len(sentences))
         return sentences
 
-    def _format_with_source_footer(self, text: str, sources: List[Source]) -> str:
+    def _format_response_with_sources(self, response_text: str, sources: List[Source], enable_cot: bool = True) -> str:
         """
-        Add formatted source list at bottom of response
+        Format response with special markers for frontend parsing
+        Uses HTML comment markers for intelligent frontend parsing
 
         Args:
-            text: Response text with inline citations
-            sources: List of sources
+            response_text: Raw response from LLM (may contain <thinking> tags)
+            sources: List of sources for IEEE citation
+            enable_cot: Whether to include Chain-of-Thought
 
         Returns:
-            Formatted text with source footer
-
-        Example output:
-        ---
-        📚 **Sources** :
-        [1] Règlement_copropriété (page 12) - 95%
-        [2] Contrat_plombier_2025 (page 1) - 98%
+            Formatted text with markers for frontend parser
         """
-        # Remove any existing "Sources" section that LLM might have added
-        text_clean = re.sub(r'\n*---\n*\*\*Sources\*\*.*', '', text, flags=re.DOTALL)
+        formatted = ""
 
-        # Build source list
-        source_lines = []
-        for source in sources:
-            page_info = f" (page {source.page})" if source.page else ""
-            confidence_pct = int(source.confidence * 100)
+        # Extract thinking tags
+        thinking = ""
+        answer = response_text
 
-            source_line = f"[{source.id}] **{source.title}**{page_info} - {confidence_pct}%"
-            source_lines.append(source_line)
+        if "<thinking>" in response_text and "</thinking>" in response_text:
+            thinking_match = re.search(r'<thinking>(.*?)</thinking>', response_text, re.DOTALL)
+            if thinking_match:
+                thinking = thinking_match.group(1).strip()
+                answer = re.sub(r'<thinking>.*?</thinking>', '', response_text, flags=re.DOTALL).strip()
 
-        source_footer = "\n\n---\n📚 **Sources** :\n" + "\n".join(source_lines)
+        # Add CoT marker
+        if thinking and enable_cot:
+            formatted += f"<!--COT_START-->\n{thinking}\n<!--COT_END-->\n\n"
 
-        return text_clean.strip() + source_footer
+        # Main answer (Markdown)
+        formatted += f"<!--ANSWER_START-->\n{answer}\n<!--ANSWER_END-->\n\n"
+
+        # Sources marker with parseable format
+        if sources:
+            formatted += "<!--SOURCES_START-->\n"
+            for source in sources:
+                doc_id = f"DOC-{source.document_id:04d}"
+                page_info = f", p. {source.page}" if source.page else ""
+                confidence_pct = int(source.confidence * 100)
+                excerpt = source.excerpt[:150] + "..." if len(source.excerpt) > 150 else source.excerpt
+
+                # Pipe-separated format for easy parsing
+                formatted += f"[{source.id}]|{source.title}|{doc_id}{page_info}|{confidence_pct}%|{excerpt}\n"
+
+            formatted += "<!--SOURCES_END-->\n"
+
+        return formatted
+
+    def _detect_table_request(self, query: str) -> bool:
+        """
+        Detect if user is requesting a table/comparison
+
+        Args:
+            query: User's question
+
+        Returns:
+            True if table is requested
+        """
+        table_keywords = [
+            "tableau", "table", "liste", "compare", "comparaison",
+            "récapitulatif", "synthèse", "résumé", "colonnes",
+            "lignes", "fais-moi", "génère", "affiche"
+        ]
+
+        query_lower = query.lower()
+        return any(keyword in query_lower for keyword in table_keywords)
+
+    async def _generate_table_from_response(
+        self,
+        response_text: str,
+        sources: List[Source],
+        query: str
+    ) -> Optional[str]:
+        """
+        Generate HTML table from LLM response and sources
+
+        Args:
+            response_text: LLM-generated response (may contain structured data)
+            sources: Sources used in response
+            query: Original user query
+
+        Returns:
+            HTML table string or None if no table could be generated
+        """
+        try:
+            # Ask LLM to extract tabular data from response and sources
+            table_extraction_prompt = f"""Extrait des données tabulaires structurées à partir de la réponse et des sources suivantes.
+
+QUESTION : {query}
+
+RÉPONSE GÉNÉRÉE :
+{response_text}
+
+SOURCES :
+{self._format_sources_for_prompt(sources[:5])}
+
+INSTRUCTIONS :
+1. Identifie les données structurées qui peuvent être présentées en tableau
+2. Détermine les colonnes appropriées (ex: Fournisseur, Montant HT, Montant TTC)
+3. Extrait les données ligne par ligne
+4. Réponds UNIQUEMENT au format JSON suivant :
+
+{{
+  "has_table": true/false,
+  "columns": ["Colonne1", "Colonne2", "Colonne3"],
+  "rows": [
+    {{"Colonne1": "valeur1", "Colonne2": "valeur2", "Colonne3": "valeur3"}},
+    {{"Colonne1": "valeur4", "Colonne2": "valeur5", "Colonne3": "valeur6"}}
+  ],
+  "title": "Titre du tableau"
+}}
+
+Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}}
+"""
+
+            result = await self.llm_service.generate_response(
+                prompt=table_extraction_prompt,
+                temperature=0.1,
+                max_tokens=1000
+            )
+
+            # Parse JSON response
+            import json
+            result_clean = result.strip()
+
+            # Extract JSON if wrapped in markdown code blocks
+            if "```json" in result_clean:
+                result_clean = re.search(r'```json\s*(.*?)\s*```', result_clean, re.DOTALL).group(1)
+            elif "```" in result_clean:
+                result_clean = re.search(r'```\s*(.*?)\s*```', result_clean, re.DOTALL).group(1)
+
+            table_data = json.loads(result_clean)
+
+            if not table_data.get("has_table", False):
+                logger.debug("no_table_data_found")
+                return None
+
+            # Generate HTML table using TableGenerationService
+            table_service = TableGenerationService()
+            table_id = f"table_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
+            rows = table_data.get("rows", [])
+            columns = table_data.get("columns", [])
+            title = table_data.get("title", "Tableau de données")
+
+            if not rows or not columns:
+                return None
+
+            # Cache data for export
+            cache_table_data(table_id, rows, columns, title)
+
+            # Generate HTML
+            html_table = table_service.generate_html_table(
+                data=rows,
+                columns=columns,
+                title=title,
+                export_id=table_id
+            )
+
+            logger.info("table_generated", table_id=table_id, rows=len(rows), columns=len(columns))
+            return html_table
+
+        except Exception as e:
+            logger.error("table_generation_failed", error=str(e), exc_info=True)
+            return None
 
     def _compute_overall_confidence(
         self,

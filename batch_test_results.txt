@@ -1,0 +1,49 @@
+
+====================================================================================================
+🚀 TEST BATCH - TOUTES LES FACTURES
+====================================================================================================
+
+📁 Dossier: C:\Users\grego\Desktop\FacturesOCR
+🌐 Backend: http://localhost:8000
+⏰ Démarrage: 13:17:35
+
+====================================================================================================
+
+📊 Total: 5 factures
+
+[1/5] 202503060002 (1).pdf (3285.9 KB)
+   ⚠️  TIMEOUT - Le traitement a pris plus de 5 minutes
+
+[2/5] 202503200009 (1).pdf (103.6 KB)
+   ✅ OK - ID: 81 | Text: 3384 chars | Chunks: 5 | Indexed: True | ⏱️  30.2s
+
+[3/5] 202504150027.pdf (210.0 KB)
+   ✅ OK - ID: 82 | Text: 1047 chars | Chunks: 2 | Indexed: True | ⏱️  14.5s
+
+[4/5] 202504220047.pdf (866.1 KB)
+   ✅ OK - ID: 83 | Text: 5492 chars | Chunks: 8 | Indexed: True | ⏱️  21.6s
+
+[5/5] NEC+.pdf (2059.8 KB)
+   ✅ OK - ID: 84 | Text: 5581 chars | Chunks: 8 | Indexed: True | ⏱️  9.1s
+
+
+====================================================================================================
+📈 RÉSULTATS FINAUX
+====================================================================================================
+
+✅ Succès: 4/5 (80.0%)
+❌ Échecs: 1/5
+
+📊 Statistiques:
+   • Chunks totaux créés: 23
+   • Caractères extraits: 15,504
+   • Temps moyen/facture: 18.8s
+   • Temps total: 6.3 min
+   • Débit: 0.6 factures/min
+
+❌ Échecs détaillés:
+   • 202503060002 (1).pdf: TIMEOUT (>5min)
+
+⏰ Fin: 13:23:50
+====================================================================================================
+

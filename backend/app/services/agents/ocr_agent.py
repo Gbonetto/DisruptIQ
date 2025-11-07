@@ -1,11 +1,12 @@
 """
 OCR Agent - Document Ingestion and Processing
-Extracts text and metadata from PDF and image files
+Extracts text and metadata from PDF and image files using Mistral Vision (Pixtral)
 """
 
 import structlog
 import io
 import re
+import base64
 from typing import Dict, Any, List, Optional, BinaryIO
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,7 @@ from pypdf import PdfReader
 from app.services.llm_service import LLMService
 from app.services.rag_service import RAGService
 from app.models.document import Document
+from app.core.config import settings
 
 logger = structlog.get_logger()
 
@@ -26,16 +28,17 @@ class OCRAgent:
 
     Capabilities:
     - Extract text from PDF files
-    - Extract text from images (PNG, JPG, JPEG)
+    - Extract text from images (PNG, JPG, JPEG) using Mistral Vision (Pixtral)
     - Classify document type (facture, contrat, règlement, etc.)
     - Extract key metadata (dates, amounts, entities)
     - Store in RAG system for semantic search
     - Persist document records in database
 
     Technologies:
-    - PyTesseract for OCR
+    - Mistral Vision (Pixtral-12B) for advanced OCR (primary)
+    - PyTesseract for OCR (fallback)
     - pypdf for PDF text extraction
-    - GPT-4 for metadata extraction and classification
+    - Mistral AI for metadata extraction and classification
     - Qdrant for vector storage
     """
 
@@ -191,18 +194,85 @@ class OCRAgent:
             raise
 
     async def _extract_text_from_image(self, file_content: bytes) -> str:
-        """Extract text from image using Tesseract OCR"""
+        """Extract text from image using Mistral Vision (Pixtral) with Tesseract fallback"""
         try:
-            image = Image.open(io.BytesIO(file_content))
+            # Primary: Use Mistral Vision (Pixtral) for advanced OCR
+            text = await self._mistral_vision_ocr(file_content)
 
-            # Run OCR
-            text = pytesseract.image_to_string(image, lang='fra+eng')  # French + English
+            # If Mistral Vision fails or returns insufficient text, fallback to Tesseract
+            if not text or len(text.strip()) < 10:
+                logger.info("mistral_vision_failed_using_tesseract_fallback")
+                image = Image.open(io.BytesIO(file_content))
+                text = pytesseract.image_to_string(image, lang='fra+eng')  # French + English
 
             return text
 
         except Exception as e:
             logger.error("image_ocr_error", error=str(e))
             raise
+
+    async def _mistral_vision_ocr(self, image_content: bytes) -> str:
+        """
+        Use Mistral Vision (Pixtral-12B) for advanced OCR
+
+        Pixtral is Mistral's multimodal model optimized for:
+        - Document OCR (invoices, contracts, handwritten notes)
+        - Table extraction
+        - Multi-language support (French + English)
+        - Better accuracy than Tesseract for complex layouts
+        """
+        try:
+            # Encode image to base64 for Mistral API
+            image_base64 = base64.b64encode(image_content).decode('utf-8')
+
+            # Use Mistral Vision model via LangChain
+            from langchain_mistralai import ChatMistralAI
+            from langchain.schema import HumanMessage
+
+            vision_model = ChatMistralAI(
+                model=settings.MISTRAL_VISION_MODEL,  # pixtral-12b-2409
+                api_key=settings.MISTRAL_API_KEY,
+                temperature=0.0,  # Deterministic for OCR
+            )
+
+            # Create multimodal message with image
+            message = HumanMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": """Analyse cette image et extrait tout le texte visible avec une grande précision.
+
+Instructions :
+- Extrait TOUT le texte, y compris les petits caractères
+- Conserve la structure (titres, paragraphes, listes)
+- Pour les tableaux, utilise des tabulations pour séparer les colonnes
+- Préserve les nombres, dates et montants avec précision
+- Si du texte est manuscrit, fais de ton mieux pour le déchiffrer
+- Ne traduis RIEN, garde le texte dans sa langue d'origine
+
+Retourne uniquement le texte extrait, sans commentaires."""
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": f"data:image/jpeg;base64,{image_base64}"
+                    }
+                ]
+            )
+
+            # Invoke Mistral Vision
+            response = await vision_model.ainvoke([message])
+            extracted_text = response.content
+
+            logger.info("mistral_vision_ocr_success",
+                       text_length=len(extracted_text),
+                       model=settings.MISTRAL_VISION_MODEL)
+
+            return extracted_text
+
+        except Exception as e:
+            logger.error("mistral_vision_ocr_error", error=str(e))
+            # Return empty string to trigger Tesseract fallback
+            return ""
 
     async def _classify_document(self, text: str) -> str:
         """Classify document type using LLM"""
@@ -219,7 +289,7 @@ TEXTE DU DOCUMENT :
 Réponds UNIQUEMENT avec le type de document (un seul mot). Ne donne aucune explication.
 """
 
-            response = await self.llm_service.generate(
+            response = await self.llm_service.generate_response(
                 prompt=prompt,
                 temperature=0.0,
                 max_tokens=50
@@ -267,7 +337,7 @@ Réponds UNIQUEMENT avec un objet JSON valide. Exemple :
 }}
 """
 
-            response = await self.llm_service.generate(
+            response = await self.llm_service.generate_response(
                 prompt=prompt,
                 temperature=0.0,
                 max_tokens=500

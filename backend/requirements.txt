@@ -13,15 +13,22 @@ asyncpg==0.29.0
 redis==5.0.8
 hiredis==2.3.2
 
-# LangChain & AI
+# LangChain & AI (Mistral AI primary)
 langchain==0.2.16
-langchain-openai==0.1.23
+langchain-mistralai==0.1.12  # Mistral AI integration (PRIMARY)
+langchain-openai==0.1.23     # OpenAI fallback
 langchain-community==0.2.16
-openai==1.42.0
-anthropic==0.34.1
+mistralai==1.0.1             # Official Mistral SDK for Pixtral vision
+openai==1.42.0               # Fallback
+anthropic==0.34.1            # Deprecated
 
-# Vector Database
+# Vector Database & Re-Ranking
 qdrant-client==1.11.0
+sentence-transformers==3.0.1
+rank-bm25==0.2.2
+
+# Web Search (for Web Agent)
+duckduckgo-search==6.2.13  # Free web search API (no key required)
 
 # Email Processing
 google-auth==2.34.0
@@ -37,6 +44,12 @@ pytesseract==0.3.13
 pdf2image==1.17.0
 pillow==10.4.0
 
+# Excel Export
+openpyxl==3.1.2
+
+# PDF Export
+reportlab==4.0.7
+
 # Data Processing
 pandas==2.2.2
 
@@ -49,7 +62,7 @@ pydantic-settings==2.4.0
 httpx==0.27.0
 tenacity==8.5.0
 email-validator==2.2.0
-python-dateutil==2.9.0
+python-dateutil>=2.9.0.post0
 
 # Rate Limiting
 slowapi==0.1.9

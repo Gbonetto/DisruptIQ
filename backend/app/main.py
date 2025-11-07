@@ -13,7 +13,8 @@ import structlog
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, conversations
+from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, conversations  # removed export - file doesn't exist
+# from app.api.routes import invoices  # TODO: Create invoices route
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document, Conversation, Message
 from app.services.scheduler_service import get_scheduler
@@ -77,6 +78,45 @@ async def startup_event():
         logger.error("rag_service_init_failed", error=str(e))
         # Log error but don't fail startup - RAG is important but not critical for basic operations
         logger.warning("rag_service_startup_warning", message="RAG service failed to initialize, indexing will not work until Qdrant is available")
+
+    # Initialize BM25 Index for Hybrid Search
+    try:
+        from app.services.hybrid_search_service import HybridSearchService
+        from app.core.database import get_db
+
+        hybrid_search = HybridSearchService()
+
+        # Get all indexed documents from database
+        async for db in get_db():
+            from app.models.document import Document
+            from sqlalchemy import select
+
+            result = await db.execute(
+                select(Document).where(Document.indexed == True)
+            )
+            documents = result.scalars().all()
+
+            # Build BM25 index from documents
+            doc_list = [
+                {
+                    "id": doc.id,
+                    "text": doc.extracted_text or "",
+                    "filename": doc.original_filename
+                }
+                for doc in documents if doc.extracted_text
+            ]
+
+            if doc_list:
+                await hybrid_search.build_bm25_index(doc_list)
+                logger.info("bm25_index_initialized", doc_count=len(doc_list))
+            else:
+                logger.info("bm25_index_empty", message="No indexed documents found, BM25 will be built on first search")
+
+            break  # Only need one db session
+    except Exception as e:
+        logger.error("bm25_init_failed", error=str(e))
+        # Log error but don't fail startup - hybrid search can work without BM25
+        logger.warning("bm25_startup_warning", message="BM25 index failed to initialize, will use vector-only search")
 
     # Initialize Redis Cache Service
     try:
@@ -158,6 +198,7 @@ app.include_router(digest.router, prefix="/api/digest", tags=["Email Digest"])
 app.include_router(email_generator.router, prefix="/api/email", tags=["Email Generator"])
 app.include_router(emails.router, prefix="/api/emails", tags=["Email Management"])
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
+# app.include_router(invoices.router, tags=["Invoice OCR & Extraction"])  # TODO: Create invoices route
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(conversations.router, prefix="/api/conversations", tags=["Conversations"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["AI Assistant"])
@@ -170,3 +211,4 @@ app.include_router(webhooks.router, prefix="/api/webhooks", tags=["N8N Webhooks"
 app.include_router(webhook_test.router, prefix="/api/webhook-test", tags=["Webhook Testing"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Administration"])
 app.include_router(sql_tables.router, prefix="/api/sql", tags=["SQL Table Management"])
+# app.include_router(export.router, prefix="/api", tags=["Data Export"])  # TODO: Create export endpoint

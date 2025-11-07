@@ -3,7 +3,7 @@ Application Configuration
 Manages environment variables and settings
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator, ValidationError
 from typing import List
 import os
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # API
     API_PREFIX: str = "/api"
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:3003"
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://localhost:5173,http://localhost:3003"
 
     @property
     def cors_origins_list(self) -> List[str]:
@@ -50,12 +50,23 @@ class Settings(BaseSettings):
     QDRANT_URL: str = "http://qdrant:6333"
     QDRANT_COLLECTION_NAME: str = "disruptiq_documents"
 
-    # OpenAI
+    # Mistral AI (Primary - European, GDPR-compliant, French-optimized)
+    MISTRAL_API_KEY: str = ""
+    MISTRAL_MODEL: str = "mistral-large-latest"  # Best model for complex reasoning
+    MISTRAL_EMBEDDING_MODEL: str = "mistral-embed"  # 1024 dimensions
+    MISTRAL_VISION_MODEL: str = "pixtral-12b-2409"  # For OCR and image analysis
+
+    # Web Search APIs (for Web Agent)
+    BRAVE_SEARCH_API_KEY: str = ""  # Brave Search API (recommended - GDPR compliant)
+    SERPER_API_KEY: str = ""  # Serper API (Google Search wrapper)
+    # Note: If no API key provided, will fallback to DuckDuckGo (free, no key required)
+
+    # OpenAI (Deprecated - keeping for backward compatibility)
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4-turbo-preview"
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"
 
-    # Anthropic (Fallback)
+    # Anthropic (Deprecated)
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-3-opus-20240229"
 
@@ -113,10 +124,11 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
     ALLOWED_EXTENSIONS: List[str] = [".pdf", ".docx", ".doc", ".txt"]
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"  # Ignore extra fields in .env
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"  # Ignore extra fields in .env
+    )
 
 
 settings = Settings()

@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { FileText, Upload, Trash2, Eye, Search, Filter } from 'lucide-react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { FileText, Upload, Trash2, Eye, Search, Filter, CheckSquare, Square, FileCheck } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,7 +39,19 @@ export const DocumentsPage: React.FC = () => {
   const [documentToDelete, setDocumentToDelete] = useState<number | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
+  // NEW: Selection state for checkboxes
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<number>>(new Set());
+
   const queryClient = useQueryClient();
+
+  // NEW: Sync selected documents with backend
+  useEffect(() => {
+    if (selectedDocIds.size > 0) {
+      // Send active document IDs to backend
+      documentApi.setActive(Array.from(selectedDocIds))
+        .catch(err => console.error('Failed to set active documents:', err));
+    }
+  }, [selectedDocIds]);
 
   // Fetch documents
   const { data: documentsData, isLoading } = useQuery({
@@ -109,6 +121,35 @@ export const DocumentsPage: React.FC = () => {
     }
   };
 
+  // Toggle individual document selection
+  const toggleDocumentSelection = useCallback((docId: number) => {
+    setSelectedDocIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(docId)) {
+        newSet.delete(docId);
+      } else {
+        newSet.add(docId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  // Toggle all documents
+  const toggleSelectAll = useCallback(() => {
+    if (selectedDocIds.size === filteredDocuments.length) {
+      // Deselect all
+      setSelectedDocIds(new Set());
+    } else {
+      // Select all
+      setSelectedDocIds(new Set(filteredDocuments.map(doc => doc.id)));
+    }
+  }, [filteredDocuments, selectedDocIds.size]);
+
+  // Clear selection
+  const clearSelection = useCallback(() => {
+    setSelectedDocIds(new Set());
+  }, []);
+
   // Format file size
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -124,6 +165,15 @@ export const DocumentsPage: React.FC = () => {
       case 'letter': return 'bg-green-100 text-green-800';
       default: return 'bg-gray-100 text-gray-800';
     }
+  };
+
+  // Get document type icon
+  const getDocumentIcon = (doc: Document) => {
+    // Check if it's an invoice
+    if (doc.category === 'invoice' || doc.document_type === 'facture') {
+      return '🧾';
+    }
+    return '📄';
   };
 
   return (
@@ -188,7 +238,25 @@ export const DocumentsPage: React.FC = () => {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>Liste des documents</CardTitle>
+            <div className="flex items-center gap-3">
+              <CardTitle>Liste des documents</CardTitle>
+              {selectedDocIds.size > 0 && (
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                    <FileCheck className="h-3 w-3 mr-1" />
+                    {selectedDocIds.size} sélectionné{selectedDocIds.size > 1 ? 's' : ''}
+                  </Badge>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearSelection}
+                    className="h-7 text-xs"
+                  >
+                    Tout désélectionner
+                  </Button>
+                </div>
+              )}
+            </div>
             <div className="flex items-center gap-4">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -227,6 +295,18 @@ export const DocumentsPage: React.FC = () => {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-12">
+                    <button
+                      onClick={toggleSelectAll}
+                      className="flex items-center justify-center w-full hover:bg-gray-100 rounded p-1"
+                    >
+                      {selectedDocIds.size === filteredDocuments.length && filteredDocuments.length > 0 ? (
+                        <CheckSquare className="h-4 w-4 text-blue-600" />
+                      ) : (
+                        <Square className="h-4 w-4 text-gray-400" />
+                      )}
+                    </button>
+                  </TableHead>
                   <TableHead>Nom du fichier</TableHead>
                   <TableHead>Catégorie</TableHead>
                   <TableHead>Type</TableHead>
@@ -237,53 +317,76 @@ export const DocumentsPage: React.FC = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredDocuments.map((doc) => (
-                  <TableRow key={doc.id}>
-                    <TableCell className="font-medium">{doc.filename}</TableCell>
-                    <TableCell>
-                      {doc.category && (
-                        <Badge className={getCategoryColor(doc.category)}>
-                          {doc.category}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-500">{doc.mime_type}</span>
-                    </TableCell>
-                    <TableCell>{formatFileSize(doc.file_size)}</TableCell>
-                    <TableCell>
-                      {new Date(doc.uploaded_at).toLocaleDateString('fr-FR')}
-                    </TableCell>
-                    <TableCell>
-                      {doc.is_indexed ? (
-                        <Badge className="bg-green-100 text-green-800">Indexé</Badge>
-                      ) : (
-                        <Badge className="bg-yellow-100 text-yellow-800">En attente</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setSelectedDocument(doc)}
+                {filteredDocuments.map((doc) => {
+                  const isSelected = selectedDocIds.has(doc.id);
+                  return (
+                    <TableRow
+                      key={doc.id}
+                      className={isSelected ? 'bg-blue-50 hover:bg-blue-100' : ''}
+                    >
+                      <TableCell>
+                        <button
+                          onClick={() => toggleDocumentSelection(doc.id)}
+                          className="flex items-center justify-center w-full hover:bg-gray-100 rounded p-1"
                         >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setDocumentToDelete(doc.id);
-                            setDeleteDialogOpen(true);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4 text-red-600" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                          {isSelected ? (
+                            <CheckSquare className="h-4 w-4 text-blue-600" />
+                          ) : (
+                            <Square className="h-4 w-4 text-gray-400" />
+                          )}
+                        </button>
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">{getDocumentIcon(doc)}</span>
+                          <span>{doc.filename}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {doc.category && (
+                          <Badge className={getCategoryColor(doc.category)}>
+                            {doc.category}
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm text-gray-500">{doc.mime_type}</span>
+                      </TableCell>
+                      <TableCell>{formatFileSize(doc.file_size)}</TableCell>
+                      <TableCell>
+                        {new Date(doc.uploaded_at).toLocaleDateString('fr-FR')}
+                      </TableCell>
+                      <TableCell>
+                        {doc.is_indexed ? (
+                          <Badge className="bg-green-100 text-green-800">Indexé</Badge>
+                        ) : (
+                          <Badge className="bg-yellow-100 text-yellow-800">En attente</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setSelectedDocument(doc)}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setDocumentToDelete(doc.id);
+                              setDeleteDialogOpen(true);
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

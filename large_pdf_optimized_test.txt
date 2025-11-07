@@ -1,0 +1,47 @@
+
+====================================================================================================
+🚀 TEST OPTIMIZATIONS - LARGE PDF
+====================================================================================================
+
+📄 File: 202503060002 (1).pdf (3.3 MB)
+🌐 Backend: http://localhost:8000
+⚙️  Optimizations:
+   ✅ Parallel page processing (asyncio.gather)
+   ✅ Adaptive DPI (150 for large files)
+   ✅ Model instance caching
+   ✅ 15 min timeout
+
+⏰ Start: 13:31:10
+====================================================================================================
+
+📦 File size: 3.21 MB
+
+⏳ Uploading and processing with OPTIMIZED pipeline...
+
+====================================================================================================
+📊 RESULTS
+====================================================================================================
+
+⏱️  Processing time: 20.7s (0.3 min)
+📈 Status code: 200
+
+✅ SUCCESS! File processed with optimizations
+
+📄 Document ID: 85
+📝 Text extracted: 22,947 chars
+📋 Doc type: document
+🧩 Chunks created: 31
+🔍 Indexed: True
+
+⚡ Performance:
+   • 1109 chars/sec
+   • 0.155 MB/sec
+   • 0.7s per chunk
+
+🎉 IMPROVEMENT: Successfully processed within timeout!
+   Previous: TIMEOUT (>5 min)
+   Now: 20.7s
+
+⏰ End: 13:31:31
+====================================================================================================
+

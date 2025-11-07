@@ -26,12 +26,12 @@ class OrchestratorService:
         self.rag_service = RAGService()
         self.sql_agent = SQLAgentService()
 
-    async def route_query(self, query: str) -> QueryMode:
+    async def route_query(self, query: str, has_active_documents: bool = False) -> QueryMode:
         """
         Analyze query and determine if it should use RAG or SQL
 
         SQL queries typically:
-        - Ask for counts, statistics, numbers
+        - Ask for counts, statistics, numbers across ALL database
         - Search for specific records (emails, vendors, copropriétaires)
         - Use words like: "combien", "liste", "tous les", "nombre de"
         - Ask about database content directly
@@ -41,23 +41,45 @@ class OrchestratorService:
         - Reference documents or knowledge
         - Use words like: "comment", "pourquoi", "explique", "conseil"
         - Ask about procedures, best practices, or domain knowledge
+        - Ask about specific documents (this/these/ce/cette/ces)
+        - Ask about invoices/factures when documents are selected
 
         Args:
             query: User's natural language query
+            has_active_documents: Whether user has selected documents (forces RAG mode)
 
         Returns:
             "rag" or "sql"
         """
         query_lower = query.lower().strip()
 
+        # PRIORITY 1: If user has selected documents, questions about them should use RAG
+        document_reference_keywords = [
+            "cette facture", "ce document", "ces documents", "cette doc",
+            "la facture", "le document", "les factures", "les documents",
+            "ce pdf", "cette image", "ce fichier",
+            "de qui", "de quoi", "quel montant", "quel total", "quelle date",
+            "facture", "devis", "avoir", "fournisseur", "montant ttc", "montant ht"
+        ]
+
+        if has_active_documents:
+            # Check if query references documents
+            for kw in document_reference_keywords:
+                if kw in query_lower:
+                    logger.info("routing_to_rag_document_reference",
+                               query=query[:50],
+                               keyword=kw,
+                               has_active_docs=True)
+                    return "rag"
+
         # SQL indicators (strong signals for database queries)
         sql_keywords = [
-            "combien", "nombre", "liste", "tous les", "toutes les",
-            "affiche", "montre", "recherche", "trouve",
-            "derniers", "dernières", "récents", "récentes",
-            "statistiques", "total", "moyenne", "somme",
-            "email", "emails", "vendor", "vendeur", "professionnels",
-            "copropriétaires", "copropriétés", "documents",
+            "combien de", "nombre de", "liste des", "tous les", "toutes les",
+            "affiche tous", "montre tous", "recherche tous",
+            "derniers emails", "dernières emails", "récents emails",
+            "statistiques des", "combien d'emails", "combien de vendors",
+            "email non traités", "emails urgents", "vendeurs actifs",
+            "copropriétaires de", "copropriétés avec",
             "actifs", "inactifs", "traités", "non traités"
         ]
 
@@ -91,7 +113,8 @@ class OrchestratorService:
         self,
         query: str,
         db: AsyncSession,
-        conversation_history: list = None
+        conversation_history: list = None,
+        has_active_documents: bool = False
     ) -> Dict[str, Any]:
         """
         Process query by routing to appropriate service
@@ -100,12 +123,13 @@ class OrchestratorService:
             query: User's natural language query
             db: Database session (for SQL queries)
             conversation_history: Previous messages (for RAG context)
+            has_active_documents: Whether user has selected documents
 
         Returns:
             Dict with response, mode used, and additional data
         """
         # Determine routing
-        mode = await self.route_query(query)
+        mode = await self.route_query(query, has_active_documents=has_active_documents)
 
         try:
             if mode == "sql":

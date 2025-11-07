@@ -176,11 +176,33 @@ export interface Document {
   uploaded_at: string
   category?: string
   is_indexed: boolean
+  document_type?: string  // NEW: Type detected by OCR (facture, devis, etc.)
+  document_metadata?: Record<string, any>  // NEW: Metadata from OCR/extraction
+  invoice_summary?: {
+    numero?: string
+    supplier?: string
+    amount_ttc?: string
+    confidence?: number
+  }
 }
 
 export interface DocumentUploadResponse {
   document: Document
   message: string
+  document_type?: string  // Type detected during upload
+  text_length?: number  // Length of extracted text
+  ocr?: {
+    method: string
+    pages: number
+    cost_estimate: number
+  }
+  invoice?: {
+    type: string
+    numero?: string
+    supplier?: string
+    amount_ttc?: string
+    confidence_score?: number
+  }
 }
 
 export interface DocumentListResponse {

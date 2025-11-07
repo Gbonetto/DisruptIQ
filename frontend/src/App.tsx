@@ -12,6 +12,7 @@ import { ChatPage } from './pages/ChatPage'
 import { DigestPage } from './pages/DigestPage'
 import { ChatPageV2 } from './pages/ChatPageV2'
 import { MainChatPage } from './pages/MainChatPage'
+import { PremiumChatDemo } from './pages/PremiumChatDemo'
 import { AppLayout } from './components/layout/AppLayout'
 import { useEffect } from 'react'
 import { adminApi } from './lib/api'
@@ -51,6 +52,9 @@ function App() {
           <Routes>
             {/* Main Chat Page - Interface principale simplifiée */}
             <Route path="/" element={<MainChatPage />} />
+
+            {/* Premium Chat Demo */}
+            <Route path="/demo" element={<PremiumChatDemo />} />
 
             {/* Legacy chat pages */}
             <Route path="/chat" element={<ChatPage />} />
