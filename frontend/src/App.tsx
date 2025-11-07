@@ -12,10 +12,11 @@ import { ChatPage } from './pages/ChatPage'
 import { DigestPage } from './pages/DigestPage'
 import { ChatPageV2 } from './pages/ChatPageV2'
 import { MainChatPage } from './pages/MainChatPage'
-import { PremiumChatDemo } from './pages/PremiumChatDemo'
+import { MainChatPageV2 } from './pages/MainChatPageV2'
 import { AppLayout } from './components/layout/AppLayout'
 import { useEffect } from 'react'
 import { adminApi } from './lib/api'
+import { ActiveDocumentsProvider } from './contexts/ActiveDocumentsContext'
 
 const queryClient = new QueryClient()
 
@@ -37,7 +38,8 @@ function App() {
   }, [])
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <ActiveDocumentsProvider>
+        <BrowserRouter>
         <div className="min-h-screen bg-background">
           {/* Toast Notifications */}
           <Toaster
@@ -53,8 +55,8 @@ function App() {
             {/* Main Chat Page - Interface principale simplifiée */}
             <Route path="/" element={<MainChatPage />} />
 
-            {/* Premium Chat Demo */}
-            <Route path="/demo" element={<PremiumChatDemo />} />
+            {/* V2 UI Redesign - Pastel Colors */}
+            <Route path="/v2" element={<MainChatPageV2 />} />
 
             {/* Legacy chat pages */}
             <Route path="/chat" element={<ChatPage />} />
@@ -74,6 +76,7 @@ function App() {
           </Routes>
         </div>
       </BrowserRouter>
+      </ActiveDocumentsProvider>
     </QueryClientProvider>
   )
 }

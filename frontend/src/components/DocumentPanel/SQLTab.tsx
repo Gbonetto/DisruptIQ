@@ -42,9 +42,9 @@ interface ImportResult {
 }
 
 const ALLOWED_TABLES = [
-  { value: 'professionnels', label: 'Professionnels', icon: '👷' },
-  { value: 'coproprietaires', label: 'Copropriétaires', icon: '👥' },
-  { value: 'coproprietes', label: 'Copropriétés', icon: '🏢' }
+  { value: 'professionnels', label: 'Professionnels', icon: '' },
+  { value: 'coproprietaires', label: 'Copropriétaires', icon: '' },
+  { value: 'coproprietes', label: 'Copropriétés', icon: '' }
 ];
 
 export function SQLTab() {
@@ -466,8 +466,8 @@ export function SQLTab() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Chargement...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Chargement...</p>
         </div>
       </div>
     );
@@ -477,21 +477,21 @@ export function SQLTab() {
     <div className="p-4 space-y-4">
       {/* Header Actions */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-          <Database className="w-4 h-4 text-indigo-600" />
+        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <Database className="w-4 h-4 text-primary" />
           Gestion des Données SQL
         </h3>
         <div className="flex gap-2">
           <button
             onClick={loadTables}
-            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-foreground bg-background border border-border rounded-lg hover:bg-secondary transition-colors"
           >
             <RefreshCw className="w-3 h-3" />
             Actualiser
           </button>
           <button
             onClick={() => setShowImportModal(true)}
-            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors"
           >
             <Upload className="w-3 h-3" />
             Importer Données
@@ -523,10 +523,10 @@ export function SQLTab() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3 flex-1">
-                    <div className={`p-2 rounded-lg text-2xl ${
-                      selectedTable === table.name ? 'bg-indigo-200' : 'bg-indigo-100'
+                    <div className={`p-2 rounded-lg ${
+                      selectedTable === table.name ? 'bg-primary/20' : 'bg-primary/10'
                     }`}>
-                      {tableConfig?.icon || '📊'}
+                      <Database className="w-5 h-5 text-primary" />
                     </div>
                     <div className="flex-1">
                       <h4 className="text-sm font-semibold text-gray-900 mb-1">
@@ -740,7 +740,7 @@ export function SQLTab() {
                       <option value="">Sélectionnez une table...</option>
                       {ALLOWED_TABLES.map(t => (
                         <option key={t.value} value={t.value}>
-                          {t.icon} {t.label}
+                          {t.label}
                         </option>
                       ))}
                     </select>

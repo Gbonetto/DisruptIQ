@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # Mistral AI (Primary - European, GDPR-compliant, French-optimized)
     MISTRAL_API_KEY: str = ""
-    MISTRAL_MODEL: str = "mistral-large-latest"  # Best model for complex reasoning
+    MISTRAL_MODEL: str = "mistral-small-latest"  # Fast model with excellent quality (3-4x faster than large)
     MISTRAL_EMBEDDING_MODEL: str = "mistral-embed"  # 1024 dimensions
     MISTRAL_VISION_MODEL: str = "pixtral-12b-2409"  # For OCR and image analysis
 

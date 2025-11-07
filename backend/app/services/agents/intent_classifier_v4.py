@@ -100,6 +100,7 @@ class ClassificationResult(BaseModel):
     processing_time_ms: float = 0.0
     preprocessed_query: Optional[str] = None  # NEW: After spell correction
     detected_entities: Optional[Dict[str, Any]] = None  # NEW: Names, dates, etc.
+    multi_step_plan: Optional[List[IntentType]] = None  # NEW: For orchestrator compatibility
 
 
 class FrenchNameEntity(BaseModel):
@@ -221,6 +222,28 @@ class EnhancedIntentClassifierV4:
             "nathalie", "isabelle", "catherine", "sylvie", "martine", "christine",
             "valérie", "sophie", "sandrine", "stéphanie", "corinne"
         }
+
+    async def classify(
+        self,
+        user_input: str,
+        db: Optional[AsyncSession] = None,
+        context: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        state_manager = None
+    ) -> ClassificationResult:
+        """
+        Main classification method with confidence enforcement (alias for classify_with_confidence)
+
+        CRITICAL: This method NEVER returns requires_clarification=False
+        when confidence < THRESHOLD_MEDIUM (0.70)
+        """
+        return await self.classify_with_confidence(
+            user_input=user_input,
+            db=db,
+            context=context,
+            conversation_history=conversation_history,
+            state_manager=state_manager
+        )
 
     async def classify_with_confidence(
         self,

@@ -6,26 +6,47 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    /* Background - Lavande très pâle */
+    --background: 250 60% 98%;
+    --foreground: 240 10% 10%;
+
+    /* Card */
+    --card: 250 60% 98%;
+    --card-foreground: 240 10% 10%;
+
+    /* Popover */
+    --popover: 250 60% 98%;
+    --popover-foreground: 240 10% 10%;
+
+    /* Primary - Lavande moyen */
+    --primary: 245 55% 65%;
+    --primary-foreground: 250 100% 99%;
+
+    /* Secondary - Lavande ultra-pâle */
+    --secondary: 250 30% 95%;
+    --secondary-foreground: 240 8% 15%;
+
+    /* Muted - Gris-lavande */
+    --muted: 250 20% 92%;
+    --muted-foreground: 240 5% 45%;
+
+    /* Accent - Rose-lavande pâle */
+    --accent: 280 50% 90%;
+    --accent-foreground: 280 40% 30%;
+
+    /* Destructive */
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 217.2 91.2% 59.8%;
-    --radius: 0.5rem;
+
+    /* Bordures - Bordure douce */
+    --border: 250 20% 90%;
+    --input: 250 20% 90%;
+
+    /* Focus ring - Lavande */
+    --ring: 245 55% 65%;
+
+    /* Radius - Coins arrondis généreux */
+    --radius: 0.75rem;
   }
 
   .dark {
@@ -57,7 +78,16 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    letter-spacing: -0.011em;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+  }
+  p {
+    font-weight: 400;
   }
 }
 

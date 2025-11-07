@@ -33,6 +33,7 @@ async def assistant_chat_stream(
     message: str,
     conversation_history: str = "[]",
     session_id: str = "default",  # Session ID for state tracking
+    active_document_ids: str = "[]",  # Active document IDs for RAG filtering
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -75,12 +76,24 @@ async def assistant_chat_stream(
     async def event_generator():
         """Generate Server-Sent Events"""
         try:
-            # Parse conversation history from JSON string
+            # Parse conversation history and document IDs from JSON strings
             import json
             try:
                 parsed_history = json.loads(conversation_history)
             except json.JSONDecodeError:
                 parsed_history = []
+
+            try:
+                parsed_doc_ids = json.loads(active_document_ids)
+            except json.JSONDecodeError:
+                parsed_doc_ids = []
+
+            # DEBUG: Log what we received
+            logger.info("stream_request_received",
+                       message=message[:50],
+                       active_document_ids_raw=active_document_ids,
+                       parsed_doc_ids=parsed_doc_ids,
+                       has_doc_ids=len(parsed_doc_ids) > 0)
 
             # Initialize thought stream
             thought_stream = get_thought_stream(session_id)
@@ -117,6 +130,11 @@ async def assistant_chat_stream(
                     # Enrich context with state information
                     if not context:
                         context = {}
+
+                    # Add active document IDs for RAG filtering
+                    if parsed_doc_ids:
+                        context["active_document_ids"] = parsed_doc_ids
+                        logger.info("context_enriched_with_document_ids", count=len(parsed_doc_ids))
 
                     # Add recipients from state if available
                     if current_state.recipients_identified and not context.get("emails_available"):

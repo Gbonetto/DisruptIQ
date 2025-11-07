@@ -80,6 +80,7 @@ class ClassificationResult(BaseModel):
     clarification_question: Optional[str] = None
     quick_rule_used: Optional[str] = None  # Which quick rule matched (if any)
     processing_time_ms: float = 0.0
+    multi_step_plan: Optional[List[IntentType]] = None  # For orchestrator compatibility
 
 
 class ConversationEntity(BaseModel):

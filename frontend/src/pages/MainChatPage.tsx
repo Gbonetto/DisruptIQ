@@ -67,7 +67,7 @@ export function MainChatPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentThoughts, setCurrentThoughts] = useState<Thought[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [pendingConfirmation, setPendingConfirmation] = useState<ConfirmationData | null>(null);
+  // const [pendingConfirmation, setPendingConfirmation] = useState<ConfirmationData | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
   const [isPanelOpen, setIsPanelOpen] = useState(false);
@@ -141,6 +141,7 @@ export function MainChatPage() {
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleRenameConversation = async (id: number, newTitle: string) => {
     try {
       await fetch(`${API_BASE_URL}/api/conversations/${id}/title?title=${encodeURIComponent(newTitle)}`, {
@@ -156,6 +157,7 @@ export function MainChatPage() {
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleDeleteConversation = async (id: number) => {
     try {
       await fetch(`${API_BASE_URL}/api/conversations/${id}`, {
@@ -367,7 +369,8 @@ export function MainChatPage() {
       // Confirmation required
       eventSource.addEventListener('confirmation_required', (e) => {
         const confirmationData: ConfirmationData = JSON.parse(e.data);
-        setPendingConfirmation(confirmationData);
+        // setPendingConfirmation(confirmationData);
+        console.log('Confirmation required:', confirmationData);
       });
 
       // Final response
@@ -417,33 +420,30 @@ export function MainChatPage() {
     toast.info('Arrêté');
   };
 
-  const handleSuggestionClick = (suggestion: Suggestion) => {
-    setInput(suggestion.action);
-  };
+  // const handleSuggestionClick = (suggestion: Suggestion) => {
+  //   setInput(suggestion.action);
+  // };
 
-  const handleConfirm = () => {
-    if (pendingConfirmation) {
-      setInput(`CONFIRMER: ${pendingConfirmation.action}`);
-      setPendingConfirmation(null);
-      handleSend();
-    }
-  };
+  // const handleConfirm = () => {
+  //   if (pendingConfirmation) {
+  //     setInput(`CONFIRMER: ${pendingConfirmation.action}`);
+  //     setPendingConfirmation(null);
+  //     handleSend();
+  //   }
+  // };
 
-  const handleCancel = () => {
-    setPendingConfirmation(null);
-    toast.info('Action annulée');
-  };
+  // const handleCancel = () => {
+  //   setPendingConfirmation(null);
+  //   toast.info('Action annulée');
+  // };
 
   return (
     <div className="flex h-screen bg-retro-dark">
       {/* Sidebar */}
       <ConversationSidebar
         conversations={conversations}
-        currentConversationId={currentConversationId}
-        onSelectConversation={handleSelectConversation}
-        onNewConversation={handleNewConversation}
-        onRenameConversation={handleRenameConversation}
-        onDeleteConversation={handleDeleteConversation}
+        onSelectConversation={(id: string) => handleSelectConversation(parseInt(id))}
+        onNewChat={handleNewConversation}
       />
 
       {/* Main Chat Area */}
@@ -542,8 +542,8 @@ export function MainChatPage() {
                 /* Assistant message - Clean structure with MessageRenderer */
                 <article className="assistant-message" data-message-id={idx}>
                   <MessageRenderer
-                    message={message.content}
-                    isStreaming={false}
+                    content={message.content}
+                    role="assistant"
                   />
                 </article>
               )}

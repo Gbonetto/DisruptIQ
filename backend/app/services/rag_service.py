@@ -479,7 +479,7 @@ class RAGService:
                 {
                     "id": result.id,
                     "score": result.score,
-                    "text": result.payload.get("text"),
+                    "content": result.payload.get("text"),  # Changed from "text" to "content" for orchestrator compatibility
                     "document_id": result.payload.get("document_id"),
                     "metadata": {
                         k: v for k, v in result.payload.items()

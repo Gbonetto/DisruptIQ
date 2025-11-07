@@ -66,13 +66,14 @@ class OrchestratorAgent:
         # Import production components
         from .hybrid_executor import HybridExecutor
         from .response_fusion_agent import ResponseFusionAgent
-        from .intent_classifier_v4 import EnhancedIntentClassifierV4
+        from .intent_classifier_v3 import EnhancedIntentClassifierV3
 
         # REMOVED: v2 classifier (unused, wastes 50MB memory)
         # REMOVED: context_intelligence (file doesn't exist - causes ImportError)
+        # TEMPORARILY USING V3: V4 has compatibility issues with ConversationState
 
         # Only instantiate what we actually use
-        self.intent_classifier_v4 = EnhancedIntentClassifierV4()
+        self.intent_classifier_v4 = EnhancedIntentClassifierV3()  # Using V3 temporarily
         self.hybrid_executor = HybridExecutor()
         self.fusion_agent = ResponseFusionAgent()
 
@@ -115,12 +116,19 @@ class OrchestratorAgent:
 
             # Log alternatives for debugging
             if classification_result.alternatives:
-                # alternatives is List[Tuple[IntentTypeV4, float]]
-                alt_summary = [
-                    f"{alt[0].value}({alt[1]:.2f})"
-                    for alt in classification_result.alternatives
-                ]
-                logger.info("alternative_intents", alternatives=alt_summary)
+                try:
+                    # V3/V4 compatibility: handle both tuple and object formats
+                    alt_summary = []
+                    for alt in classification_result.alternatives:
+                        if isinstance(alt, tuple):
+                            # V4 format: (IntentType, confidence)
+                            alt_summary.append(f"{alt[0].value}({alt[1]:.2f})")
+                        elif hasattr(alt, 'intent') and hasattr(alt, 'confidence'):
+                            # V3 format: AlternativeIntent object
+                            alt_summary.append(f"{alt.intent.value}({alt.confidence:.2f})")
+                    logger.info("alternative_intents", alternatives=alt_summary)
+                except Exception as e:
+                    logger.warning("failed_to_parse_alternatives", error=str(e))
             else:
                 logger.info("no_alternative_intents")
 
@@ -282,7 +290,7 @@ class OrchestratorAgent:
                 return await self._handle_query_data(user_input, db, state_manager)
 
             elif intent == IntentType.SEARCH_DOCUMENTS:
-                return await self._handle_search_documents(user_input, db, state_manager, conversation_history)
+                return await self._handle_search_documents(user_input, db, state_manager, conversation_history, thought_stream, context)
 
             elif intent == IntentType.SEND_EMAIL:
                 return await self._handle_send_email_intelligent(
@@ -499,201 +507,134 @@ class OrchestratorAgent:
             ] if result.get("success") and response_data.get("results") else []
         )
 
-    async def _handle_search_documents(self, user_input: str, db: AsyncSession, state_manager = None, conversation_history: List[Dict] = None) -> AgentResponse:
+    async def _handle_search_documents(self, user_input: str, db: AsyncSession, state_manager = None, conversation_history: List[Dict] = None, thought_stream: ThoughtStream = None, context: Dict = None) -> AgentResponse:
         """
-        Handle document search via RAG with HYBRID SQL+RAG intelligence
+        Handle document search via RAG
 
-        NEW v4.0 (Option C): Intelligent context-based routing WITHOUT clarification
-        - Analyzes application state (selected docs, page context, history)
-        - Makes intelligent assumptions instead of asking user
-        - Falls back to parallel execution for low confidence
-        - Adds transparent notes showing what was searched
-
-        This provides the most comprehensive answers by combining
-        structured data (SQL) with unstructured knowledge (RAG).
+        Simplified version: Direct RAG search without complex context analysis
         """
         try:
-            logger.info("handling_search_with_context_intelligence", query=user_input[:50])
+            logger.info("handling_search_documents", query=user_input[:50])
 
-            # STEP 1: Analyze application context (Option C)
-            context_analysis = self.context_intelligence.analyze_context(
+            # Extract active document IDs from context if available
+            document_ids = None
+            if context and "active_document_ids" in context:
+                document_ids = context["active_document_ids"]
+                logger.info("rag_filtering_by_documents", doc_ids=document_ids)
+
+            # Thought 1: Recherche documentaire
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.EXECUTING,
+                    title="Recherche dans les documents",
+                    content="Je cherche dans vos documents les informations pertinentes pour répondre à votre question.",
+                    agent="rag_agent",
+                    progress=0.3
+                )
+
+            # Simple RAG search with optional document filtering
+            search_results = await self.rag_service.search(
                 query=user_input,
-                state_manager=state_manager,
-                conversation_history=conversation_history
+                limit=5,
+                document_ids=document_ids,
+                use_reranker=True,
+                use_hybrid=True
             )
 
-            logger.info("context_analysis_complete",
-                       query=user_input[:50],
-                       assumed_intent=context_analysis["assumed_intent"],
-                       confidence=context_analysis["confidence"],
-                       signals=context_analysis["signals"],
-                       should_execute_parallel=context_analysis.get("should_execute_parallel", False))
-
-            # STEP 2: Check if we should skip clarification (Option C strategy)
-            should_skip, skip_reason = self.context_intelligence.should_skip_clarification(context_analysis)
-
-            if should_skip:
-                logger.info("skipping_clarification_with_context", reason=skip_reason)
-
-                # STEP 3: If parallel execution needed (LOW confidence), run both SQL+RAG
-                if context_analysis.get("should_execute_parallel", False):
-                    logger.info("using_parallel_execution_fallback")
-                    # Force HYBRID intent for parallel execution
-                    from .intent_classifier_v2 import ExecutionIntent, ClassificationResult
-                    classification = ClassificationResult(
-                        intent=ExecutionIntent.HYBRID,
-                        confidence=0.6,  # Medium confidence for parallel
-                        sql_score=0.5,
-                        rag_score=0.5,
-                        reasoning="Low confidence → parallel execution (SQL + RAG)",
-                        suggested_action="execute_both"
+            if not search_results or len(search_results) == 0:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title="Aucun résultat",
+                        content="Aucune information pertinente trouvée dans les documents.",
+                        agent="rag_agent",
+                        progress=1.0
                     )
-                else:
-                    # STEP 4: Map assumed intent to ExecutionIntent
-                    from .intent_classifier_v2 import ExecutionIntent, ClassificationResult
-                    assumed = context_analysis["assumed_intent"]
-
-                    if assumed == "RAG":
-                        classification = ClassificationResult(
-                            intent=ExecutionIntent.RAG_ONLY,
-                            confidence=float(context_analysis["confidence"].replace("very_high", "0.95").replace("high", "0.85").replace("medium", "0.7").replace("low", "0.4")),
-                            sql_score=0.0,
-                            rag_score=1.0,
-                            reasoning=context_analysis["reasoning"],
-                            suggested_action="execute_rag"
-                        )
-                    elif assumed == "SQL":
-                        classification = ClassificationResult(
-                            intent=ExecutionIntent.SQL_ONLY,
-                            confidence=float(context_analysis["confidence"].replace("very_high", "0.95").replace("high", "0.85").replace("medium", "0.7").replace("low", "0.4")),
-                            sql_score=1.0,
-                            rag_score=0.0,
-                            reasoning=context_analysis["reasoning"],
-                            suggested_action="execute_sql"
-                        )
-                    else:  # HYBRID
-                        classification = ClassificationResult(
-                            intent=ExecutionIntent.HYBRID,
-                            confidence=float(context_analysis["confidence"].replace("very_high", "0.95").replace("high", "0.85").replace("medium", "0.7").replace("low", "0.4")),
-                            sql_score=0.6,
-                            rag_score=0.6,
-                            reasoning=context_analysis["reasoning"],
-                            suggested_action="execute_both"
-                        )
-            else:
-                # Fallback: Use V2 classifier (should rarely happen with Option C)
-                logger.warning("context_intelligence_no_decision_using_v2_fallback")
-                classification = await self.intent_classifier_v2.classify_with_confidence(
-                    query=user_input,
-                    context={
-                        "has_uploaded_documents": True,
-                        "last_query_was_rag": True,
-                        "has_active_documents": context_analysis.get("signals", {}).get("documents_selected", False)
-                    }
-                )
-
-                # Still handle AMBIGUOUS with old logic as final fallback
-                if classification.intent.value == "AMBIGUOUS":
-                    return self._handle_ambiguous_query(user_input, classification)
-
-            # Step 3: Execute based on classified intent
-            hybrid_result = await self.hybrid_executor.execute_hybrid(
-                query=user_input,
-                db=db,
-                state_manager=state_manager,
-                intent=classification.intent.value
-            )
-
-            logger.info("hybrid_execution_completed",
-                       has_sql=hybrid_result.has_sql,
-                       has_rag=hybrid_result.has_rag,
-                       needs_fusion=hybrid_result.needs_fusion)
-
-            # Step 4: Fuse results if HYBRID
-            if hybrid_result.needs_fusion:
-                logger.info("fusing_sql_and_rag_results")
-                fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
-
-                # Add transparency note (Option C)
-                response_with_transparency = self.context_intelligence.format_transparent_response(
-                    context_analysis=context_analysis,
-                    response_text=fused.text
-                )
-
                 return AgentResponse(
                     success=True,
-                    message=response_with_transparency,
-                    data={
-                        "fusion_strategy": fused.fusion_strategy,
-                        "has_contradictions": fused.has_contradictions,
-                        "contradiction_note": fused.contradiction_note,
-                        "sources": fused.sources,
-                        "sql_result": hybrid_result.sql_result.dict() if hybrid_result.sql_result else None,
-                        "rag_result": hybrid_result.rag_result.dict() if hybrid_result.rag_result else None,
-                        "context_signals": context_analysis["signals"]  # For debugging
-                    },
-                    agents_used=["context_intelligence", "intent_classifier_v2", "hybrid_executor", "sql_agent", "rag_agent", "synthesis_agent", "fusion_agent"],
-                    confidence=fused.confidence
-                )
-
-            # Step 5: Return SQL-only or RAG-only result
-            elif hybrid_result.has_sql and not hybrid_result.has_rag:
-                # SQL only
-                fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
-
-                # Add transparency note (Option C)
-                response_with_transparency = self.context_intelligence.format_transparent_response(
-                    context_analysis=context_analysis,
-                    response_text=fused.text
-                )
-
-                return AgentResponse(
-                    success=True,
-                    message=response_with_transparency,
-                    data={
-                        "sources": fused.sources,
-                        "context_signals": context_analysis["signals"]
-                    },
-                    agents_used=["context_intelligence", "intent_classifier_v2", "sql_agent"],
-                    confidence=fused.confidence
-                )
-
-            elif hybrid_result.has_rag and not hybrid_result.has_sql:
-                # RAG only
-                fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
-
-                # Add transparency note (Option C)
-                response_with_transparency = self.context_intelligence.format_transparent_response(
-                    context_analysis=context_analysis,
-                    response_text=fused.text
-                )
-
-                return AgentResponse(
-                    success=True,
-                    message=response_with_transparency,
-                    data={
-                        "sources": fused.sources,
-                        "has_contradictions": fused.has_contradictions,
-                        "context_signals": context_analysis["signals"]
-                    },
-                    agents_used=["context_intelligence", "intent_classifier_v2", "rag_agent", "synthesis_agent"],
-                    confidence=fused.confidence
-                )
-
-            else:
-                # Neither (empty result)
-                return AgentResponse(
-                    success=True,
-                    message="Je n'ai trouvé aucune information pertinente pour répondre à votre question.",
-                    agents_used=["intent_classifier_v2", "hybrid_executor"],
+                    message="Je n'ai trouvé aucune information pertinente dans les documents disponibles.",
+                    agents_used=["rag_agent"],
                     confidence=0.0
                 )
 
+            # Thought 2: Génération de la réponse
+            if thought_stream:
+                # Build a more informative message
+                doc_names = [r['metadata'].get('source', 'Inconnu') for r in search_results[:3]]
+                doc_list = ", ".join(doc_names)
+                if len(search_results) > 3:
+                    doc_list += f" et {len(search_results) - 3} autre(s)"
+
+                filter_info = ""
+                if document_ids:
+                    filter_info = f" (filtré sur {len(document_ids)} document(s) sélectionné(s))"
+
+                content_msg = f"J'ai trouvé {len(search_results)} résultat(s) pertinent(s){filter_info}.\n\n**Documents:** {doc_list}\n\nJe génère maintenant une réponse complète basée sur ces documents."
+
+                await thought_stream.add_thought(
+                    ThoughtType.PROCESSING,
+                    title="Analyse des documents",
+                    content=content_msg,
+                    agent="rag_agent",
+                    progress=0.6
+                )
+
+            # Generate response using LLM with retrieved context
+            context_text = "\n\n".join([
+                f"Document: {r['metadata'].get('source', 'Inconnu')}\nContenu: {r['content']}"
+                for r in search_results
+            ])
+
+            # Construct prompt with context and question
+            prompt = f"""Tu es un assistant intelligent qui aide les utilisateurs à trouver des informations dans leurs documents.
+
+Contexte récupéré:
+{context_text}
+
+Question de l'utilisateur: {user_input}
+
+Réponds à la question de manière précise et complète en utilisant uniquement les informations du contexte ci-dessus."""
+
+            llm_response = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.3,
+                max_tokens=2000
+            )
+
+            # Thought 3: Terminé
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.COMPLETED,
+                    title="Réponse générée",
+                    content="J'ai terminé l'analyse et généré une réponse complète basée sur vos documents.",
+                    agent="rag_agent",
+                    progress=1.0
+                )
+
+            # Format sources for frontend
+            sources = [
+                {
+                    "type": "document",
+                    "filename": r["metadata"].get("source", "Inconnu"),
+                    "score": round(r.get("score", 0), 3),
+                    "excerpt": r["content"][:200] + "..." if len(r["content"]) > 200 else r["content"]
+                }
+                for r in search_results
+            ]
+
+            return AgentResponse(
+                success=True,
+                message=llm_response,
+                data={"sources": sources},
+                agents_used=["rag_agent"],
+                confidence=0.85
+            )
+
         except Exception as e:
-            logger.error("hybrid_search_failed", error=str(e), exc_info=True)
+            logger.error("rag_search_failed", error=str(e), exc_info=True)
             return AgentResponse(
                 success=False,
-                message=f"Erreur lors de la recherche : {str(e)}",
+                message=f"Erreur lors de la recherche documentaire : {str(e)}",
                 agents_used=["orchestrator"]
             )
 
