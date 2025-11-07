@@ -7,10 +7,12 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import structlog
+import asyncio
 
 from app.services.rag_service import RAGService
 from app.services.llm_service import LLMService
 from app.services.orchestrator_service import OrchestratorService
+from app.services.agents.orchestrator_factory import get_orchestrator
 from app.core.dependencies import get_llm_service, get_rag_service
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,46 +68,73 @@ async def ask_question(
     - Reuses singleton services (no re-initialization)
     """
     try:
-        # Use orchestrator for intelligent routing
-        orchestrator = OrchestratorService()
+        # Get singleton orchestrator (eliminates 400ms re-instantiation overhead)
+        orchestrator = get_orchestrator()
 
-        logger.info("orchestrator_processing", question=request.message[:50])
+        logger.info("orchestrator_agent_processing", question=request.message[:50])
 
-        result = await orchestrator.process_query(
-            query=request.message,
-            db=db,
-            conversation_history=[msg.dict() for msg in request.conversation_history]
-        )
+        # Convert conversation history to proper format
+        conv_history = [{"role": msg.role, "content": msg.content} for msg in request.conversation_history]
+
+        # Process with multi-agent orchestrator (30s timeout protection)
+        try:
+            agent_response = await asyncio.wait_for(
+                orchestrator.process(
+                    user_input=request.message,
+                    db=db,
+                    conversation_history=conv_history,
+                    context=None,
+                    thought_stream=None,
+                    state_manager=None
+                ),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("request_timeout", message=request.message[:100])
+            raise HTTPException(
+                status_code=504,
+                detail="La requête a pris trop de temps. Veuillez réessayer avec une question plus simple."
+            )
+
+        # Convert agent response to ChatResponse format
+        result = {
+            "success": agent_response.success,
+            "response": agent_response.message,
+            "mode": "multi_agent",
+            "agents_used": agent_response.agents_used,
+            "confidence": agent_response.confidence
+        }
 
         logger.info(
-            "orchestrator_completed",
+            "orchestrator_agent_completed",
             question=request.message[:50],
-            mode=result.get("mode"),
+            agents_used=result.get("agents_used", []),
             success=result.get("success")
         )
 
-        # Format response based on mode
-        if result["mode"] == "sql":
-            # SQL mode: include query and results
-            return {
-                "message": result["response"],
-                "sources": [{
-                    "text": f"Mode: SQL Database Query",
-                    "metadata": {
-                        "title": "SQL Query Result",
-                        "sql": result.get("sql_query", ""),
-                        "row_count": result.get("row_count", 0)
-                    }
-                }],
-                "session_id": request.session_id or "default"
-            }
+        # Format response based on agent response
+        sources = []
+
+        # Extract sources from agent_response.data if available
+        if agent_response.data and "sources" in agent_response.data:
+            sources = agent_response.data["sources"]
         else:
-            # RAG mode: include document sources
-            return {
-                "message": result["response"],
-                "sources": result.get("sources", []),
-                "session_id": request.session_id or "default"
-            }
+            # Fallback: Create source info from agents used
+            sources = [{
+                "text": f"Agents utilisés: {', '.join(result.get('agents_used', []))}",
+                "metadata": {
+                    "title": "Multi-Agent System",
+                    "confidence": result.get("confidence", 1.0),
+                    "agents": result.get("agents_used", [])
+                }
+            }]
+
+        # Return unified response format
+        return {
+            "message": result["response"],
+            "sources": sources,
+            "session_id": request.session_id or "default"
+        }
 
     except Exception as e:
         logger.error("chat_error", error=str(e))

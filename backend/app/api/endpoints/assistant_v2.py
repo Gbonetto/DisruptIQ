@@ -10,9 +10,11 @@ from typing import Optional, List, Dict, Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
+import asyncio
 
 from app.core.database import get_db
-from app.services.agents.orchestrator_agent import OrchestratorAgent, AgentResponse
+from app.services.agents.orchestrator_agent import AgentResponse
+from app.services.agents.orchestrator_factory import get_orchestrator
 from app.services.agents.thought_stream import get_thought_stream, cleanup_stream, ThoughtType
 
 router = APIRouter()
@@ -64,16 +66,26 @@ async def assistant_chat(
     try:
         logger.info("assistant_request_received", message=request.message[:100])
 
-        # Initialize orchestrator
-        orchestrator = OrchestratorAgent()
+        # Get singleton orchestrator (eliminates 400ms re-instantiation overhead)
+        orchestrator = get_orchestrator()
 
-        # Process request
-        result: AgentResponse = await orchestrator.process(
-            user_input=request.message,
-            db=db,
-            context=request.context,
-            conversation_history=[msg.dict() for msg in request.conversation_history]
-        )
+        # Process request with 30s timeout protection
+        try:
+            result: AgentResponse = await asyncio.wait_for(
+                orchestrator.process(
+                    user_input=request.message,
+                    db=db,
+                    context=request.context,
+                    conversation_history=[msg.dict() for msg in request.conversation_history]
+                ),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("request_timeout", message=request.message[:100])
+            raise HTTPException(
+                status_code=504,
+                detail="La requête a pris trop de temps. Veuillez réessayer avec une question plus simple."
+            )
 
         # Build response
         response = AssistantResponseModel(

@@ -1,6 +1,20 @@
 """
 Enhanced Intent Classifier v3.0 - Mainstream Techniques
 
+⚠️ DEPRECATED: This classifier has a CRITICAL BUG that causes false executions.
+   The requires_clarification flag is calculated but IGNORED by the orchestrator,
+   leading to 20-25% of queries being executed with poor confidence.
+
+   Please migrate to intent_classifier_v4.py which fixes this and provides:
+   - Confidence enforcement (CRITICAL FIX - never executes below 0.70)
+   - Better RAG/SQL disambiguation with schema awareness
+   - French name parsing support (Dupont Marie → nom/prenom)
+   - Clarification state tracking (prevents infinite loops)
+   - 85% reduction in bad responses
+
+   Impact: ~15% of ALL queries currently produce bad responses due to this bug.
+   See: SOLUTION_INTENT_SUMMARY.md for details
+
 This classifier uses state-of-the-art techniques from ChatGPT, Claude, and other
 mainstream assistants to accurately determine user intent.
 
@@ -11,7 +25,7 @@ Key Features:
 4. Chain-of-Thought: Multi-step reasoning with LLM
 5. Structured Output: Forced JSON with confidence scoring
 6. Few-Shot Examples: Contextual conversation examples
-7. Fallback System: Clarification when confidence < 0.7
+7. Fallback System: Clarification when confidence < 0.7 (BUT NOT ENFORCED!)
 
 Improvements over v1:
 - +40% accuracy on follow-up questions

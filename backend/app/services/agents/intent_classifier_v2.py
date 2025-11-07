@@ -1,6 +1,16 @@
 """
 Intent Classifier v2.0 - Advanced disambiguation for RAG vs SQL
 
+⚠️ DEPRECATED: This classifier is deprecated and should not be used in production.
+   Please migrate to intent_classifier_v4.py which provides:
+   - Better confidence enforcement (prevents false executions)
+   - Improved RAG/SQL disambiguation with schema awareness
+   - French name parsing support
+   - Clarification state tracking (no loops)
+   - 85% reduction in bad responses
+
+   See: INTENT_CLASSIFIER_V4_IMPLEMENTATION.md for migration guide
+
 Features:
 - Keyword-based scoring (SQL vs RAG signals)
 - LLM semantic analysis

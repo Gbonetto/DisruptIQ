@@ -12,12 +12,14 @@ from app.services.llm_service import LLMService
 from app.services.rag_service import RAGService
 from app.core.database import AsyncSession
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
+from app.services.agents.state_registry import StateManager
 
 logger = structlog.get_logger()
 
 
 class IntentType(str, Enum):
-    """Types of user intentions"""
+    """Types of user intentions (V4 - includes new agents)"""
+    # Core intents
     QUERY_DATA = "query_data"  # SQL queries (copropriétaires, copropriétés, etc.)
     SEARCH_DOCUMENTS = "search_documents"  # RAG search (contracts, regulations)
     SEND_EMAIL = "send_email"  # Generate and send emails
@@ -27,6 +29,13 @@ class IntentType(str, Enum):
     GENERATE_DIGEST = "generate_digest"  # Generate email digest
     GENERAL_QUESTION = "general_question"  # General assistant question
     TRIGGER_WORKFLOW = "trigger_workflow"  # Explicit N8N workflow trigger
+
+    # New Phase 2 intents (Web Search + Legal agents)
+    WEB_SEARCH = "web_search"  # Search internet for current info
+    LEGAL_ANALYSIS = "legal_analysis"  # Analyze legal documents
+    LEGAL_COMPARISON = "legal_comparison"  # Compare legal docs
+    LEGAL_ADVICE = "legal_advice"  # Legal counsel/advice
+    SEARCH_JURISPRUDENCE = "search_jurisprudence"  # Find jurisprudence
 
 
 class AgentResponse(BaseModel):
@@ -53,19 +62,21 @@ class OrchestratorAgent:
     def __init__(self):
         self.llm_service = LLMService()
         self.rag_service = RAGService()
-        # Import new v2 components
-        from .intent_classifier_v2 import IntentClassifierV2
+
+        # Import production components
         from .hybrid_executor import HybridExecutor
         from .response_fusion_agent import ResponseFusionAgent
-        # Import v3 enhanced classifier
-        from .intent_classifier_v3 import EnhancedIntentClassifierV3
+        from .intent_classifier_v4 import EnhancedIntentClassifierV4
 
-        self.intent_classifier_v2 = IntentClassifierV2()
-        self.intent_classifier_v3 = EnhancedIntentClassifierV3()
+        # REMOVED: v2 classifier (unused, wastes 50MB memory)
+        # REMOVED: context_intelligence (file doesn't exist - causes ImportError)
+
+        # Only instantiate what we actually use
+        self.intent_classifier_v4 = EnhancedIntentClassifierV4()
         self.hybrid_executor = HybridExecutor()
         self.fusion_agent = ResponseFusionAgent()
 
-        logger.info("orchestrator_agent_initialized", version="v3.0_with_enhanced_classifier")
+        logger.info("orchestrator_agent_initialized", version="v4.0_optimized")
 
     async def classify_intention(
         self,
@@ -87,8 +98,8 @@ class OrchestratorAgent:
             IntentType enum
         """
         try:
-            # Use v3 enhanced classifier
-            classification_result = await self.intent_classifier_v3.classify(
+            # Use v4 production classifier with Web Search and Legal agents
+            classification_result = await self.intent_classifier_v4.classify(
                 user_input=user_input,
                 conversation_history=conversation_history,
                 state_manager=state_manager,
@@ -96,18 +107,17 @@ class OrchestratorAgent:
             )
 
             # Log detailed classification info
-            logger.info("intention_classified_v3",
+            logger.info("intention_classified_v4",
                        user_input=user_input[:50],
                        intent=classification_result.intent.value,
                        confidence=classification_result.confidence,
-                       quick_rule=classification_result.quick_rule_used,
-                       time_ms=classification_result.processing_time_ms,
-                       context_used=classification_result.context_used)
+                       reasoning=classification_result.reasoning[:100] if classification_result.reasoning else None)
 
             # Log alternatives for debugging
             if classification_result.alternatives:
+                # alternatives is List[Tuple[IntentTypeV4, float]]
                 alt_summary = [
-                    f"{alt.intent.value}({alt.confidence:.2f})"
+                    f"{alt[0].value}({alt[1]:.2f})"
                     for alt in classification_result.alternatives
                 ]
                 logger.info("alternative_intents", alternatives=alt_summary)
@@ -120,11 +130,19 @@ class OrchestratorAgent:
                              confidence=classification_result.confidence,
                              clarification=classification_result.clarification_question)
 
-            return classification_result.intent
+            # Check for multi-step plan
+            if classification_result.multi_step_plan and len(classification_result.multi_step_plan) > 0:
+                logger.info("multi_step_plan_detected",
+                           plan=[step.value for step in classification_result.multi_step_plan],
+                           main_intent=classification_result.intent.value)
+
+            # Convert IntentTypeV4 to IntentType (cast by value)
+            intent_value = classification_result.intent.value
+            return IntentType(intent_value), classification_result
 
         except Exception as e:
             logger.error("intention_classification_failed", error=str(e), exc_info=True)
-            return IntentType.GENERAL_QUESTION
+            return IntentType.GENERAL_QUESTION, None
 
     async def process(
         self,
@@ -214,7 +232,7 @@ class OrchestratorAgent:
                     progress=0.2
                 )
 
-            intent = await self.classify_intention(
+            intent, classification_result = await self.classify_intention(
                 user_input,
                 context,
                 state_manager,
@@ -222,6 +240,22 @@ class OrchestratorAgent:
             )
 
             logger.info("processing_request", intent=intent.value, input=user_input[:50])
+
+            # Check for multi-step workflow
+            if classification_result and classification_result.multi_step_plan:
+                logger.info("executing_multi_step_workflow",
+                           steps=[s.value for s in classification_result.multi_step_plan])
+
+                # Execute multi-step plan
+                return await self._execute_multi_step_plan(
+                    classification_result.multi_step_plan,
+                    user_input,
+                    db,
+                    context,
+                    thought_stream,
+                    state_manager,
+                    conversation_history
+                )
 
             # Thought 2: Planning
             if thought_stream:
@@ -248,7 +282,7 @@ class OrchestratorAgent:
                 return await self._handle_query_data(user_input, db, state_manager)
 
             elif intent == IntentType.SEARCH_DOCUMENTS:
-                return await self._handle_search_documents(user_input, db, state_manager)
+                return await self._handle_search_documents(user_input, db, state_manager, conversation_history)
 
             elif intent == IntentType.SEND_EMAIL:
                 return await self._handle_send_email_intelligent(
@@ -269,6 +303,22 @@ class OrchestratorAgent:
 
             elif intent == IntentType.TRIGGER_WORKFLOW:
                 return await self._handle_trigger_workflow(user_input, db)
+
+            # NEW Phase 2 agents
+            elif intent == IntentType.WEB_SEARCH:
+                return await self._handle_web_search(user_input, thought_stream)
+
+            elif intent == IntentType.LEGAL_ANALYSIS:
+                return await self._handle_legal_analysis(user_input, context, thought_stream)
+
+            elif intent == IntentType.LEGAL_COMPARISON:
+                return await self._handle_legal_comparison(user_input, context, thought_stream)
+
+            elif intent == IntentType.LEGAL_ADVICE:
+                return await self._handle_legal_advice(user_input, context, db, thought_stream)
+
+            elif intent == IntentType.SEARCH_JURISPRUDENCE:
+                return await self._handle_search_jurisprudence(user_input, db, thought_stream)
 
             else:  # GENERAL_QUESTION
                 logger.info("handling_general_question",
@@ -449,40 +499,102 @@ class OrchestratorAgent:
             ] if result.get("success") and response_data.get("results") else []
         )
 
-    async def _handle_search_documents(self, user_input: str, db: AsyncSession, state_manager = None) -> AgentResponse:
+    async def _handle_search_documents(self, user_input: str, db: AsyncSession, state_manager = None, conversation_history: List[Dict] = None) -> AgentResponse:
         """
         Handle document search via RAG with HYBRID SQL+RAG intelligence
 
-        NEW v2.0: Uses Intent Classifier to determine if query needs:
-        - RAG only
-        - SQL only
-        - HYBRID (both SQL + RAG with fusion)
+        NEW v4.0 (Option C): Intelligent context-based routing WITHOUT clarification
+        - Analyzes application state (selected docs, page context, history)
+        - Makes intelligent assumptions instead of asking user
+        - Falls back to parallel execution for low confidence
+        - Adds transparent notes showing what was searched
 
         This provides the most comprehensive answers by combining
         structured data (SQL) with unstructured knowledge (RAG).
         """
         try:
-            logger.info("handling_search_with_hybrid_intelligence", query=user_input[:50])
+            logger.info("handling_search_with_context_intelligence", query=user_input[:50])
 
-            # Step 1: Classify with v2.0 Intent Classifier (SQL vs RAG vs HYBRID)
-            classification = await self.intent_classifier_v2.classify_with_confidence(
+            # STEP 1: Analyze application context (Option C)
+            context_analysis = self.context_intelligence.analyze_context(
                 query=user_input,
-                context={
-                    "has_uploaded_documents": True,  # Assume docs exist if called
-                    "last_query_was_rag": True  # Coming from SEARCH_DOCUMENTS intent
-                }
+                state_manager=state_manager,
+                conversation_history=conversation_history
             )
 
-            logger.info("intent_classification_v2",
+            logger.info("context_analysis_complete",
                        query=user_input[:50],
-                       intent=classification.intent.value,
-                       confidence=classification.confidence,
-                       sql_score=classification.sql_score,
-                       rag_score=classification.rag_score)
+                       assumed_intent=context_analysis["assumed_intent"],
+                       confidence=context_analysis["confidence"],
+                       signals=context_analysis["signals"],
+                       should_execute_parallel=context_analysis.get("should_execute_parallel", False))
 
-            # Step 2: Handle AMBIGUOUS case (request clarification)
-            if classification.intent.value == "AMBIGUOUS":
-                return self._handle_ambiguous_query(user_input, classification)
+            # STEP 2: Check if we should skip clarification (Option C strategy)
+            should_skip, skip_reason = self.context_intelligence.should_skip_clarification(context_analysis)
+
+            if should_skip:
+                logger.info("skipping_clarification_with_context", reason=skip_reason)
+
+                # STEP 3: If parallel execution needed (LOW confidence), run both SQL+RAG
+                if context_analysis.get("should_execute_parallel", False):
+                    logger.info("using_parallel_execution_fallback")
+                    # Force HYBRID intent for parallel execution
+                    from .intent_classifier_v2 import ExecutionIntent, ClassificationResult
+                    classification = ClassificationResult(
+                        intent=ExecutionIntent.HYBRID,
+                        confidence=0.6,  # Medium confidence for parallel
+                        sql_score=0.5,
+                        rag_score=0.5,
+                        reasoning="Low confidence → parallel execution (SQL + RAG)",
+                        suggested_action="execute_both"
+                    )
+                else:
+                    # STEP 4: Map assumed intent to ExecutionIntent
+                    from .intent_classifier_v2 import ExecutionIntent, ClassificationResult
+                    assumed = context_analysis["assumed_intent"]
+
+                    if assumed == "RAG":
+                        classification = ClassificationResult(
+                            intent=ExecutionIntent.RAG_ONLY,
+                            confidence=float(context_analysis["confidence"].replace("very_high", "0.95").replace("high", "0.85").replace("medium", "0.7").replace("low", "0.4")),
+                            sql_score=0.0,
+                            rag_score=1.0,
+                            reasoning=context_analysis["reasoning"],
+                            suggested_action="execute_rag"
+                        )
+                    elif assumed == "SQL":
+                        classification = ClassificationResult(
+                            intent=ExecutionIntent.SQL_ONLY,
+                            confidence=float(context_analysis["confidence"].replace("very_high", "0.95").replace("high", "0.85").replace("medium", "0.7").replace("low", "0.4")),
+                            sql_score=1.0,
+                            rag_score=0.0,
+                            reasoning=context_analysis["reasoning"],
+                            suggested_action="execute_sql"
+                        )
+                    else:  # HYBRID
+                        classification = ClassificationResult(
+                            intent=ExecutionIntent.HYBRID,
+                            confidence=float(context_analysis["confidence"].replace("very_high", "0.95").replace("high", "0.85").replace("medium", "0.7").replace("low", "0.4")),
+                            sql_score=0.6,
+                            rag_score=0.6,
+                            reasoning=context_analysis["reasoning"],
+                            suggested_action="execute_both"
+                        )
+            else:
+                # Fallback: Use V2 classifier (should rarely happen with Option C)
+                logger.warning("context_intelligence_no_decision_using_v2_fallback")
+                classification = await self.intent_classifier_v2.classify_with_confidence(
+                    query=user_input,
+                    context={
+                        "has_uploaded_documents": True,
+                        "last_query_was_rag": True,
+                        "has_active_documents": context_analysis.get("signals", {}).get("documents_selected", False)
+                    }
+                )
+
+                # Still handle AMBIGUOUS with old logic as final fallback
+                if classification.intent.value == "AMBIGUOUS":
+                    return self._handle_ambiguous_query(user_input, classification)
 
             # Step 3: Execute based on classified intent
             hybrid_result = await self.hybrid_executor.execute_hybrid(
@@ -502,18 +614,25 @@ class OrchestratorAgent:
                 logger.info("fusing_sql_and_rag_results")
                 fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
 
+                # Add transparency note (Option C)
+                response_with_transparency = self.context_intelligence.format_transparent_response(
+                    context_analysis=context_analysis,
+                    response_text=fused.text
+                )
+
                 return AgentResponse(
                     success=True,
-                    message=fused.text,
+                    message=response_with_transparency,
                     data={
                         "fusion_strategy": fused.fusion_strategy,
                         "has_contradictions": fused.has_contradictions,
                         "contradiction_note": fused.contradiction_note,
                         "sources": fused.sources,
                         "sql_result": hybrid_result.sql_result.dict() if hybrid_result.sql_result else None,
-                        "rag_result": hybrid_result.rag_result.dict() if hybrid_result.rag_result else None
+                        "rag_result": hybrid_result.rag_result.dict() if hybrid_result.rag_result else None,
+                        "context_signals": context_analysis["signals"]  # For debugging
                     },
-                    agents_used=["intent_classifier_v2", "hybrid_executor", "sql_agent", "rag_agent", "synthesis_agent", "fusion_agent"],
+                    agents_used=["context_intelligence", "intent_classifier_v2", "hybrid_executor", "sql_agent", "rag_agent", "synthesis_agent", "fusion_agent"],
                     confidence=fused.confidence
                 )
 
@@ -521,25 +640,43 @@ class OrchestratorAgent:
             elif hybrid_result.has_sql and not hybrid_result.has_rag:
                 # SQL only
                 fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
+
+                # Add transparency note (Option C)
+                response_with_transparency = self.context_intelligence.format_transparent_response(
+                    context_analysis=context_analysis,
+                    response_text=fused.text
+                )
+
                 return AgentResponse(
                     success=True,
-                    message=fused.text,
-                    data={"sources": fused.sources},
-                    agents_used=["intent_classifier_v2", "sql_agent"],
+                    message=response_with_transparency,
+                    data={
+                        "sources": fused.sources,
+                        "context_signals": context_analysis["signals"]
+                    },
+                    agents_used=["context_intelligence", "intent_classifier_v2", "sql_agent"],
                     confidence=fused.confidence
                 )
 
             elif hybrid_result.has_rag and not hybrid_result.has_sql:
                 # RAG only
                 fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
+
+                # Add transparency note (Option C)
+                response_with_transparency = self.context_intelligence.format_transparent_response(
+                    context_analysis=context_analysis,
+                    response_text=fused.text
+                )
+
                 return AgentResponse(
                     success=True,
-                    message=fused.text,
+                    message=response_with_transparency,
                     data={
                         "sources": fused.sources,
-                        "has_contradictions": fused.has_contradictions
+                        "has_contradictions": fused.has_contradictions,
+                        "context_signals": context_analysis["signals"]
                     },
-                    agents_used=["intent_classifier_v2", "rag_agent", "synthesis_agent"],
+                    agents_used=["context_intelligence", "intent_classifier_v2", "rag_agent", "synthesis_agent"],
                     confidence=fused.confidence
                 )
 
@@ -658,49 +795,88 @@ class OrchestratorAgent:
             # Step 3: Execute plan
             recipients_found = []
 
-            # Execute SQL query if needed
-            for i, step in enumerate(plan.steps):
-                if step.step_type.value == "sql_query":
-                    # Emit thought
-                    if thought_stream:
-                        await thought_stream.add_thought(
-                            ThoughtType.EXECUTING,
-                            title="Recherche des destinataires",
-                            content=step.description,
-                            agent="orchestrator",
-                            progress=0.3 + (i * 0.2)
-                        )
+            # DEBUG: Log what's in the context
+            if context:
+                logger.info("email_context_check", context_keys=list(context.keys()))
+                if "query_data" in context:
+                    logger.info("query_data_in_context", structure=str(type(context["query_data"]))[:100])
 
-                    # Execute SQL query
-                    try:
-                        result = await db.execute(text(step.query))
-                        rows = result.fetchall()
+            # Check if recipients were already retrieved in previous multi-step (e.g., QUERY_DATA step)
+            if context and "query_data" in context:
+                query_data_context = context["query_data"]
 
-                        if rows:
-                            columns = result.keys()
-                            results_dicts = [dict(zip(columns, row)) for row in rows]
+                # Try to extract from the result data structure
+                if isinstance(query_data_context, dict):
+                    result_data = query_data_context.get("result", {})
+                    logger.info("result_data_structure", keys=list(result_data.keys()) if result_data else "empty")
 
-                            # Extract emails
-                            for row_dict in results_dicts:
-                                if "email" in row_dict and row_dict["email"]:
-                                    email_value = str(row_dict["email"])  # Ensure it's a string
-                                    recipients_found.append(email_value)
+                    # Check emails_available (direct field from SQL agent)
+                    if "emails_available" in result_data and isinstance(result_data["emails_available"], list):
+                        recipients_found = [str(email) for email in result_data["emails_available"] if email]
+                        logger.info("emails_found_in_emails_available", count=len(recipients_found))
 
-                            logger.info("recipients_found_from_sql", count=len(recipients_found), recipients=recipients_found[:3])
+                    # Also try results field with email column
+                    elif "results" in result_data and isinstance(result_data["results"], list):
+                        for row in result_data["results"]:
+                            if isinstance(row, dict) and "email" in row and row["email"]:
+                                recipients_found.append(str(row["email"]))
+                        logger.info("emails_found_in_results", count=len(recipients_found))
 
-                            # Emit success thought
-                            if thought_stream:
-                                await thought_stream.add_thought(
-                                    ThoughtType.ANALYZING,
-                                    title="Destinataires trouvés",
-                                    content=f"✓ {len(recipients_found)} destinataire(s) trouvé(s): {', '.join(recipients_found[:3])}{'...' if len(recipients_found) > 3 else ''}",
-                                    agent="orchestrator",
-                                    progress=0.5
-                                )
+                    if recipients_found:
+                        logger.info("recipients_from_previous_step", count=len(recipients_found))
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.ANALYZING,
+                                title="Destinataires récupérés",
+                                content=f"✓ {len(recipients_found)} destinataire(s) récupéré(s) de l'étape précédente",
+                                agent="orchestrator",
+                                progress=0.4
+                            )
 
-                    except Exception as e:
-                        logger.error("sql_execution_failed", error=str(e), query=step.query)
-                        # Continue without recipients
+            # Execute SQL query if needed and no recipients found yet
+            if not recipients_found:
+                for i, step in enumerate(plan.steps):
+                    if step.step_type.value == "sql_query":
+                        # Emit thought
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.EXECUTING,
+                                title="Recherche des destinataires",
+                                content=step.description,
+                                agent="orchestrator",
+                                progress=0.3 + (i * 0.2)
+                            )
+
+                        # Execute SQL query
+                        try:
+                            result = await db.execute(text(step.query))
+                            rows = result.fetchall()
+
+                            if rows:
+                                columns = result.keys()
+                                results_dicts = [dict(zip(columns, row)) for row in rows]
+
+                                # Extract emails
+                                for row_dict in results_dicts:
+                                    if "email" in row_dict and row_dict["email"]:
+                                        email_value = str(row_dict["email"])  # Ensure it's a string
+                                        recipients_found.append(email_value)
+
+                                logger.info("recipients_found_from_sql", count=len(recipients_found), recipients=recipients_found[:3])
+
+                                # Emit success thought
+                                if thought_stream:
+                                    await thought_stream.add_thought(
+                                        ThoughtType.ANALYZING,
+                                        title="Destinataires trouvés",
+                                        content=f"✓ {len(recipients_found)} destinataire(s) trouvé(s): {', '.join(recipients_found[:3])}{'...' if len(recipients_found) > 3 else ''}",
+                                        agent="orchestrator",
+                                        progress=0.5
+                                    )
+
+                        except Exception as e:
+                            logger.error("sql_execution_failed", error=str(e), query=step.query)
+                            # Continue without recipients
 
             # Update context with found recipients
             if recipients_found:
@@ -1142,6 +1318,269 @@ class OrchestratorAgent:
             agents_used=["workflow_agent"]
         )
 
+    # ========== NEW PHASE 2 AGENT HANDLERS ==========
+
+    async def _handle_web_search(self, user_input: str, thought_stream: ThoughtStream = None) -> AgentResponse:
+        """Handle web search requests"""
+        try:
+            from .web_agent import WebAgent
+
+            web_agent = WebAgent()
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.SEARCHING,
+                    title="Recherche sur le web",
+                    content=f"Je recherche sur internet: {user_input}",
+                    agent="web_agent",
+                    progress=0.5
+                )
+
+            result = await web_agent.search(query=user_input, max_results=5)
+
+            # Format results with answer + sources
+            formatted_message = f"{result['answer']}\n\n"
+
+            if result["sources"]:
+                formatted_message += "## Sources\n\n"
+                for source in result["sources"]:
+                    formatted_message += f"**[{source['rank']}] {source['title']}**\n"
+                    formatted_message += f"{source['snippet']}\n"
+                    formatted_message += f"🔗 {source['url']}\n\n"
+
+            return AgentResponse(
+                success=True,
+                message=formatted_message,
+                data=result,
+                agents_used=["web_agent"],
+                confidence=0.9
+            )
+
+        except Exception as e:
+            logger.error("web_search_failed", error=str(e), exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors de la recherche web: {str(e)}",
+                agents_used=["web_agent"]
+            )
+
+    async def _handle_legal_analysis(self, user_input: str, context: Dict[str, Any], thought_stream: ThoughtStream = None) -> AgentResponse:
+        """Handle legal document analysis"""
+        try:
+            from .legal_agent import LegalAgent
+
+            legal_agent = LegalAgent()
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.ANALYZING,
+                    title="Analyse juridique",
+                    content="Analyse juridique du document en cours...",
+                    agent="legal_agent",
+                    progress=0.5
+                )
+
+            # Extract document from context
+            document_text = context.get("document_text", "") if context else ""
+            if not document_text:
+                return AgentResponse(
+                    success=False,
+                    message="❌ Aucun document à analyser. Veuillez uploader un document d'abord.",
+                    agents_used=["legal_agent"]
+                )
+
+            # Perform full legal analysis
+            result = await legal_agent.analyze_document(
+                document_text=document_text,
+                analysis_type="full"
+            )
+
+            # Format response
+            if "error" in result:
+                return AgentResponse(
+                    success=False,
+                    message=result["error"],
+                    agents_used=["legal_agent"]
+                )
+
+            # Build formatted message
+            formatted_message = f"## Analyse juridique\n\n"
+            formatted_message += f"**Type de document:** {legal_agent.document_types.get(result.get('document_type', 'autre'), 'Document juridique')}\n\n"
+
+            if result.get("summary"):
+                formatted_message += f"### Résumé\n{result['summary']}\n\n"
+
+            if result.get("risks"):
+                formatted_message += f"### Risques identifiés ({len(result['risks'])})\n"
+                for risk in result["risks"][:5]:  # Top 5
+                    severity_emoji = {"low": "🟢", "medium": "🟡", "high": "🟠", "critical": "🔴"}.get(risk.get("severity", "medium"), "⚪")
+                    formatted_message += f"{severity_emoji} **{risk.get('category', 'Risque')}**: {risk.get('description', '')}\n"
+                formatted_message += "\n"
+
+            if result.get("obligations"):
+                formatted_message += f"### Obligations principales ({len(result['obligations'])})\n"
+                for obligation in result["obligations"][:5]:
+                    formatted_message += f"- **{obligation.get('partie', '')}**: {obligation.get('description', '')}\n"
+                formatted_message += "\n"
+
+            if result.get("recommendations"):
+                formatted_message += f"### Recommandations\n"
+                for idx, rec in enumerate(result["recommendations"], 1):
+                    formatted_message += f"{idx}. {rec}\n"
+
+            return AgentResponse(
+                success=True,
+                message=formatted_message,
+                data=result,
+                agents_used=["legal_agent"],
+                confidence=0.9
+            )
+
+        except Exception as e:
+            logger.error("legal_analysis_failed", error=str(e), exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors de l'analyse juridique: {str(e)}",
+                agents_used=["legal_agent"]
+            )
+
+    async def _handle_legal_comparison(self, user_input: str, context: Dict[str, Any], thought_stream: ThoughtStream = None) -> AgentResponse:
+        """Handle legal document comparison"""
+        try:
+            from .legal_agent import LegalAgent
+
+            legal_agent = LegalAgent()
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.ANALYZING,
+                    title="Comparaison juridique",
+                    content="Comparaison de documents juridiques...",
+                    agent="legal_agent",
+                    progress=0.5
+                )
+
+            # Extract documents from context
+            doc1 = context.get("document1", "") if context else ""
+            doc2 = context.get("document2", "") if context else ""
+
+            if not doc1 or not doc2:
+                return AgentResponse(
+                    success=False,
+                    message="❌ Deux documents sont nécessaires pour la comparaison.",
+                    agents_used=["legal_agent"]
+                )
+
+            result = await legal_agent.compare_legal_documents(
+                doc1=doc1,
+                doc2=doc2,
+                comparison_type="general"
+            )
+
+            return AgentResponse(
+                success=result["success"],
+                message=result["comparison"],
+                data=result,
+                agents_used=["legal_agent"],
+                confidence=result.get("confidence", 0.9)
+            )
+
+        except Exception as e:
+            logger.error("legal_comparison_failed", error=str(e), exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors de la comparaison juridique: {str(e)}",
+                agents_used=["legal_agent"]
+            )
+
+    async def _handle_legal_advice(self, user_input: str, context: Dict[str, Any], db: AsyncSession, thought_stream: ThoughtStream = None) -> AgentResponse:
+        """Handle legal advice requests"""
+        try:
+            from .legal_agent import LegalAgent
+
+            legal_agent = LegalAgent()
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.ANALYZING,
+                    title="Conseil juridique",
+                    content="Recherche d'informations juridiques...",
+                    agent="legal_agent",
+                    progress=0.5
+                )
+
+            result = await legal_agent.provide_legal_advice(
+                situation=user_input,
+                context=context or {}
+            )
+
+            # Flatten sources structure for FastAPI validation (sources must be a list, not a dict)
+            flattened_data = result.copy()
+            if "sources" in flattened_data and isinstance(flattened_data["sources"], dict):
+                # Convert {'rag': [...], 'web': [...]} to a flat list with metadata
+                all_sources = []
+                for source_type, items in flattened_data["sources"].items():
+                    if isinstance(items, list):
+                        for item in items:
+                            if isinstance(item, dict):
+                                item["source_type"] = source_type  # Add type as metadata
+                                all_sources.append(item)
+                flattened_data["sources"] = all_sources
+
+            return AgentResponse(
+                success=result["success"],
+                message=result["advice"],
+                data=flattened_data,
+                agents_used=["legal_agent"],
+                confidence=result.get("confidence", 0.85),
+                suggestions=["Consulter un avocat pour confirmation", "Demander une analyse approfondie"]
+            )
+
+        except Exception as e:
+            logger.error("legal_advice_failed", error=str(e), exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors de la fourniture du conseil juridique: {str(e)}",
+                agents_used=["legal_agent"]
+            )
+
+    async def _handle_search_jurisprudence(self, user_input: str, db: AsyncSession, thought_stream: ThoughtStream = None) -> AgentResponse:
+        """Handle jurisprudence search"""
+        try:
+            from .legal_agent import LegalAgent
+
+            legal_agent = LegalAgent()
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.SEARCHING,
+                    title="Recherche de jurisprudence",
+                    content="Recherche de jurisprudence pertinente...",
+                    agent="legal_agent",
+                    progress=0.5
+                )
+
+            result = await legal_agent.search_jurisprudence(
+                legal_question=user_input,
+                case_type="copropriete"
+            )
+
+            return AgentResponse(
+                success=result["success"],
+                message=result["jurisprudence"],
+                data=result,
+                agents_used=["legal_agent"],
+                confidence=result.get("confidence", 0.8)
+            )
+
+        except Exception as e:
+            logger.error("jurisprudence_search_failed", error=str(e), exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors de la recherche de jurisprudence: {str(e)}",
+                agents_used=["legal_agent"]
+            )
+
     async def _handle_general_question(
         self,
         user_input: str,
@@ -1200,6 +1639,230 @@ Réponds de manière claire, professionnelle et utile. Si tu peux aider avec une
             return AgentResponse(
                 success=False,
                 message="Désolé, je n'ai pas pu traiter votre question.",
+                agents_used=["orchestrator"]
+            )
+
+    async def _execute_multi_step_plan(
+        self,
+        plan: List[IntentType],
+        user_input: str,
+        db: AsyncSession,
+        context: Optional[Dict[str, Any]] = None,
+        thought_stream: Optional[ThoughtStream] = None,
+        state_manager: Optional[StateManager] = None,
+        conversation_history: List[Dict[str, str]] = None
+    ) -> AgentResponse:
+        """
+        Execute a multi-step plan sequentially
+
+        Each step is executed and its output becomes context for the next step.
+        This enables complex workflows like:
+        - Query data → Send email with results
+        - Search documents → Analyze → Generate report
+        - Web search → Legal analysis → Recommendation
+
+        Args:
+            plan: List of IntentTypes to execute in sequence
+            user_input: Original user request
+            db: Database session
+            context: Additional context
+            thought_stream: Stream for thoughts
+            state_manager: State management
+            conversation_history: Previous messages
+
+        Returns:
+            AgentResponse with combined results from all steps
+        """
+        try:
+            logger.info("multi_step_execution_started",
+                       steps=[step.value for step in plan],
+                       user_input=user_input[:100])
+
+            if thought_stream:
+                thought_stream.add_thought(
+                    f"🎯 Plan multi-étapes détecté: {len(plan)} étapes",
+                    details=" → ".join([step.value for step in plan])
+                )
+
+            # Accumulated context from previous steps
+            accumulated_context = context or {}
+            accumulated_data = {}
+            all_agents_used = []
+            all_messages = []
+
+            # Execute each step in sequence
+            for step_idx, step in enumerate(plan, 1):
+                logger.info("executing_step",
+                           step=step.value,
+                           step_number=f"{step_idx}/{len(plan)}")
+
+                if thought_stream:
+                    thought_stream.add_thought(
+                        f"🔄 Étape {step_idx}/{len(plan)}: {step.value}",
+                        details=f"Exécution de l'action: {step.value}"
+                    )
+
+                # Execute the step based on intent type
+                step_result = await self._execute_single_step(
+                    intent=step,
+                    user_input=user_input,
+                    db=db,
+                    context=accumulated_context,
+                    thought_stream=thought_stream,
+                    state_manager=state_manager,
+                    conversation_history=conversation_history
+                )
+
+                # Accumulate results
+                if step_result.success:
+                    all_agents_used.extend(step_result.agents_used)
+                    all_messages.append(f"✅ {step.value}: {step_result.message}")
+
+                    # Add step results to accumulated context
+                    accumulated_data[step.value] = step_result.data
+                    accumulated_context[step.value] = {
+                        "result": step_result.data,
+                        "message": step_result.message
+                    }
+
+                    logger.info("step_completed",
+                               step=step.value,
+                               success=True)
+                else:
+                    # Step failed - decide whether to continue or abort
+                    logger.warning("step_failed",
+                                 step=step.value,
+                                 error=step_result.message)
+                    all_messages.append(f"⚠️ {step.value}: {step_result.message}")
+
+                    # For critical steps (like QUERY_DATA before SEND_EMAIL), abort
+                    if step_idx < len(plan):
+                        logger.info("aborting_multi_step_plan",
+                                   reason="critical_step_failed",
+                                   failed_step=step.value)
+
+                        return AgentResponse(
+                            success=False,
+                            message=f"❌ Échec à l'étape {step_idx}/{len(plan)} ({step.value}): {step_result.message}",
+                            data=accumulated_data,
+                            agents_used=all_agents_used
+                        )
+
+            # All steps completed successfully
+            logger.info("multi_step_execution_completed",
+                       steps_executed=len(plan),
+                       agents_used=all_agents_used)
+
+            if thought_stream:
+                thought_stream.add_thought(
+                    f"✅ Plan multi-étapes terminé: {len(plan)}/{len(plan)} étapes réussies",
+                    details="\n".join(all_messages)
+                )
+
+            # Build final response message
+            final_message = f"✅ Workflow multi-étapes terminé ({len(plan)} étapes):\n\n"
+            final_message += "\n".join(all_messages)
+
+            return AgentResponse(
+                success=True,
+                message=final_message,
+                data=accumulated_data,
+                agents_used=list(set(all_agents_used)),  # Unique agents
+                confidence=0.9
+            )
+
+        except Exception as e:
+            logger.error("multi_step_execution_failed",
+                        error=str(e),
+                        exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"❌ Erreur lors de l'exécution du plan multi-étapes: {str(e)}",
+                agents_used=["orchestrator"]
+            )
+
+    async def _execute_single_step(
+        self,
+        intent: IntentType,
+        user_input: str,
+        db: AsyncSession,
+        context: Dict[str, Any],
+        thought_stream: Optional[ThoughtStream] = None,
+        state_manager: Optional[StateManager] = None,
+        conversation_history: List[Dict[str, str]] = None
+    ) -> AgentResponse:
+        """
+        Execute a single step in a multi-step plan
+
+        Routes to appropriate handler based on intent type.
+
+        Args:
+            intent: Intent type to execute
+            user_input: Original user input
+            db: Database session
+            context: Context from previous steps
+            thought_stream: Stream for thoughts
+            state_manager: State management
+            conversation_history: Previous messages
+
+        Returns:
+            AgentResponse from the specific handler
+        """
+        # Map intent to handler method
+        handler_map = {
+            IntentType.QUERY_DATA: self._handle_query_data,
+            IntentType.SEARCH_DOCUMENTS: self._handle_search_documents,
+            IntentType.SEND_EMAIL: self._handle_send_email_intelligent,
+            IntentType.REQUEST_QUOTES: self._handle_request_quotes,
+            IntentType.ANALYZE_DOCUMENT: self._handle_analyze_document,
+            IntentType.TRIGGER_WORKFLOW: self._handle_trigger_workflow,
+            IntentType.WEB_SEARCH: self._handle_web_search,
+            IntentType.LEGAL_ADVICE: self._handle_legal_advice,
+            IntentType.LEGAL_ANALYSIS: self._handle_legal_analysis,
+            IntentType.LEGAL_COMPARISON: self._handle_legal_comparison,
+            IntentType.SEARCH_JURISPRUDENCE: self._handle_search_jurisprudence,
+            IntentType.GENERAL_QUESTION: self._handle_general_question,
+        }
+
+        handler = handler_map.get(intent)
+
+        if not handler:
+            logger.error("no_handler_for_intent", intent=intent.value)
+            return AgentResponse(
+                success=False,
+                message=f"Aucun gestionnaire trouvé pour l'intention: {intent.value}",
+                agents_used=["orchestrator"]
+            )
+
+        # Call handler with appropriate arguments based on signature
+        try:
+            # Most handlers need these basic args
+            handler_kwargs = {"user_input": user_input}
+
+            # Add context if handler accepts it
+            import inspect
+            sig = inspect.signature(handler)
+            if "context" in sig.parameters:
+                handler_kwargs["context"] = context
+            if "db" in sig.parameters:
+                handler_kwargs["db"] = db
+            if "thought_stream" in sig.parameters:
+                handler_kwargs["thought_stream"] = thought_stream
+            if "state_manager" in sig.parameters:
+                handler_kwargs["state_manager"] = state_manager
+            if "conversation_history" in sig.parameters:
+                handler_kwargs["conversation_history"] = conversation_history
+
+            return await handler(**handler_kwargs)
+
+        except Exception as e:
+            logger.error("step_execution_error",
+                        intent=intent.value,
+                        error=str(e),
+                        exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors de l'exécution de {intent.value}: {str(e)}",
                 agents_used=["orchestrator"]
             )
 
