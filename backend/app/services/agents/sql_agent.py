@@ -53,6 +53,10 @@ TABLES DISPONIBLES:
    - code_postal: String (NOT NULL)
    - nombre_lots: Integer
    - nombre_batiments: Integer
+   - annee_construction: Integer (année de construction ex: 1985, 1920)
+   - syndic: String (nom du syndic)
+   - contact_syndic: String
+   - reference_syndic: String
    - created_at: DateTime
 
 2. coproprietaires
@@ -148,13 +152,61 @@ TABLES DISPONIBLES:
             # Step 4: Format results in natural language
             formatted_message = await self._format_results(user_input, results, sql_query)
 
+            # Step 5: Prepare structured table data for DataTable component
+            table_data = None
+            if results:
+                # Determine which columns to display (max 10 columns for table view)
+                first_row = results[0]
+                all_columns = list(first_row.keys())
+
+                # Prioritize important columns
+                priority_columns = ['id', 'nom', 'prenom', 'name', 'email', 'telephone',
+                                   'phone', 'telephone_mobile', 'subject', 'ville', 'city',
+                                   'adresse', 'address', 'numero_lot', 'type_lot', 'category',
+                                   'urgency', 'statut', 'company_name', 'rating']
+
+                # Select columns: prioritize important ones, then others
+                selected_columns = []
+                for col in priority_columns:
+                    if col in all_columns and col not in selected_columns:
+                        selected_columns.append(col)
+                        if len(selected_columns) >= 10:
+                            break
+
+                # Add remaining columns if we have less than 10
+                for col in all_columns:
+                    if col not in selected_columns:
+                        selected_columns.append(col)
+                        if len(selected_columns) >= 10:
+                            break
+
+                # Build table data structure
+                table_rows = []
+                for row in results:
+                    table_row = []
+                    for col in selected_columns:
+                        value = row.get(col, '')
+                        # Format value for display
+                        if value is None:
+                            table_row.append('-')
+                        else:
+                            table_row.append(str(value))
+                    table_rows.append(table_row)
+
+                table_data = {
+                    "title": f"Résultats - {len(results)} ligne{'s' if len(results) > 1 else ''}",
+                    "headers": selected_columns,
+                    "rows": table_rows
+                }
+
             return {
                 "success": True,
                 "message": formatted_message,
                 "data": {
                     "results": results,
                     "row_count": len(results) if isinstance(results, list) else 0,
-                    "sql_query": sql_query
+                    "sql_query": sql_query,
+                    "table": table_data  # Structured table data for DataTable component
                 },
                 "sql_query": sql_query,
                 "confidence": 0.9
@@ -177,12 +229,23 @@ SCHÉMA DE BASE DE DONNÉES:
 
 RÈGLES IMPORTANTES:
 1. Utilise UNIQUEMENT des SELECT (pas INSERT, UPDATE, DELETE, DROP)
-2. Pour rechercher des NOMS/PRÉNOMS: utilise TOUJOURS LOWER() et LIKE avec '%'
+2. ⚠️ CRITIQUE: Pour TOUTES les comparaisons de texte (=, LIKE, IN, etc.), utilise TOUJOURS unaccent(LOWER())
+   - Exemple LIKE: WHERE unaccent(LOWER(nom)) LIKE unaccent(LOWER('%dupont%'))
+   - Exemple = : WHERE unaccent(LOWER(co.nom)) = unaccent(LOWER('Résidence des Jardins'))
+   - Exemple IN : WHERE unaccent(LOWER(category)) IN (unaccent(LOWER('plombier')), unaccent(LOWER('chauffagiste')))
+   - Cela permet de chercher sans tenir compte des accents (résidence = residence, José = Jose)
 3. Pour chercher une PERSONNE: regarde d'abord dans 'professionnels' (name), puis 'coproprietaires' (nom, prenom)
+   - Si pas trouvé dans professionnels, cherche dans coproprietaires
+   - Gère les titres: "M. Dupont", "Mme Dupont" → retire "M.", "Mme", "Mr" avant de chercher
 4. Pour chercher un MÉTIER/CATÉGORIE: utilise table 'professionnels' colonne 'category'
-5. Utilise des JOINs appropriés si nécessaire
-6. Limite les résultats à 100 rows (LIMIT 100), SAUF si demandé explicitement "tous"
-7. Retourne UNIQUEMENT le SQL, sans explication, sans markdown
+5. Pour comparer des DATES/ANNÉES:
+   - "avant 2000" → WHERE annee_construction < 2000
+   - "après 1990" → WHERE annee_construction > 1990
+   - "en 2000" → WHERE annee_construction = 2000
+6. Utilise des JOINs appropriés si nécessaire
+7. Dans les SUBQUERIES aussi: utilise toujours unaccent(LOWER()) pour les comparaisons de texte
+8. Limite les résultats à 100 rows (LIMIT 100), SAUF si demandé explicitement "tous"
+9. Retourne UNIQUEMENT le SQL, sans explication, sans markdown
 
 ⚠️ INFORMATIONS NON DISPONIBLES EN BASE DE DONNÉES:
 Les informations suivantes NE SONT PAS stockées dans la base et ne peuvent PAS être interrogées avec SQL:
@@ -197,37 +260,56 @@ EXEMPLES CONCRETS:
 
 PROFESSIONNELS (name en un seul champ):
 Q: "qui est nadege moussu ?"
-A: SELECT * FROM professionnels WHERE LOWER(name) LIKE '%nadege%' AND LOWER(name) LIKE '%moussu%' LIMIT 100
+A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%nadege%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) LIMIT 100
+
+Q: "qui est Laurent Moussu ?"
+A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%laurent%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) LIMIT 100
+
+Q: "qui est M. Moussu ?"
+A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) LIMIT 100
 
 Q: "qui est Gregori Bonetto ?"
-A: SELECT * FROM professionnels WHERE LOWER(name) LIKE '%gregori%' AND LOWER(name) LIKE '%bonetto%' LIMIT 100
+A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%gregori%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%bonetto%')) LIMIT 100
 
 Q: "connaissons nous des consultants ?"
-A: SELECT * FROM professionnels WHERE LOWER(category) LIKE '%consultant%' LIMIT 100
+A: SELECT * FROM professionnels WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%consultant%')) LIMIT 100
 
 Q: "liste des plombiers"
-A: SELECT name, email, phone, city FROM professionnels WHERE LOWER(category) LIKE '%plombier%' LIMIT 100
+A: SELECT name, email, phone, city FROM professionnels WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%plombier%')) LIMIT 100
 
 COPROPRIETAIRES (nom et prenom séparés - TRÈS IMPORTANT):
 Q: "Qui est Dupont Marie ?"
-A: SELECT * FROM coproprietaires WHERE LOWER(nom) LIKE '%dupont%' AND LOWER(prenom) LIKE '%marie%' LIMIT 100
+A: SELECT * FROM coproprietaires WHERE unaccent(LOWER(nom)) LIKE unaccent(LOWER('%dupont%')) AND unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%marie%')) LIMIT 100
 
 Q: "où vit Marie Dupont ?"
-A: SELECT nom, prenom, adresse_postale, ville, numero_lot FROM coproprietaires WHERE LOWER(prenom) LIKE '%marie%' AND LOWER(nom) LIKE '%dupont%' LIMIT 100
+A: SELECT nom, prenom, adresse_postale, ville, numero_lot FROM coproprietaires WHERE unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%marie%')) AND unaccent(LOWER(nom)) LIKE unaccent(LOWER('%dupont%')) LIMIT 100
 
 Q: "qui est Michel Bertrand ?"
-A: SELECT * FROM coproprietaires WHERE (LOWER(prenom) LIKE '%michel%' AND LOWER(nom) LIKE '%bertrand%') OR (LOWER(nom) LIKE '%michel%' AND LOWER(prenom) LIKE '%bertrand%') LIMIT 100
+A: SELECT * FROM coproprietaires WHERE (unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%michel%')) AND unaccent(LOWER(nom)) LIKE unaccent(LOWER('%bertrand%'))) OR (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%michel%')) AND unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%bertrand%'))) LIMIT 100
 
 Q: "quel est l'email de Sophie Durant ?"
-A: SELECT nom, prenom, email, telephone FROM coproprietaires WHERE (LOWER(prenom) LIKE '%sophie%' AND LOWER(nom) LIKE '%durant%') OR (LOWER(nom) LIKE '%sophie%' AND LOWER(prenom) LIKE '%durant%') LIMIT 100
+A: SELECT nom, prenom, email, telephone FROM coproprietaires WHERE (unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%sophie%')) AND unaccent(LOWER(nom)) LIKE unaccent(LOWER('%durant%'))) OR (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%sophie%')) AND unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%durant%'))) LIMIT 100
 
 COPROPRIETES:
 Q: "copropriétaires des Mimosas"
-A: SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE LOWER(co.nom) LIKE '%mimosas%' LIMIT 100
+A: SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%mimosas%')) LIMIT 100
+
+Q: "copropriétés construites avant 2000"
+A: SELECT * FROM coproprietes WHERE annee_construction < 2000 LIMIT 100
+
+Q: "copropriétaires habitant dans des copropriétés construites avant 2000"
+A: SELECT c.nom, c.prenom, c.email, co.nom as copropriete_nom, co.annee_construction FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE co.annee_construction < 2000 LIMIT 100
+
+SUBQUERIES COMPLEXES (ATTENTION: utilise unaccent() dans les subqueries aussi):
+Q: "copropriétaires ayant le même syndic que la résidence des jardins"
+A: SELECT c.nom, c.prenom, c.email, co.nom as copropriete_nom FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE unaccent(LOWER(co.syndic)) = (SELECT unaccent(LOWER(syndic)) FROM coproprietes WHERE unaccent(LOWER(nom)) LIKE unaccent(LOWER('%residence%')) AND unaccent(LOWER(nom)) LIKE unaccent(LOWER('%jardins%')) LIMIT 1) LIMIT 100
+
+Q: "syndic de la copropriété où vit Marie Dubois"
+A: SELECT DISTINCT co.syndic, co.contact_syndic FROM coproprietes co JOIN coproprietaires c ON c.copropriete_id = co.id WHERE unaccent(LOWER(c.prenom)) LIKE unaccent(LOWER('%marie%')) AND unaccent(LOWER(c.nom)) LIKE unaccent(LOWER('%dubois%')) LIMIT 100
 
 VÉRIFICATION DE PRÉSENCE:
 Q: "dans la table professionnels, y a t-il Gregori Bonetto ?"
-A: SELECT * FROM professionnels WHERE LOWER(name) LIKE '%gregori%' AND LOWER(name) LIKE '%bonetto%' LIMIT 100
+A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%gregori%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%bonetto%')) LIMIT 100
 
 QUESTION DE L'UTILISATEUR:
 {user_input}
@@ -389,7 +471,8 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
         sql_query: str
     ) -> str:
         """
-        Format SQL results as a Markdown table for better readability
+        Format SQL results as a simple text message
+        The table will be displayed using the DataTable component
 
         Args:
             original_question: User's original question
@@ -397,7 +480,7 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
             sql_query: SQL query executed
 
         Returns:
-            Formatted message with Markdown table
+            Simple formatted message (table is in data.table)
         """
         if not results:
             # Check if query was about pricing/tarif
@@ -410,62 +493,5 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
 
         count = len(results)
 
-        # Determine which columns to display (max 6 columns for readability)
-        first_row = results[0]
-        all_columns = list(first_row.keys())
-
-        # Prioritize important columns
-        priority_columns = ['id', 'nom', 'prenom', 'name', 'email', 'telephone',
-                           'phone', 'subject', 'ville', 'city', 'adresse', 'address',
-                           'numero_lot', 'type_lot', 'category', 'urgency', 'statut']
-
-        # Select columns: prioritize important ones, then others
-        selected_columns = []
-        for col in priority_columns:
-            if col in all_columns and col not in selected_columns:
-                selected_columns.append(col)
-                if len(selected_columns) >= 6:
-                    break
-
-        # Add remaining columns if we have less than 6
-        for col in all_columns:
-            if col not in selected_columns:
-                selected_columns.append(col)
-                if len(selected_columns) >= 6:
-                    break
-
-        # Build header
-        message_parts = [f"✅ **{count}** résultat{'s' if count > 1 else ''} trouvé{'s' if count > 1 else ''}\n\n"]
-
-        # Build Markdown table
-        # Header row
-        header = "| " + " | ".join(selected_columns) + " |"
-        message_parts.append(header + "\n")
-
-        # Separator row
-        separator = "|" + "|".join([" --- " for _ in selected_columns]) + "|"
-        message_parts.append(separator + "\n")
-
-        # Data rows (show max 10 rows)
-        max_display = min(10, count)
-        for row in results[:max_display]:
-            row_values = []
-            for col in selected_columns:
-                value = row.get(col, '')
-                # Format value for display
-                if value is None:
-                    formatted_value = '-'
-                elif isinstance(value, str):
-                    # Truncate long strings
-                    formatted_value = value[:50] + '...' if len(value) > 50 else value
-                else:
-                    formatted_value = str(value)
-                row_values.append(formatted_value)
-
-            message_parts.append("| " + " | ".join(row_values) + " |\n")
-
-        # Add footer if more results exist
-        if count > max_display:
-            message_parts.append(f"\n_... et {count - max_display} autre{'s' if count - max_display > 1 else ''} résultat{'s' if count - max_display > 1 else ''}_")
-
-        return "".join(message_parts)
+        # Simple message - the table will be displayed by DataTable component
+        return f"✅ J'ai trouvé **{count}** résultat{'s' if count > 1 else ''} dans la base de données."

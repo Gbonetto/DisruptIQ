@@ -13,6 +13,7 @@ from app.services.rag_service import RAGService
 from app.core.database import AsyncSession
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
 from app.services.agents.state_registry import StateManager
+from app.utils.sql_validation import validate_sql_query
 
 logger = structlog.get_logger()
 
@@ -174,14 +175,21 @@ class OrchestratorAgent:
             AgentResponse with results
         """
         try:
+            # 0. Pre-populate EntityGraph if empty (first query of session)
+            if state_manager:
+                entity_graph = state_manager.get_entity_graph()
+                if len(entity_graph.entities) == 0:
+                    logger.info("entity_graph_empty_prepopulating")
+                    await state_manager.pre_populate_entity_graph(db)
+
             # Thought 1: Analyzing request
             if thought_stream:
                 await thought_stream.add_thought(
                     ThoughtType.ANALYZING,
-                    title="Analyse de la demande",
-                    content=f"Je commence par analyser votre demande : « {user_input[:100]}... »",
+                    title="Analyse de la demande utilisateur",
+                    content=f"Je reçois votre demande : « {user_input} ». Je vais d'abord vérifier si elle contient des références à des documents récemment uploadés, puis déterminer quelle action entreprendre.",
                     agent="orchestrator",
-                    progress=0.1
+                    progress=0.05
                 )
 
             # 1. Resolve document references ("le doc", "ce fichier", etc.)
@@ -207,6 +215,15 @@ class OrchestratorAgent:
                     last_doc = state_manager.state.last_uploaded_documents[0]
                     doc_filename = last_doc["filename"]
 
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.PROCESSING,
+                            title="Résolution de référence document",
+                            content=f"J'ai détecté une référence générique à un document. Je la remplace par le fichier récemment uploadé : « {doc_filename} »",
+                            agent="orchestrator",
+                            progress=0.1
+                        )
+
                     # Replace generic references with actual filename
                     replacements = {
                         "le doc": doc_filename,
@@ -230,14 +247,63 @@ class OrchestratorAgent:
                                resolved=user_input,
                                filename=doc_filename)
 
+            # 1.5 NOUVEAU: Query Enrichment (résolution d'entités)
+            enriched_query_obj = None
+            if state_manager:
+                try:
+                    from app.services.agents.query_enrichment import QueryEnrichmentLayer
+
+                    enrichment_layer = QueryEnrichmentLayer()
+                    entity_graph = state_manager.get_entity_graph()
+
+                    # Enrich query with entity resolution
+                    enriched_query_obj = await enrichment_layer.enrich(
+                        user_query=user_input,
+                        entity_graph=entity_graph,
+                        conversation_state=state_manager.get_state(),
+                        db=db
+                    )
+
+                    # If entities were resolved, use enriched query
+                    if enriched_query_obj.resolved_entities:
+                        logger.info("query_enriched",
+                                   original=user_input[:50],
+                                   enriched=enriched_query_obj.enriched_query[:50],
+                                   entities_count=len(enriched_query_obj.resolved_entities))
+
+                        # Use enriched query for intent classification
+                        user_input = enriched_query_obj.enriched_query
+
+                        # Add enrichment context
+                        if not context:
+                            context = {}
+                        context.update(enriched_query_obj.context)
+
+                        if thought_stream:
+                            resolved_names = ", ".join([
+                                f"«{e.canonical_name}»"
+                                for e in enriched_query_obj.resolved_entities.values()
+                            ])
+                            await thought_stream.add_thought(
+                                ThoughtType.PROCESSING,
+                                title="Résolution des références",
+                                content=f"J'ai identifié et résolu {len(enriched_query_obj.resolved_entities)} entité(s) dans votre demande : {resolved_names}. Je vais utiliser ces informations pour générer une requête plus précise.",
+                                agent="orchestrator",
+                                progress=0.12
+                            )
+
+                except Exception as e:
+                    logger.warning("query_enrichment_failed", error=str(e))
+                    # Continue with original query if enrichment fails
+
             # 2. Classify intention
             if thought_stream:
                 await thought_stream.add_thought(
                     ThoughtType.CLASSIFYING,
-                    title="Classification de l'intention",
-                    content="Je détermine quel type d'action est nécessaire (requête de données, recherche documentaire, génération d'email, etc.)",
-                    agent="orchestrator",
-                    progress=0.2
+                    title="Classification de l'intention utilisateur",
+                    content="J'analyse la demande pour déterminer l'action appropriée. Je vérifie les mots-clés, le contexte de la conversation, et les documents actifs pour classifier l'intention parmi : requête SQL, recherche documentaire (RAG), génération d'email, recherche web, analyse légale, etc.",
+                    agent="intent_classifier",
+                    progress=0.15
                 )
 
             intent, classification_result = await self.classify_intention(
@@ -246,6 +312,15 @@ class OrchestratorAgent:
                 state_manager,
                 conversation_history
             )
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.CLASSIFYING,
+                    title=f"Intention détectée : {intent.value}",
+                    content=f"Classification terminée. Type d'intention identifiée : {intent.value}. Je vais maintenant déterminer quel(s) agent(s) spécialisé(s) activer pour traiter cette demande.",
+                    agent="intent_classifier",
+                    progress=0.25
+                )
 
             logger.info("processing_request", intent=intent.value, input=user_input[:50])
 
@@ -268,26 +343,37 @@ class OrchestratorAgent:
             # Thought 2: Planning
             if thought_stream:
                 intent_descriptions = {
-                    IntentType.QUERY_DATA: "requête de données structurées → SQL Agent",
-                    IntentType.SEARCH_DOCUMENTS: "recherche documentaire → RAG Agent",
-                    IntentType.SEND_EMAIL: "génération et envoi d'email → Email + Workflow Agents",
-                    IntentType.REQUEST_QUOTES: "demande de devis → SQL + Template + Workflow Agents",
-                    IntentType.ANALYZE_DOCUMENT: "analyse de document → OCR Agent",
-                    IntentType.TRIGGER_WORKFLOW: "déclenchement de workflow → Workflow Agent",
-                    IntentType.GENERAL_QUESTION: "question générale → LLM"
+                    IntentType.QUERY_DATA: "SQL Agent (requête base de données PostgreSQL)",
+                    IntentType.SEARCH_DOCUMENTS: "RAG Agent (recherche sémantique + Qdrant)",
+                    IntentType.SEND_EMAIL: "Email Agent + Workflow Agent (génération + envoi via N8N)",
+                    IntentType.REQUEST_QUOTES: "SQL Agent + Template Agent + Workflow Agent",
+                    IntentType.ANALYZE_DOCUMENT: "OCR Agent (extraction Tesseract + analyse)",
+                    IntentType.TRIGGER_WORKFLOW: "Workflow Agent (déclenchement N8N)",
+                    IntentType.GENERAL_QUESTION: "LLM Direct (Mistral/GPT-4o)",
+                    IntentType.WEB_SEARCH: "Web Search Agent (Tavily API)",
+                    IntentType.LEGAL_ANALYSIS: "Legal Agent (analyse juridique)",
                 }
+                agent_desc = intent_descriptions.get(intent, 'agents appropriés')
                 await thought_stream.add_thought(
                     ThoughtType.PLANNING,
-                    title="Plan d'action",
-                    content=f"J'ai identifié votre intention : **{intent.value}**\n\nJe vais utiliser : {intent_descriptions.get(intent, 'agents appropriés')}",
+                    title=f"Planification : {intent.value}",
+                    content=f"Intention confirmée : {intent.value}.\n\nAgent(s) sélectionné(s) : {agent_desc}.\n\nJe vais maintenant activer cet agent et lui transmettre votre demande pour traitement.",
                     agent="orchestrator",
-                    data={"intent": intent.value},
-                    progress=0.3
+                    data={"intent": intent.value, "agents": agent_desc},
+                    progress=0.35
                 )
 
             # 2. Route to appropriate agent(s)
             if intent == IntentType.QUERY_DATA:
-                return await self._handle_query_data(user_input, db, state_manager)
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.EXECUTING,
+                        title="Activation SQL Agent",
+                        content="Je transfère la demande au SQL Agent. Il va analyser votre question, générer une requête SQL appropriée, l'exécuter sur la base PostgreSQL, et formater les résultats.",
+                        agent="sql_agent",
+                        progress=0.4
+                    )
+                return await self._handle_query_data(user_input, db, state_manager, thought_stream)
 
             elif intent == IntentType.SEARCH_DOCUMENTS:
                 return await self._handle_search_documents(user_input, db, state_manager, conversation_history, thought_stream, context)
@@ -407,7 +493,7 @@ class OrchestratorAgent:
             logger.info("recipient_lookup_required", user_input=user_input[:50], has_names=has_specific_names)
         return result
 
-    async def _handle_query_data(self, user_input: str, db: AsyncSession, state_manager=None) -> AgentResponse:
+    async def _handle_query_data(self, user_input: str, db: AsyncSession, state_manager=None, thought_stream=None) -> AgentResponse:
         """Handle SQL data queries and store results in context"""
         # Import here to avoid circular imports
         from .sql_agent import SQLAgent
@@ -431,8 +517,45 @@ class OrchestratorAgent:
                            original=user_input[:50],
                            professions=relevant_professions)
 
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.PROCESSING,
+                        title="Enrichissement de la requête",
+                        content=f"J'ai détecté que vous souhaitez filtrer par métier. J'enrichis la requête avec les professions pertinentes identifiées dans le contexte : {', '.join(relevant_professions)}",
+                        agent="sql_agent",
+                        progress=0.5
+                    )
+
+        if thought_stream:
+            await thought_stream.add_thought(
+                ThoughtType.EXECUTING,
+                title="Génération de la requête SQL",
+                content=f"Le SQL Agent analyse la demande et génère une requête SQL optimisée pour interroger la base de données PostgreSQL. Requête à traiter : « {enriched_input} »",
+                agent="sql_agent",
+                progress=0.6
+            )
+
         sql_agent = SQLAgent()
         result = await sql_agent.process(enriched_input, db)
+
+        if thought_stream:
+            if result.get("success"):
+                row_count = len(result.get("data", {}).get("results", []))
+                await thought_stream.add_thought(
+                    ThoughtType.PROCESSING,
+                    title="Requête SQL exécutée avec succès",
+                    content=f"✓ La requête a été exécutée. J'ai récupéré {row_count} résultat(s) de la base de données. Je vais maintenant formater et présenter ces données.",
+                    agent="sql_agent",
+                    progress=0.75
+                )
+            else:
+                await thought_stream.add_thought(
+                    ThoughtType.ERROR,
+                    title="Erreur lors de l'exécution SQL",
+                    content=f"✗ Une erreur s'est produite lors de l'exécution de la requête : {result.get('message', 'Erreur inconnue')}",
+                    agent="sql_agent",
+                    progress=0.75
+                )
 
         # Store SQL results in response data for context persistence
         response_data = result.get("data", {})
@@ -493,6 +616,49 @@ class OrchestratorAgent:
                         # Properties query
                         state_manager.get_state().set_last_query_entities(results, "properties")
                         logger.info("stored_query_entities_in_state", type="properties", count=len(results))
+
+                # NOUVEAU: Populate EntityGraph with results
+                try:
+                    from app.services.agents.query_enrichment import EntityPopulator
+
+                    entity_populator = EntityPopulator()
+                    entity_graph = state_manager.get_entity_graph()
+
+                    # Determine query type and populate
+                    # Copropriétés: has copropriete_nom OR (nom + nombre_lots) OR (nom + adresse + ville)
+                    is_copropriete = (
+                        "copropriete_nom" in first_row or
+                        ("nom" in first_row and "nombre_lots" in first_row) or
+                        ("nom" in first_row and "adresse" in first_row and "ville" in first_row)
+                    )
+
+                    if is_copropriete:
+                        # Copropriétés
+                        await entity_populator.populate_from_sql_results(
+                            results=results,
+                            query_type="coproprietes",
+                            entity_graph=entity_graph
+                        )
+                        logger.info("entity_graph_populated_coproprietes", count=len(results))
+                    elif "prenom" in first_row and "nom" in first_row and "email" in first_row:
+                        # People (coproprietaires with email)
+                        await entity_populator.populate_from_sql_results(
+                            results=results,
+                            query_type="people",
+                            entity_graph=entity_graph
+                        )
+                        logger.info("entity_graph_populated_people", count=len(results))
+                    elif "name" in first_row and "category" in first_row:
+                        # Professionals
+                        await entity_populator.populate_from_sql_results(
+                            results=results,
+                            query_type="professionals",
+                            entity_graph=entity_graph
+                        )
+                        logger.info("entity_graph_populated_professionals", count=len(results))
+
+                except Exception as e:
+                    logger.warning("entity_graph_population_failed", error=str(e), exc_info=True)
 
         return AgentResponse(
             success=result["success"],
@@ -787,6 +953,17 @@ Réponds à la question de manière précise et complète en utilisant uniquemen
                                 agent="orchestrator",
                                 progress=0.3 + (i * 0.2)
                             )
+
+                        # SECURITY: Validate SQL query before execution
+                        is_valid, error_msg = validate_sql_query(step.query)
+                        if not is_valid:
+                            logger.error(
+                                "sql_query_validation_failed",
+                                query=step.query,
+                                error=error_msg
+                            )
+                            # Skip this step and continue
+                            continue
 
                         # Execute SQL query
                         try:
@@ -1264,37 +1441,55 @@ Réponds à la question de manière précise et complète en utilisant uniquemen
     async def _handle_web_search(self, user_input: str, thought_stream: ThoughtStream = None) -> AgentResponse:
         """Handle web search requests"""
         try:
-            from .web_agent import WebAgent
+            from .websearch_agent import WebSearchAgent
 
-            web_agent = WebAgent()
+            web_agent = WebSearchAgent()
 
             if thought_stream:
                 await thought_stream.add_thought(
                     ThoughtType.SEARCHING,
                     title="Recherche sur le web",
-                    content=f"Je recherche sur internet: {user_input}",
-                    agent="web_agent",
+                    content=f"Je recherche sur internet : « {user_input} »",
+                    agent="websearch_agent",
                     progress=0.5
                 )
 
-            result = await web_agent.search(query=user_input, max_results=5)
+            # Perform search
+            search_results = await web_agent.search(
+                query=user_input,
+                num_results=5,
+                search_depth="basic",
+                region="fr-fr"
+            )
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.PROCESSING,
+                    title="Synthèse des résultats",
+                    content=f"J'ai trouvé {len(search_results.results)} résultats. Je vais synthétiser les informations les plus pertinentes.",
+                    agent="websearch_agent",
+                    progress=0.8
+                )
 
             # Format results with answer + sources
-            formatted_message = f"{result['answer']}\n\n"
+            formatted_message = ""
 
-            if result["sources"]:
-                formatted_message += "## Sources\n\n"
-                for source in result["sources"]:
-                    formatted_message += f"**[{source['rank']}] {source['title']}**\n"
-                    formatted_message += f"{source['snippet']}\n"
-                    formatted_message += f"🔗 {source['url']}\n\n"
+            if search_results.synthesized_answer:
+                formatted_message += search_results.synthesized_answer + "\n\n"
+
+            if search_results.results:
+                formatted_message += "## 🔍 Sources\n\n"
+                for idx, result in enumerate(search_results.results[:5], 1):
+                    formatted_message += f"**[{idx}] {result.title}**\n"
+                    formatted_message += f"{result.snippet[:200]}...\n"
+                    formatted_message += f"🔗 {result.url}\n\n"
 
             return AgentResponse(
                 success=True,
                 message=formatted_message,
-                data=result,
-                agents_used=["web_agent"],
-                confidence=0.9
+                data=search_results.to_dict(),
+                agents_used=["websearch_agent"],
+                confidence=search_results.confidence
             )
 
         except Exception as e:
@@ -1302,7 +1497,7 @@ Réponds à la question de manière précise et complète en utilisant uniquemen
             return AgentResponse(
                 success=False,
                 message=f"Erreur lors de la recherche web: {str(e)}",
-                agents_used=["web_agent"]
+                agents_used=["websearch_agent"]
             )
 
     async def _handle_legal_analysis(self, user_input: str, context: Dict[str, Any], thought_stream: ThoughtStream = None) -> AgentResponse:

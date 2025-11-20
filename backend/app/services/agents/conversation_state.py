@@ -8,10 +8,13 @@ Tracks:
 - Business context (incident details, property info, etc.)
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from pydantic import BaseModel, Field
 from enum import Enum
 import structlog
+
+if TYPE_CHECKING:
+    from app.services.agents.entity_graph import EntityGraph
 
 logger = structlog.get_logger()
 
@@ -216,15 +219,66 @@ class StateManager:
     Manages conversation state across turns
 
     Singleton pattern - one state per session
+    Now includes EntityGraph for robust entity tracking
     """
 
     def __init__(self):
         self.state = ConversationState()
-        logger.info("state_manager_initialized")
+
+        # Initialize EntityGraph for entity tracking
+        from app.services.agents.entity_graph import EntityGraph
+        self.entity_graph = EntityGraph(context_window_minutes=30)
+
+        logger.info("state_manager_initialized", has_entity_graph=True)
 
     def get_state(self) -> ConversationState:
         """Get current state"""
         return self.state
+
+    def get_entity_graph(self) -> 'EntityGraph':
+        """Get entity graph"""
+        return self.entity_graph
+
+    async def pre_populate_entity_graph(self, db):
+        """
+        Pre-populate EntityGraph with all coproprietes from database
+
+        This ensures entity resolution works from the first query,
+        resolving variations like "residence des jardins" -> "Résidence Les Jardins"
+
+        Args:
+            db: Database session
+        """
+        try:
+            from sqlalchemy import text
+            from app.services.agents.query_enrichment import EntityPopulator
+
+            # Fetch all coproprietes
+            query = text("SELECT id, nom FROM coproprietes")
+            result = await db.execute(query)
+            rows = result.fetchall()
+
+            # Convert to dict format
+            coproprietes_data = [
+                {"id": row[0], "nom": row[1]}
+                for row in rows
+            ]
+
+            # Use EntityPopulator to populate graph
+            populator = EntityPopulator()
+            await populator.populate_from_sql_results(
+                results=coproprietes_data,
+                query_type="coproprietes",
+                entity_graph=self.entity_graph
+            )
+
+            logger.info("entity_graph_pre_populated",
+                       coproprietes_count=len(coproprietes_data),
+                       total_entities=len(self.entity_graph.entities))
+
+        except Exception as e:
+            logger.warning("entity_graph_pre_population_failed", error=str(e))
+            # Non-critical - continue without pre-population
 
     def reset(self):
         """Reset state"""
