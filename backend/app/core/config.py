@@ -26,8 +26,30 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> List[str]:
         """Parse CORS_ORIGINS string into list"""
         if isinstance(self.CORS_ORIGINS, str):
-            return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
-        return self.CORS_ORIGINS
+            origins = [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
+        else:
+            origins = self.CORS_ORIGINS
+
+        # Production security check: No wildcards allowed
+        is_production = not self.DEBUG
+        if is_production:
+            for origin in origins:
+                if "*" in origin:
+                    print("\n" + "="*80)
+                    print("❌ CRITICAL SECURITY ERROR")
+                    print("="*80)
+                    print(f"CORS origin contains wildcard: {origin}")
+                    print("Wildcards (*) are NOT allowed in production!")
+                    print("\nCORS_ORIGINS must be an explicit whitelist:")
+                    print("Example: CORS_ORIGINS=https://app.disruptiq.fr,https://www.disruptiq.fr")
+                    print("="*80 + "\n")
+                    sys.exit(1)
+
+                # Also check that origins are HTTPS in production (except localhost for testing)
+                if not origin.startswith("https://") and not origin.startswith("http://localhost"):
+                    print(f"\n⚠️  WARNING: CORS origin {origin} is not HTTPS in production\n")
+
+        return origins
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://disruptiq:disruptiq@postgres:5432/disruptiq"

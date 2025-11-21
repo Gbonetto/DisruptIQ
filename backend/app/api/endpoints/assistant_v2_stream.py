@@ -34,6 +34,7 @@ async def assistant_chat_stream(
     conversation_history: str = "[]",
     session_id: str = "default",  # Session ID for state tracking
     active_document_ids: str = "[]",  # Active document IDs for RAG filtering
+    selected_sources: str = "[]",  # User-selected sources ['sql', 'rag', 'web']
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -76,7 +77,7 @@ async def assistant_chat_stream(
     async def event_generator():
         """Generate Server-Sent Events"""
         try:
-            # Parse conversation history and document IDs from JSON strings
+            # Parse conversation history, document IDs, and selected sources from JSON strings
             import json
             try:
                 parsed_history = json.loads(conversation_history)
@@ -88,12 +89,18 @@ async def assistant_chat_stream(
             except json.JSONDecodeError:
                 parsed_doc_ids = []
 
+            try:
+                parsed_selected_sources = json.loads(selected_sources)
+            except json.JSONDecodeError:
+                parsed_selected_sources = []
+
             # DEBUG: Log what we received
             logger.info("stream_request_received",
                        message=message[:50],
                        active_document_ids_raw=active_document_ids,
                        parsed_doc_ids=parsed_doc_ids,
-                       has_doc_ids=len(parsed_doc_ids) > 0)
+                       has_doc_ids=len(parsed_doc_ids) > 0,
+                       selected_sources=parsed_selected_sources)
 
             # Initialize thought stream
             thought_stream = get_thought_stream(session_id)
@@ -158,7 +165,8 @@ async def assistant_chat_stream(
                         context=context,
                         conversation_history=parsed_history,
                         thought_stream=thought_stream,
-                        state_manager=state_manager  # Pass state manager to orchestrator
+                        state_manager=state_manager,  # Pass state manager to orchestrator
+                        selected_sources=parsed_selected_sources if parsed_selected_sources else None  # User-controlled routing
                     )
 
                     # Update state from message and response
@@ -201,12 +209,44 @@ async def assistant_chat_stream(
                         agent="orchestrator"
                     )
 
+            # IMPORTANT: Subscribe FIRST before starting background task
+            # This ensures we don't miss any early thoughts
+            queue = thought_stream.subscribe()
+
             # Start processing in background
             task = asyncio.create_task(process_and_stream())
 
             # Stream thoughts as they come
-            async for sse_event in thought_stream.stream_events():
-                yield sse_event
+            try:
+                # Send existing thoughts first
+                for thought in thought_stream.thoughts:
+                    yield thought_stream._format_sse(thought)
+                    await asyncio.sleep(0.05)
+
+                # Stream new thoughts as they come
+                should_continue = True
+                while should_continue:
+                    try:
+                        # Wait for new thought with timeout
+                        event = await asyncio.wait_for(queue.get(), timeout=60.0)
+
+                        # Handle both ThoughtEvent objects and raw SSE strings
+                        if isinstance(event, str):
+                            # Raw SSE string (e.g., final response event)
+                            yield event
+                            # If it's a response event, we can stop after sending it
+                            if "event: response" in event:
+                                should_continue = False
+                        else:
+                            # Standard thought event
+                            yield thought_stream._format_sse(event)
+
+                    except asyncio.TimeoutError:
+                        # Send keep-alive ping
+                        yield f": keep-alive\n\n"
+
+            finally:
+                thought_stream.unsubscribe(queue)
 
             # Wait for processing to complete
             await task

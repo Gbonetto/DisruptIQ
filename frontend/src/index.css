@@ -318,4 +318,37 @@
     border-color: #FF2E63;
     transition: all 0.3s ease;
   }
+
+  /* Auto-hiding scrollbar like ChatGPT */
+  .scrollbar-hide::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+    transition: background-color 0.2s ease;
+  }
+
+  .scrollbar-hide:hover::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+  }
+
+  .scrollbar-hide::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.3);
+  }
+
+  /* Firefox */
+  .scrollbar-hide {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .scrollbar-hide:hover {
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
 }

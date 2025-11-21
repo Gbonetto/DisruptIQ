@@ -13,11 +13,14 @@ import structlog
 
 from app.core.config import settings
 from app.core.database import init_db
+from app.core.monitoring import init_sentry, is_sentry_enabled
 from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, conversations  # removed export - file doesn't exist
 # from app.api.routes import invoices  # TODO: Create invoices route
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document, Conversation, Message
 from app.services.scheduler_service import get_scheduler
+# Import security middlewares
+from app.middleware import setup_error_handlers, add_security_headers
 
 # Configure structured logging
 structlog.configure(
@@ -44,6 +47,10 @@ app = FastAPI(
 # Add rate limiter to app state
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Security middlewares (MUST be added before CORS)
+setup_error_handlers(app)  # Error masking for production
+add_security_headers(app)  # CSP, X-Frame-Options, HSTS, etc.
 
 # CORS Configuration
 app.add_middleware(
@@ -129,6 +136,13 @@ async def startup_event():
         logger.error("cache_service_init_failed", error=str(e))
         # Log error but don't fail startup - cache is optional
         logger.warning("cache_service_startup_warning", message="Cache service failed to initialize, will continue without caching")
+
+    # Initialize Sentry Monitoring
+    sentry_enabled = init_sentry()
+    if sentry_enabled:
+        logger.info("sentry_monitoring_enabled", message="Error tracking and performance monitoring active")
+    else:
+        logger.info("sentry_monitoring_disabled", message="Running without error tracking")
 
     # Start background scheduler for digest generation
     try:

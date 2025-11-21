@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { Clock, MessageSquare, User, MoreVertical, Edit2, Trash2 } from 'lucide-react';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Clock, User, MoreVertical, Edit2, Trash2, MessageSquare, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -9,6 +8,16 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 interface Conversation {
   id: string;
@@ -35,6 +44,11 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; id: string; title: string }>({
+    open: false,
+    id: '',
+    title: '',
+  });
 
   const handleRename = (conv: Conversation) => {
     setEditingId(conv.id);
@@ -49,11 +63,17 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
     setEditTitle('');
   };
 
-  const handleDelete = (id: string) => {
-    if (onDeleteConversation) {
-      onDeleteConversation(id);
-    }
+  const openDeleteDialog = (id: string, title: string) => {
+    setDeleteDialog({ open: true, id, title });
   };
+
+  const confirmDelete = () => {
+    if (onDeleteConversation) {
+      onDeleteConversation(deleteDialog.id);
+    }
+    setDeleteDialog({ open: false, id: '', title: '' });
+  };
+
   return (
     <aside className="w-[280px] border-r border-border bg-background flex flex-col">
       {/* Header */}
@@ -68,9 +88,9 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
         </Button>
       </div>
 
-      {/* Conversations list */}
-      <ScrollArea className="flex-1">
-        <div className="p-2 space-y-1">
+      {/* Conversations list - Simple overflow-y-auto comme ChatGPT */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide">
+        <div className="flex flex-col gap-1 p-2">
           {conversations.length === 0 ? (
             <div className="p-4 text-center text-muted-foreground text-sm">
               Aucune conversation
@@ -80,56 +100,53 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
               <div
                 key={conv.id}
                 className={`
-                  group relative w-full p-3 rounded-lg transition-colors
+                  group relative flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all duration-200
                   hover:bg-secondary
                   ${
                     currentConversationId === conv.id
-                      ? 'bg-secondary text-foreground'
-                      : 'text-muted-foreground'
+                      ? 'bg-secondary text-foreground border-l-[3px] border-l-primary font-medium'
+                      : 'text-muted-foreground border-l-[3px] border-l-transparent'
                   }
                 `}
+                onClick={() => onSelectConversation?.(conv.id)}
               >
-                <div
-                  onClick={() => onSelectConversation?.(conv.id)}
-                  className="flex items-start gap-2 cursor-pointer"
-                >
-                  <MessageSquare className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    {editingId === conv.id ? (
-                      <input
-                        type="text"
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        onBlur={() => handleSaveRename(conv.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleSaveRename(conv.id);
-                          if (e.key === 'Escape') setEditingId(null);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="w-full text-sm font-medium bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary"
-                        autoFocus
-                      />
-                    ) : (
-                      <div className="text-sm font-medium truncate">
-                        {conv.title}
-                      </div>
-                    )}
-                    <div className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                      <Clock className="w-3 h-3" />
-                      {conv.timestamp}
+                {/* Content - Title + Timestamp (icône retirée pour gagner de l'espace) */}
+                <div className="flex-1 min-w-0">
+                  {editingId === conv.id ? (
+                    <input
+                      type="text"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      onBlur={() => handleSaveRename(conv.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveRename(conv.id);
+                        if (e.key === 'Escape') setEditingId(null);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full text-sm font-medium bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary"
+                      autoFocus
+                    />
+                  ) : (
+                    <div className="text-sm font-medium truncate" title={conv.title}>
+                      {conv.title}
                     </div>
+                  )}
+                  <div className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                    <Clock className="w-3 h-3" />
+                    {conv.timestamp}
                   </div>
                 </div>
 
-                {/* Menu burger - visible au survol */}
-                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                {/* Menu burger - Visible au hover comme ChatGPT */}
+                <div className="invisible group-hover:visible flex-shrink-0">
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
                         onClick={(e) => e.stopPropagation()}
                         className="p-1.5 hover:bg-accent rounded-md transition-colors"
+                        aria-label="Options de conversation"
                       >
-                        <MoreVertical className="w-4 h-4 text-muted-foreground" />
+                        <MoreVertical className="w-4 h-4" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-48">
@@ -147,7 +164,7 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
                       <DropdownMenuItem
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDelete(conv.id);
+                          openDeleteDialog(conv.id, conv.title);
                         }}
                         className="cursor-pointer text-destructive focus:text-destructive"
                       >
@@ -161,7 +178,7 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
             ))
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* User profile (optional footer) */}
       <div className="p-4 border-t border-border">
@@ -174,6 +191,29 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
           </div>
         </button>
       </div>
+
+      {/* Dialog de confirmation de suppression */}
+      <AlertDialog open={deleteDialog.open} onOpenChange={(open: boolean) => !open && setDeleteDialog({ open: false, id: '', title: '' })}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              Supprimer la conversation
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Êtes-vous sûr de vouloir supprimer la conversation <strong>"{deleteDialog.title}"</strong> ?
+              <br />
+              <span className="text-destructive">Cette action est irréversible.</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </aside>
   );
 };

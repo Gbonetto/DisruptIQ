@@ -27,6 +27,7 @@ from app.services.agents.ocr_agent import OCRAgent
 # from app.services.excel_export_service import ExcelExportService  # TODO: Create this service if needed
 # from app.schemas.invoice import InvoiceData  # TODO: Create this schema if needed
 from app.services.ocr_progress_service import ocr_progress_service, OCRStatus
+from app.utils.file_validation import validate_upload
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -153,23 +154,26 @@ async def upload_document(
         session_id: Session identifier for tracking uploaded documents
     """
     try:
-        # Validate file type - check if supported by DocumentService OR needs OCR
-        is_ocr_format = needs_ocr(file.content_type, file.filename)
-        is_standard_format = DocumentService.is_supported_format(file.content_type)
-
-        if not is_ocr_format and not is_standard_format:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type: {file.content_type}. Supported: PDF, DOCX, DOC, TXT, PNG, JPG, JPEG, TIFF, BMP"
-            )
-
-        # Validate file size (max 10MB)
-        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+        # Read file content first for validation
         file_content = await file.read()
-        if len(file_content) > MAX_FILE_SIZE:
+
+        # SECURITY: Strict file validation (MIME, extension, size, content)
+        is_valid, error_message = validate_upload(
+            filename=file.filename,
+            content_type=file.content_type,
+            file_content=file_content
+        )
+
+        if not is_valid:
+            logger.warning(
+                "file_upload_rejected",
+                filename=file.filename,
+                content_type=file.content_type,
+                reason=error_message
+            )
             raise HTTPException(
                 status_code=400,
-                detail=f"File too large. Maximum size: 10MB"
+                detail=error_message
             )
 
         # SECURITY: Sanitize filename to prevent path traversal

@@ -43,12 +43,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
 
         {/* Center - Main chat area */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Chat area with max-width and centered */}
-          <div className="flex-1 flex justify-center overflow-hidden">
-            <div className="w-full max-w-[800px] flex flex-col">
-              {children}
-            </div>
-          </div>
+          {children}
         </main>
 
         {/* Right sidebar - Documents (conditional) */}

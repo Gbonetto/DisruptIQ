@@ -121,11 +121,19 @@ class ResponseFusionAgent:
         # Add source footer
         formatted_text += "\n\n---\n📊 **Source** : Base de données DisruptIQ[SQL]"
 
+        # Extract table names for source metadata
+        tables = sql_result.tables if hasattr(sql_result, 'tables') else []
+        sql_source = {
+            "type": "sql",
+            "name": "Base de données DisruptIQ",
+            "tables": tables  # Include table names for frontend display
+        }
+
         return FusedResponse(
             text=formatted_text,
             has_contradictions=False,
             fusion_strategy="sql_only",
-            sources=[{"type": "sql", "name": "Base de données DisruptIQ"}],
+            sources=[sql_source],
             confidence=1.0  # SQL data is always reliable
         )
 
@@ -170,8 +178,16 @@ class ResponseFusionAgent:
 
         # Extract data
         sql_data = sql_result.data.get("results", [])
+        sql_tables = sql_result.tables  # Extract table names from SQLResult
         rag_text = rag_result.message
         rag_sources = rag_result.sources
+
+        # CRITICAL: Extract raw chunks to avoid losing details in synthesis
+        # The synthesis_agent might filter out important biographical details
+        rag_raw_chunks = []
+        if rag_result.data and "chunks" in rag_result.data:
+            rag_raw_chunks = rag_result.data.get("chunks", [])
+            logger.info("fusion_using_raw_chunks", chunk_count=len(rag_raw_chunks))
 
         # Determine fusion strategy
         strategy = self._determine_fusion_strategy(query, sql_data, rag_text)
@@ -180,11 +196,11 @@ class ResponseFusionAgent:
 
         # Execute fusion based on strategy
         if strategy == "enrichment":
-            fused = await self._fusion_enrichment(query, sql_data, rag_text, rag_sources)
+            fused = await self._fusion_enrichment(query, sql_data, rag_text, rag_sources, rag_raw_chunks, sql_tables)
         elif strategy == "validation":
-            fused = await self._fusion_validation(query, sql_data, rag_text, rag_sources)
+            fused = await self._fusion_validation(query, sql_data, rag_text, rag_sources, rag_raw_chunks, sql_tables)
         else:  # complementary
-            fused = await self._fusion_complementary(query, sql_data, rag_text, rag_sources)
+            fused = await self._fusion_complementary(query, sql_data, rag_text, rag_sources, rag_raw_chunks, sql_tables)
 
         return fused
 
@@ -200,6 +216,7 @@ class ResponseFusionAgent:
         Strategies:
         - ENRICHMENT: SQL has facts, RAG adds details
           Example: "Tarif du plombier ?" → SQL: 80€, RAG: conditions contrat
+          Example: "Qui est Laurent Moussu ?" → SQL: profession/contact, RAG: détails biographiques
 
         - VALIDATION: Cross-check SQL against RAG
           Example: "Contact du plombier" → SQL: email, RAG: email dans contrat
@@ -209,13 +226,21 @@ class ResponseFusionAgent:
         """
         query_lower = query.lower()
 
-        # Enrichment indicators
-        enrichment_keywords = ["tarif", "prix", "coût", "combien facture"]
+        # Enrichment indicators - Questions requiring both SQL facts + RAG details
+        enrichment_keywords = [
+            "tarif", "prix", "coût", "combien facture",
+            "qui est", "c'est qui", "c'est quoi",  # Biographical/entity questions
+            "quel age", "quelle age", "quel âge", "quelle âge",  # Age questions
+            "quand est né", "date de naissance",  # Birth date questions
+            "profession de", "métier de", "travail de",  # Profession questions
+            "habite où", "domicile de", "adresse de"  # Address questions (but not standalone "adresse")
+        ]
         if any(kw in query_lower for kw in enrichment_keywords):
             return "enrichment"
 
         # Validation indicators
         validation_keywords = ["contact", "email", "téléphone", "adresse"]
+        # Only use validation if not already caught by enrichment (e.g., "adresse de X" vs "adresse")
         if any(kw in query_lower for kw in validation_keywords):
             return "validation"
 
@@ -227,7 +252,9 @@ class ResponseFusionAgent:
         query: str,
         sql_data: List[Dict],
         rag_text: str,
-        rag_sources: List[Dict]
+        rag_sources: List[Dict],
+        rag_raw_chunks: List[Dict] = [],
+        sql_tables: List[str] = []
     ) -> FusedResponse:
         """
         Enrichment fusion: SQL provides facts, RAG adds context
@@ -236,47 +263,86 @@ class ResponseFusionAgent:
         SQL: "tarif_horaire: 80€"
         RAG: "Tarif week-end 120€, minimum 2h, frais déplacement 25€"
 
-        Result: Combine both with proper attribution
+        Example:
+        SQL: "Laurent Moussu - LOLO Corp - lolo@repas.com"
+        RAG: "Laurent MOUSSU, né le 14 avril 1981, paysagiste indépendant, 12 Chemin des Oliviers..."
+
+        Result: Combine both with proper attribution, giving equal weight to both sources
         """
         # Format SQL data
         sql_formatted = await self._format_sql_results(query, sql_data)
 
+        # CRITICAL: Use raw chunks instead of synthesis to preserve ALL details
+        # The synthesis might filter out important biographical/contractual details
+        if rag_raw_chunks:
+            # Extract text from raw chunks (they contain full, unfiltered content)
+            raw_texts = []
+            for chunk in rag_raw_chunks[:5]:  # Limit to top 5 chunks
+                if isinstance(chunk, dict) and "text" in chunk:
+                    raw_texts.append(chunk["text"])
+                elif isinstance(chunk, dict) and "content" in chunk:
+                    raw_texts.append(chunk["content"])
+
+            if raw_texts:
+                rag_content = "\n\n---\n\n".join(raw_texts)
+                logger.info("fusion_using_raw_content", total_chars=len(rag_content))
+            else:
+                rag_content = rag_text  # Fallback to synthesis
+                logger.warning("fusion_no_text_in_chunks_fallback_to_synthesis")
+        else:
+            rag_content = rag_text  # Fallback if no raw chunks
+            logger.warning("fusion_no_raw_chunks_using_synthesis")
+
         # Build fusion prompt
-        prompt = f"""Tu dois fusionner ces informations de deux sources différentes pour répondre à : "{query}"
+        prompt = f"""Tu dois créer une réponse COMPLÈTE en combinant TOUTES les informations de ces deux sources pour : "{query}"
 
 **Source 1 - Base de données (SQL)** :
 {sql_formatted}
 
-**Source 2 - Documents (RAG)** :
-{rag_text}
+**Source 2 - Documents (CONTENU BRUT COMPLET)** :
+{rag_content}
 
-INSTRUCTIONS :
-1. Commence par les faits de la base de données[SQL]
-2. Enrichis avec les détails des documents (garde les citations [1], [2])
-3. Indique clairement quelle info vient d'où : [SQL] ou [1], [2]
-4. Format markdown professionnel
+RÈGLES STRICTES :
+1. Tu DOIS inclure TOUTES les informations présentes dans les deux sources
+2. Pour une question biographique ("qui est X"), tu DOIS mentionner :
+   - Nom complet, date/lieu de naissance si disponible (depuis documents)
+   - Profession/métier détaillé (depuis documents)
+   - Adresse complète (depuis documents)
+   - Entreprise/activité actuelle (depuis SQL)
+   - Contact (email, téléphone) (depuis SQL)
+   - Tout autre détail pertinent des deux sources
+3. SIMPLIFIE : Ne liste QUE les informations DISPONIBLES - n'écris PAS "Non disponible" pour chaque champ manquant
+4. Indique la source UNIQUEMENT avec [SQL] pour les données de la base - NE METS PAS [1] [2] [3] car les documents ont déjà leurs citations
+5. FORMAT : Réponds en TEXTE NATUREL sous forme de paragraphes fluides et lisibles - PAS de symboles markdown (##, **, etc.)
+6. ⚠️ N'INVENTE AUCUNE information manquante
+7. ❌ NE CRÉE PAS de section "Sources documentaires" ou "Sources" - les sources sont déjà affichées automatiquement
 
-Réponds directement avec la réponse fusionnée."""
+Crée une réponse exhaustive en texte naturel qui combine la richesse des documents avec les données structurées."""
 
         fused_text = await self.llm_service.generate_response(
             prompt=prompt,
             temperature=0.2,
-            max_tokens=800
+            max_tokens=1200  # Increased for more detailed biographical responses
         )
 
-        # Add sources footer
-        sources_footer = self._build_sources_footer(rag_sources, include_sql=True)
-        fused_text += sources_footer
+        # DON'T add sources footer - sources are already shown in the frontend widget
+        # sources_footer = self._build_sources_footer(rag_sources, include_sql=True)
+        # fused_text += sources_footer
 
         # Detect contradictions
         contradictions = await self._detect_contradictions_sql_rag(sql_data, rag_text)
+
+        # Build SQL source with table names
+        sql_source = {"type": "sql", "name": "Base de données"}
+        if sql_tables:
+            sql_source["tables"] = sql_tables
 
         return FusedResponse(
             text=fused_text,
             has_contradictions=contradictions is not None,
             contradiction_note=contradictions,
             fusion_strategy="enrichment",
-            sources=[{"type": "sql", "name": "Base de données"}] + rag_sources,
+            sources=[sql_source] + rag_sources,
             confidence=(1.0 + rag_sources[0]["confidence"]) / 2 if rag_sources else 0.9
         )
 
@@ -285,7 +351,9 @@ Réponds directement avec la réponse fusionnée."""
         query: str,
         sql_data: List[Dict],
         rag_text: str,
-        rag_sources: List[Dict]
+        rag_sources: List[Dict],
+        rag_raw_chunks: List[Dict] = [],
+        sql_tables: List[str] = []
     ) -> FusedResponse:
         """
         Validation fusion: Cross-check SQL data against documents
@@ -327,12 +395,17 @@ Réponds :"""
         sources_footer = self._build_sources_footer(rag_sources, include_sql=True)
         fused_text += sources_footer
 
+        # Build SQL source with table names
+        sql_source = {"type": "sql", "name": "Base de données"}
+        if sql_tables:
+            sql_source["tables"] = sql_tables
+
         return FusedResponse(
             text=fused_text,
             has_contradictions=contradictions is not None,
             contradiction_note=contradictions,
             fusion_strategy="validation",
-            sources=[{"type": "sql", "name": "Base de données"}] + rag_sources,
+            sources=[sql_source] + rag_sources,
             confidence=0.8  # Lower confidence when validating
         )
 
@@ -341,7 +414,9 @@ Réponds :"""
         query: str,
         sql_data: List[Dict],
         rag_text: str,
-        rag_sources: List[Dict]
+        rag_sources: List[Dict],
+        rag_raw_chunks: List[Dict] = [],
+        sql_tables: List[str] = []
     ) -> FusedResponse:
         """
         Complementary fusion: SQL and RAG answer different aspects
@@ -381,11 +456,16 @@ Réponds :"""
         sources_footer = self._build_sources_footer(rag_sources, include_sql=True)
         fused_text += sources_footer
 
+        # Build SQL source with table names
+        sql_source = {"type": "sql", "name": "Base de données"}
+        if sql_tables:
+            sql_source["tables"] = sql_tables
+
         return FusedResponse(
             text=fused_text,
             has_contradictions=False,
             fusion_strategy="complementary",
-            sources=[{"type": "sql", "name": "Base de données"}] + rag_sources,
+            sources=[sql_source] + rag_sources,
             confidence=0.95
         )
 
@@ -398,17 +478,40 @@ Réponds :"""
         if not results:
             return "Aucune donnée"
 
-        # Prepare results for prompt
-        results_str = "\n".join([str(row) for row in results[:10]])  # Limit to 10 rows
+        # SECURITY: Filter out internal/technical columns that shouldn't be exposed to LLM
+        # These columns are for internal use only and should NOT be interpreted as business data
+        excluded_columns = {'created_at', 'updated_at', 'deleted_at', 'id', 'password', 'password_hash'}
+
+        # Clean results by removing excluded columns and formatting phone numbers
+        cleaned_results = []
+        for row in results[:10]:  # Limit to 10 rows
+            cleaned_row = {}
+            for k, v in row.items():
+                if k in excluded_columns:
+                    continue
+                # Format phone numbers (numeric fields with 'phone' or 'telephone' in name)
+                if v is not None and ('phone' in k.lower() or 'telephone' in k.lower() or 'tel' in k.lower()):
+                    # Convert float to int then to string to remove decimals
+                    if isinstance(v, (int, float)):
+                        cleaned_row[k] = str(int(v))
+                    else:
+                        cleaned_row[k] = str(v)
+                else:
+                    cleaned_row[k] = v
+            cleaned_results.append(cleaned_row)
+
+        results_str = "\n".join([str(row) for row in cleaned_results])
 
         prompt = f"""Formate ces résultats de base de données de manière claire pour répondre à : "{query}"
 
 DONNÉES :
 {results_str}
 
-INSTRUCTIONS :
-- Format lisible et professionnel
-- Mets en valeur les informations importantes avec **gras**
+⚠️ RÈGLES CRITIQUES :
+- N'INVENTE AUCUNE information qui n'est pas dans les données
+- Si une information n'est pas disponible, écris explicitement "Non renseigné" ou "Non disponible"
+- NE SUPPOSE PAS de dates, d'âges, ou d'autres informations manquantes
+- Format lisible et professionnel avec **gras** pour les informations importantes
 - Si liste : utilise format markdown
 - Concis et direct
 

@@ -33,6 +33,7 @@ class AssistantRequest(BaseModel):
     conversation_history: Optional[List[AssistantMessage]] = []
     session_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
+    selected_sources: Optional[List[str]] = None  # ['sql', 'rag', 'web'] or None for auto
 
 
 class AssistantResponseModel(BaseModel):
@@ -76,9 +77,10 @@ async def assistant_chat(
                     user_input=request.message,
                     db=db,
                     context=request.context,
-                    conversation_history=[msg.dict() for msg in request.conversation_history]
+                    conversation_history=[msg.dict() for msg in request.conversation_history],
+                    selected_sources=request.selected_sources  # User-controlled source selection
                 ),
-                timeout=30.0
+                timeout=90.0
             )
         except asyncio.TimeoutError:
             logger.error("request_timeout", message=request.message[:100])

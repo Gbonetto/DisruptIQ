@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Download, FileDown, ChevronUp, ChevronDown } from 'lucide-react';
+import { Download, FileDown, ChevronUp, ChevronDown, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,13 +24,14 @@ export const DataTable: React.FC<DataTableProps> = ({
   rows,
   sortable = true,
   paginate = true,
-  pageSize = 50,
+  pageSize = 10,
 }) => {
   const [sortConfig, setSortConfig] = useState<{
     key: number;
     direction: 'asc' | 'desc';
   } | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [isExporting, setIsExporting] = useState(false);
 
   // Sort logic
   const sortedRows = React.useMemo(() => {
@@ -49,16 +51,22 @@ export const DataTable: React.FC<DataTableProps> = ({
     });
   }, [rows, sortConfig]);
 
-  // Pagination logic
+  // Pagination logic with adaptive page size
+  const effectivePageSize = React.useMemo(() => {
+    // If total rows <= 20, show all rows on first page
+    if (sortedRows.length <= 20) return sortedRows.length;
+    return pageSize;
+  }, [sortedRows.length, pageSize]);
+
   const paginatedRows = React.useMemo(() => {
-    if (!paginate || sortedRows.length <= pageSize) return sortedRows;
+    if (!paginate || sortedRows.length <= effectivePageSize) return sortedRows;
 
-    const startIndex = (currentPage - 1) * pageSize;
-    const endIndex = startIndex + pageSize;
+    const startIndex = (currentPage - 1) * effectivePageSize;
+    const endIndex = startIndex + effectivePageSize;
     return sortedRows.slice(startIndex, endIndex);
-  }, [sortedRows, currentPage, paginate, pageSize]);
+  }, [sortedRows, currentPage, paginate, effectivePageSize]);
 
-  const totalPages = Math.ceil(sortedRows.length / pageSize);
+  const totalPages = Math.ceil(sortedRows.length / effectivePageSize);
 
   const handleSort = (columnIndex: number) => {
     if (!sortable) return;
@@ -76,32 +84,101 @@ export const DataTable: React.FC<DataTableProps> = ({
 
   // Export functions
   const exportToCSV = () => {
-    const csvContent = [
-      headers.join(','),
-      ...rows.map((row) =>
-        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
-      ),
-    ].join('\n');
+    try {
+      setIsExporting(true);
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `${title || 'data'}.csv`;
-    link.click();
+      // Add BOM for UTF-8 encoding (helps Excel open CSV correctly with accents)
+      const BOM = '\uFEFF';
+      const csvContent = BOM + [
+        headers.join(','),
+        ...rows.map((row) =>
+          row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
+        ),
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${title || 'export'}_${new Date().toISOString().split('T')[0]}.csv`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+
+      toast.success(`${rows.length} lignes exportées en CSV`);
+    } catch (error) {
+      console.error('CSV export failed:', error);
+      toast.error('Erreur lors de l\'export CSV');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const exportToExcel = async () => {
-    // Using xlsx library (already installed according to the plan)
+    // Using exceljs (secure alternative to xlsx)
     try {
-      const XLSX = await import('xlsx');
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Data');
-      XLSX.writeFile(wb, `${title || 'data'}.xlsx`);
+      setIsExporting(true);
+
+      const ExcelJS = await import('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Données');
+
+      // Add metadata
+      workbook.creator = 'DisruptIQ';
+      workbook.created = new Date();
+
+      // Add headers and rows
+      worksheet.addRow(headers);
+      rows.forEach(row => worksheet.addRow(row));
+
+      // Style header row
+      worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF4472C4' }
+      };
+      worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'left' };
+
+      // Auto-size columns based on content
+      worksheet.columns.forEach((column, index) => {
+        let maxLength = headers[index]?.length || 10;
+        rows.forEach(row => {
+          const cellValue = String(row[index] || '');
+          maxLength = Math.max(maxLength, cellValue.length);
+        });
+        column.width = Math.min(maxLength + 2, 50);
+      });
+
+      // Add borders to all cells
+      worksheet.eachRow((row, rowNumber) => {
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+        });
+      });
+
+      // Download file
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${title || 'export'}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+
+      toast.success(`${rows.length} lignes exportées en Excel`);
     } catch (error) {
       console.error('Failed to export to Excel:', error);
-      // Fallback to CSV if xlsx fails
+      toast.error('Erreur lors de l\'export Excel, tentative CSV...');
+      // Fallback to CSV if exceljs fails
       exportToCSV();
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -115,17 +192,26 @@ export const DataTable: React.FC<DataTableProps> = ({
           </h3>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-2">
-                <Download className="w-4 h-4" />
-                Exporter
+              <Button variant="outline" size="sm" className="gap-2" disabled={isExporting}>
+                {isExporting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Export...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    Exporter
+                  </>
+                )}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={exportToCSV}>
+              <DropdownMenuItem onClick={exportToCSV} disabled={isExporting}>
                 <FileDown className="w-4 h-4 mr-2" />
                 Exporter en CSV
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={exportToExcel}>
+              <DropdownMenuItem onClick={exportToExcel} disabled={isExporting}>
                 <FileDown className="w-4 h-4 mr-2" />
                 Exporter en Excel
               </DropdownMenuItem>
@@ -136,7 +222,7 @@ export const DataTable: React.FC<DataTableProps> = ({
 
       {/* Table */}
       <div className="overflow-x-auto scroll-smooth hover:scrollbar-thumb-primary">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[600px]">
           <thead>
             <tr className="border-b border-border bg-secondary/50">
               {headers.map((header, index) => (
@@ -144,18 +230,18 @@ export const DataTable: React.FC<DataTableProps> = ({
                   key={index}
                   onClick={() => handleSort(index)}
                   className={`
-                    px-4 py-3 text-left font-semibold text-foreground
+                    px-3 py-2 text-left font-semibold text-foreground text-xs whitespace-nowrap
                     ${sortable ? 'cursor-pointer hover:bg-secondary/70 select-none' : ''}
                   `}
                 >
-                  <div className="flex items-center gap-2">
-                    {header}
+                  <div className="flex items-center gap-1">
+                    <span className="truncate">{header}</span>
                     {sortable && sortConfig?.key === index && (
-                      <span className="text-muted-foreground">
+                      <span className="text-muted-foreground flex-shrink-0">
                         {sortConfig.direction === 'asc' ? (
-                          <ChevronUp className="w-4 h-4" />
+                          <ChevronUp className="w-3 h-3" />
                         ) : (
-                          <ChevronDown className="w-4 h-4" />
+                          <ChevronDown className="w-3 h-3" />
                         )}
                       </span>
                     )}
@@ -173,7 +259,8 @@ export const DataTable: React.FC<DataTableProps> = ({
                 {row.map((cell, cellIndex) => (
                   <td
                     key={cellIndex}
-                    className="px-4 py-3 text-muted-foreground"
+                    className="px-3 py-2 text-muted-foreground text-xs max-w-[200px] truncate"
+                    title={String(cell)}
                   >
                     {cell}
                   </td>

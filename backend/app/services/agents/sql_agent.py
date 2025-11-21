@@ -190,7 +190,12 @@ TABLES DISPONIBLES:
                         if value is None:
                             table_row.append('-')
                         else:
-                            table_row.append(str(value))
+                            # Clean numeric artifacts from phone/postal_code fields
+                            formatted_value = str(value)
+                            if col in ['phone', 'telephone', 'telephone_mobile', 'postal_code', 'code_postal']:
+                                # Remove .0 suffix from numeric strings
+                                formatted_value = formatted_value.replace('.0', '')
+                            table_row.append(formatted_value)
                     table_rows.append(table_row)
 
                 table_data = {
@@ -199,6 +204,9 @@ TABLES DISPONIBLES:
                     "rows": table_rows
                 }
 
+            # Extract table names from SQL query for source citations
+            tables = self._extract_table_names(sql_query)
+
             return {
                 "success": True,
                 "message": formatted_message,
@@ -206,9 +214,11 @@ TABLES DISPONIBLES:
                     "results": results,
                     "row_count": len(results) if isinstance(results, list) else 0,
                     "sql_query": sql_query,
-                    "table": table_data  # Structured table data for DataTable component
+                    "table": table_data,  # Structured table data for DataTable component
+                    "tables": tables  # Table names for source citations
                 },
                 "sql_query": sql_query,
+                "tables": tables,  # Also at top level for easy access
                 "confidence": 0.9
             }
 
@@ -493,5 +503,77 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
 
         count = len(results)
 
-        # Simple message - the table will be displayed by DataTable component
-        return f"✅ J'ai trouvé **{count}** résultat{'s' if count > 1 else ''} dans la base de données."
+        # Generate human-readable response from SQL results
+        response_parts = [f"✅ J'ai trouvé **{count}** résultat{'s' if count > 1 else ''} dans la base de données.\n"]
+
+        # Format top results (max 3 for readability)
+        for i, row in enumerate(results[:3], 1):
+            # Build a descriptive line based on available columns
+            details = []
+
+            # Name handling (different column names possible)
+            name = row.get('name') or f"{row.get('prenom', '')} {row.get('nom', '')}".strip()
+            if name:
+                details.append(f"**{name}**")
+
+            # Company/category
+            if row.get('company_name'):
+                details.append(f"({row['company_name']})")
+            if row.get('category'):
+                details.append(f"- {row['category']}")
+
+            # Contact info
+            contact_parts = []
+            if row.get('email'):
+                contact_parts.append(f"📧 {row['email']}")
+            if row.get('phone') or row.get('telephone'):
+                phone = row.get('phone') or row.get('telephone')
+                contact_parts.append(f"📞 {str(phone).replace('.0', '')}")
+
+            # Location
+            location_parts = []
+            if row.get('city') or row.get('ville'):
+                location_parts.append(row.get('city') or row.get('ville'))
+            if row.get('address') or row.get('adresse'):
+                location_parts.append(row.get('address') or row.get('adresse'))
+
+            # Build the line
+            if details:
+                line = " ".join(details)
+                if contact_parts:
+                    line += f"\n   {' | '.join(contact_parts)}"
+                if location_parts:
+                    line += f"\n   📍 {', '.join(location_parts)}"
+                response_parts.append(f"\n{i}. {line}")
+
+        if count > 3:
+            response_parts.append(f"\n\n*... et {count - 3} autre(s) résultat(s) dans le tableau ci-dessous.*")
+
+        return "".join(response_parts)
+
+    def _extract_table_names(self, sql: str) -> List[str]:
+        """
+        Extract table names from SQL query for source citations
+
+        Args:
+            sql: SQL query
+
+        Returns:
+            List of table names found in query
+        """
+        import re
+        sql_lower = sql.lower()
+
+        table_patterns = [
+            r'\bfrom\s+(\w+)',        # FROM clause
+            r'\bjoin\s+(\w+)',        # JOIN clause (LEFT/RIGHT/INNER/OUTER JOIN)
+        ]
+
+        found_tables = set()
+        for pattern in table_patterns:
+            matches = re.findall(pattern, sql_lower, re.IGNORECASE)
+            found_tables.update(matches)
+
+        # Filter to only allowed tables and return as sorted list
+        valid_tables = [t for t in found_tables if t in ALLOWED_TABLES]
+        return sorted(valid_tables)

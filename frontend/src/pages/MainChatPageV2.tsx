@@ -240,16 +240,13 @@ export const MainChatPageV2: React.FC = () => {
           try {
             // Transform sources to Citation format
             const formattedSources = response.sources?.map((source: any, index: number) => {
-              // Determine a descriptive title based on source type
+              // Determine a descriptive title - check ALL possible fields
               let title = 'Document';
               if (source.type === 'sql') {
-                title = 'Base de données';
-              } else if (source.filename) {
-                title = source.filename;
-              } else if (source.title) {
-                title = source.title;
-              } else if (source.type === 'rag' || source.type === 'document') {
-                title = 'Document (RAG)';
+                title = source.title || 'Base de données';
+              } else {
+                // For RAG/web: check filename, title, document, name (in order)
+                title = source.filename || source.title || source.document || source.name || 'Document';
               }
 
               // Build metadata with additional context
@@ -286,9 +283,8 @@ export const MainChatPageV2: React.FC = () => {
             console.error('Failed to save assistant message:', error);
           }
 
-          // Clear temporary state
-          // NE PAS effacer currentThoughts - ils restent visibles jusqu'à la prochaine question
-          // setCurrentThoughts([]); // ← COMMENTÉ pour garder le CoT visible
+          // Clear temporary state - thoughts are now saved in the message
+          setCurrentThoughts([]);
           setIsLoading(false);
           eventSource.close();
 
@@ -470,20 +466,24 @@ export const MainChatPageV2: React.FC = () => {
                 </div>
               ))}
 
-              {/* Current streaming thoughts - restent affichés MÊME après le loading */}
-              {currentThoughts.length > 0 && (
+              {/* Current streaming thoughts - shown during active streaming ONLY */}
+              {isLoading && currentThoughts.length > 0 && (
                 <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  <CollapsibleCoT
-                    steps={currentThoughts.map(t => ({
-                      id: t.id,
-                      title: t.title,
-                      content: t.content,
-                      status: t.type === 'completed' ? 'completed' :
-                             t.type === 'executing' || t.type === 'processing' ? 'active' :
-                             'pending',
-                      timestamp: new Date(t.timestamp).toLocaleTimeString('fr-FR'),
-                    }))}
-                  />
+                  <div className="space-y-4">
+                    <CollapsibleCoT
+                      steps={currentThoughts.map(t => ({
+                        id: t.id,
+                        title: t.title,
+                        content: t.content,
+                        status: t.type === 'completed' ? 'completed' :
+                               t.type === 'executing' || t.type === 'processing' ? 'active' :
+                               'pending',
+                        timestamp: new Date(t.timestamp).toLocaleTimeString('fr-FR'),
+                      }))}
+                      autoCollapse={false} // Don't auto-collapse during streaming
+                    />
+                    <MessageLoadingSkeleton />
+                  </div>
                 </div>
               )}
 

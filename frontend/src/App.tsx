@@ -8,10 +8,7 @@ import { CopropriétairesPage } from './pages/CoproprietairesPage'
 import { ImportPage } from './pages/ImportPage'
 import { DocumentsPage } from './pages/DocumentsPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { ChatPage } from './pages/ChatPage'
 import { DigestPage } from './pages/DigestPage'
-import { ChatPageV2 } from './pages/ChatPageV2'
-import { MainChatPage } from './pages/MainChatPage'
 import { MainChatPageV2 } from './pages/MainChatPageV2'
 import { AppLayout } from './components/layout/AppLayout'
 import { useEffect } from 'react'
@@ -41,26 +38,31 @@ function App() {
       <ActiveDocumentsProvider>
         <BrowserRouter>
         <div className="min-h-screen bg-background">
-          {/* Toast Notifications */}
+          {/* Toast Notifications - Style subtil comme ChatGPT */}
           <Toaster
-            position="top-right"
-            expand={true}
+            position="bottom-right"
+            expand={false}
             richColors
             closeButton
-            duration={4000}
+            duration={3000}
+            toastOptions={{
+              style: {
+                background: 'hsl(var(--background))',
+                color: 'hsl(var(--foreground))',
+                border: '1px solid hsl(var(--border))',
+                fontSize: '14px',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+              },
+              className: 'backdrop-blur-sm',
+            }}
           />
 
           {/* Routes */}
           <Routes>
-            {/* Main Chat Page - Interface principale simplifiée */}
-            <Route path="/" element={<MainChatPage />} />
-
-            {/* V2 UI Redesign - Pastel Colors */}
-            <Route path="/v2" element={<MainChatPageV2 />} />
-
-            {/* Legacy chat pages */}
-            <Route path="/chat" element={<ChatPage />} />
-            <Route path="/chat-v2" element={<ChatPageV2 />} />
+            {/* Main Chat Page - V2 UI Redesign avec couleurs pastel */}
+            <Route path="/" element={<MainChatPageV2 />} />
 
             {/* Admin routes with AppLayout (sidebar navigation) */}
             <Route path="/admin" element={<AppLayout />}>

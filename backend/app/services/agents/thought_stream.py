@@ -23,6 +23,7 @@ class ThoughtType(str, Enum):
     WAITING = "waiting"  # Waiting for agent response
     PROCESSING = "processing"  # Processing agent results
     SYNTHESIZING = "synthesizing"  # Synthesizing final response
+    SEARCHING = "searching"  # Searching web/documents
     COMPLETED = "completed"  # Task completed
     ERROR = "error"  # Error occurred
 

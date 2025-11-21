@@ -32,6 +32,7 @@ class ChatRequest(BaseModel):
     message: str
     conversation_history: Optional[List[ChatMessage]] = []
     session_id: Optional[str] = None
+    selected_sources: Optional[List[str]] = None  # ['sql', 'rag', 'web'] - None = auto-detect
 
 
 class ChatResponse(BaseModel):
@@ -85,7 +86,8 @@ async def ask_question(
                     conversation_history=conv_history,
                     context=None,
                     thought_stream=None,
-                    state_manager=None
+                    state_manager=None,
+                    selected_sources=request.selected_sources  # User-controlled source selection
                 ),
                 timeout=30.0
             )

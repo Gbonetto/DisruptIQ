@@ -17,8 +17,9 @@ from pydantic import BaseModel
 from datetime import datetime
 import uuid
 from app.services.llm_service import LLMService
-from app.services.table_generation_service import TableGenerationService
-from app.api.endpoints.export import cache_table_data
+# TODO: Re-enable table generation when service is available
+# from app.services.table_generation_service import TableGenerationService
+# from app.api.endpoints.export import cache_table_data
 
 logger = structlog.get_logger()
 
@@ -574,30 +575,34 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
                 logger.debug("no_table_data_found")
                 return None
 
-            # Generate HTML table using TableGenerationService
-            table_service = TableGenerationService()
-            table_id = f"table_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
+            # TODO: Re-enable table generation when service is available
+            # For now, just return None to skip table generation
+            logger.info("table_generation_disabled", reason="TableGenerationService not available")
+            return None
 
-            rows = table_data.get("rows", [])
-            columns = table_data.get("columns", [])
-            title = table_data.get("title", "Tableau de données")
+            # # Generate HTML table using TableGenerationService
+            # table_service = TableGenerationService()
+            # table_id = f"table_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
-            if not rows or not columns:
-                return None
+            # rows = table_data.get("rows", [])
+            # columns = table_data.get("columns", [])
+            # title = table_data.get("title", "Tableau de données")
 
-            # Cache data for export
-            cache_table_data(table_id, rows, columns, title)
+            # if not rows or not columns:
+            #     return None
 
-            # Generate HTML
-            html_table = table_service.generate_html_table(
-                data=rows,
-                columns=columns,
-                title=title,
-                export_id=table_id
-            )
+            # # Cache data for export
+            # cache_table_data(table_id, rows, columns, title)
 
-            logger.info("table_generated", table_id=table_id, rows=len(rows), columns=len(columns))
-            return html_table
+            # # Generate HTML
+            # html_table = table_service.generate_html_table(
+            #     data=rows,
+            #     columns=columns,
+            #     title=title,
+            #     export_id=table_id
+            # )
+            # logger.info("table_generated", table_id=table_id, rows=len(rows), columns=len(columns))
+            # return html_table
 
         except Exception as e:
             logger.error("table_generation_failed", error=str(e), exc_info=True)

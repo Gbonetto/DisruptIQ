@@ -146,6 +146,36 @@ async def check_gmail_credentials() -> Dict[str, Any]:
         }
 
 
+async def check_sentry() -> Dict[str, Any]:
+    """
+    Check Sentry monitoring status
+
+    Returns:
+        dict: Sentry status
+    """
+    try:
+        from app.core.monitoring import is_sentry_enabled
+
+        if is_sentry_enabled():
+            return {
+                "status": "healthy",
+                "enabled": True,
+                "message": "Error tracking active"
+            }
+        else:
+            return {
+                "status": "disabled",
+                "enabled": False,
+                "message": "Sentry monitoring disabled (development mode)"
+            }
+    except Exception as e:
+        logger.error("sentry_check_failed", error=str(e))
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+
+
 @router.get("/health")
 async def health_check(db: AsyncSession = Depends(get_db)):
     """
@@ -188,11 +218,12 @@ async def detailed_health_check(db: AsyncSession = Depends(get_db)):
     start_time = datetime.now()
 
     # Run all health checks concurrently
-    database_health, redis_health, qdrant_health, gmail_health = await asyncio.gather(
+    database_health, redis_health, qdrant_health, gmail_health, sentry_health = await asyncio.gather(
         check_database(db),
         check_redis(),
         check_qdrant(),
         check_gmail_credentials(),
+        check_sentry(),
         return_exceptions=True
     )
 
@@ -210,13 +241,15 @@ async def detailed_health_check(db: AsyncSession = Depends(get_db)):
     redis_health = safe_result(redis_health, "redis")
     qdrant_health = safe_result(qdrant_health, "qdrant")
     gmail_health = safe_result(gmail_health, "gmail")
+    sentry_health = safe_result(sentry_health, "sentry")
 
     # Determine overall status
     statuses = [
         database_health.get("status"),
         redis_health.get("status"),
         qdrant_health.get("status"),
-        gmail_health.get("status")
+        gmail_health.get("status"),
+        sentry_health.get("status")
     ]
 
     if "unhealthy" in statuses:
@@ -247,7 +280,8 @@ async def detailed_health_check(db: AsyncSession = Depends(get_db)):
             "database": database_health,
             "redis": redis_health,
             "qdrant": qdrant_health,
-            "gmail": gmail_health
+            "gmail": gmail_health,
+            "sentry": sentry_health
         }
     }
 

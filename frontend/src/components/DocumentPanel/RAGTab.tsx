@@ -1,8 +1,18 @@
 import { useState, useEffect } from 'react';
-import { Upload, Trash2, CheckCircle, Circle, AlertCircle, FileText } from 'lucide-react';
+import { Upload, Trash2, CheckCircle, Circle, AlertCircle, FileText, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { documentApi } from '@/lib/api';
 import { useActiveDocuments } from '@/contexts/ActiveDocumentsContext';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 interface RAGDocument {
   id: number;
@@ -36,6 +46,10 @@ export function RAGTab() {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [isFirstLoad, setIsFirstLoad] = useState(true);
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; doc: RAGDocument | null }>({
+    open: false,
+    doc: null,
+  });
 
   // Load documents on mount
   useEffect(() => {
@@ -118,71 +132,38 @@ export function RAGTab() {
     updateActiveDocIds(next);
   };
 
-  const handleDelete = async (doc: RAGDocument) => {
-    // Demander confirmation avec un toast custom
-    const toastId = `confirm-delete-${doc.id}`;
+  const handleDelete = (doc: RAGDocument) => {
+    setDeleteDialog({ open: true, doc });
+  };
 
-    toast.custom(
-      () => (
-        <div className="bg-white border border-orange-200 rounded-lg shadow-lg p-4 max-w-md">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
-            <div className="flex-1">
-              <h4 className="text-sm font-semibold text-gray-900 mb-1">
-                Confirmer la suppression
-              </h4>
-              <p className="text-xs text-gray-600 mb-3">
-                Voulez-vous vraiment supprimer <strong>{doc.original_filename}</strong> ?
-                <br />
-                Cette action supprimera également tous les chunks indexés dans Qdrant.
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={async () => {
-                    toast.dismiss(toastId);
-                    try {
-                      toast.loading('Suppression en cours...', { id: `delete-${doc.id}` });
-                      await documentApi.delete(doc.id);
+  const confirmDelete = async () => {
+    if (!deleteDialog.doc) return;
 
-                      setDocuments(prev => prev.filter(d => d.id !== doc.id));
-                      setActiveDocIds(prev => {
-                        const next = new Set(prev);
-                        next.delete(doc.id);
-                        return next;
-                      });
+    const doc = deleteDialog.doc;
+    setDeleteDialog({ open: false, doc: null });
 
-                      toast.success(`${doc.original_filename} supprimé`, {
-                        id: `delete-${doc.id}`,
-                        description: 'Document et chunks supprimés'
-                      });
-                    } catch (error) {
-                      console.error('Échec de la suppression:', error);
-                      toast.error('Échec de la suppression', {
-                        id: `delete-${doc.id}`,
-                        description: 'Une erreur est survenue'
-                      });
-                    }
-                  }}
-                  className="px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded hover:bg-red-700 transition-colors"
-                >
-                  Supprimer
-                </button>
-                <button
-                  onClick={() => {
-                    toast.dismiss(toastId);
-                    toast.info('Suppression annulée');
-                  }}
-                  className="px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded hover:bg-gray-200 transition-colors"
-                >
-                  Annuler
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ),
-      { id: toastId, duration: Infinity }
-    );
+    try {
+      toast.loading('Suppression en cours...', { id: `delete-${doc.id}` });
+      await documentApi.delete(doc.id);
+
+      setDocuments(prev => prev.filter(d => d.id !== doc.id));
+      setActiveDocIds(prev => {
+        const next = new Set(prev);
+        next.delete(doc.id);
+        return next;
+      });
+
+      toast.success(`${doc.original_filename} supprimé`, {
+        id: `delete-${doc.id}`,
+        description: 'Document et chunks supprimés'
+      });
+    } catch (error) {
+      console.error('Échec de la suppression:', error);
+      toast.error('Échec de la suppression', {
+        id: `delete-${doc.id}`,
+        description: 'Une erreur est survenue'
+      });
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -542,6 +523,29 @@ export function RAGTab() {
           </div>
         </div>
       )}
+
+      {/* Dialog de confirmation de suppression */}
+      <AlertDialog open={deleteDialog.open} onOpenChange={(open: boolean) => !open && setDeleteDialog({ open: false, doc: null })}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              Supprimer le document
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Êtes-vous sûr de vouloir supprimer le document <strong>"{deleteDialog.doc?.original_filename}"</strong> ?
+              <br />
+              <span className="text-destructive">Cette action supprimera également tous les chunks indexés dans Qdrant.</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
