@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Database, FileText, Search, TrendingUp } from 'lucide-react';
+import { Database, FileText, Search, TrendingUp, ArrowDown } from 'lucide-react';
 import { MainLayout } from '@/components/v2/Layout/MainLayout';
 import { SmartCardsGrid } from '@/components/v2/Core/SmartCard';
 import { CollapsibleCoT } from '@/components/v2/Core/CollapsibleCoT';
@@ -8,7 +8,7 @@ import { DataTable } from '@/components/v2/Core/DataTable';
 import { RichMarkdown } from '@/components/v2/Core/RichMarkdown';
 import { MessageLoadingSkeleton } from '@/components/v2/Core/LoadingSkeleton';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
 import {
@@ -20,6 +20,7 @@ import {
   type Thought,
 } from '@/lib/api-v2';
 import { useActiveDocuments } from '@/contexts/ActiveDocumentsContext';
+import { SourceSelector } from '@/components/SourceSelector';
 
 export const MainChatPageV2: React.FC = () => {
   const { activeDocumentIds } = useActiveDocuments();
@@ -31,17 +32,51 @@ export const MainChatPageV2: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [currentThoughts, setCurrentThoughts] = useState<Thought[]>([]);
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when messages change
+  const [showScrollButton, setShowScrollButton] = useState(false);
+
+  // Auto-scroll to bottom when messages change (smooth scroll)
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
   }, [messages, currentThoughts]);
+
+  // Detect if user scrolled up
+  useEffect(() => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+      setShowScrollButton(!isNearBottom && messages.length > 0);
+    };
+
+    scrollContainer.addEventListener('scroll', handleScroll);
+    return () => scrollContainer.removeEventListener('scroll', handleScroll);
+  }, [messages.length]);
+
+  const scrollToBottom = () => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  };
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [inputValue]);
 
   // Load conversations on mount
   useEffect(() => {
@@ -183,13 +218,14 @@ export const MainChatPageV2: React.FC = () => {
         data: m.data,
       }));
 
-      // Start SSE streaming with active document IDs
-      console.log('[MainChatPageV2] Sending message with active docs:', activeDocumentIds);
+      // Start SSE streaming with active document IDs and selected sources
+      console.log('[MainChatPageV2] Sending message with active docs:', activeDocumentIds, 'selected sources:', selectedSources);
       const eventSource = assistantV2Api.streamChat(
         userMessage,
         history,
         conversationId.toString(),
-        activeDocumentIds
+        activeDocumentIds,
+        selectedSources
       );
       eventSourceRef.current = eventSource;
 
@@ -203,13 +239,38 @@ export const MainChatPageV2: React.FC = () => {
           // Save assistant message to database
           try {
             // Transform sources to Citation format
-            const formattedSources = response.sources?.map((source: any, index: number) => ({
-              id: index + 1,
-              type: source.type === 'document' ? 'rag' : source.type,
-              title: source.filename || 'Document',
-              content: source.excerpt || '',
-              metadata: { score: source.score }
-            })) || [];
+            const formattedSources = response.sources?.map((source: any, index: number) => {
+              // Determine a descriptive title based on source type
+              let title = 'Document';
+              if (source.type === 'sql') {
+                title = 'Base de données';
+              } else if (source.filename) {
+                title = source.filename;
+              } else if (source.title) {
+                title = source.title;
+              } else if (source.type === 'rag' || source.type === 'document') {
+                title = 'Document (RAG)';
+              }
+
+              // Build metadata with additional context
+              const metadata: any = { score: source.score };
+
+              // For SQL sources, add table names if available
+              if (source.type === 'sql' && source.tables) {
+                metadata.tables = source.tables;
+              }
+
+              // For RAG sources, the content is already in excerpt/text
+              // We'll display it as citation.content
+
+              return {
+                id: index + 1,
+                type: source.type === 'document' ? 'rag' : source.type,
+                title: title,
+                content: source.excerpt || source.text || '',
+                metadata: metadata
+              };
+            }) || [];
 
             const assistantMsg = await conversationsApi.addMessage(
               conversationId!,
@@ -226,7 +287,8 @@ export const MainChatPageV2: React.FC = () => {
           }
 
           // Clear temporary state
-          setCurrentThoughts([]);
+          // NE PAS effacer currentThoughts - ils restent visibles jusqu'à la prochaine question
+          // setCurrentThoughts([]); // ← COMMENTÉ pour garder le CoT visible
           setIsLoading(false);
           eventSource.close();
 
@@ -307,10 +369,12 @@ export const MainChatPageV2: React.FC = () => {
       onDeleteConversation={handleDeleteConversation}
     >
       {/* Chat area */}
-      <div className="flex-1 flex flex-col h-full">
+      <div className="flex-1 flex flex-col h-full relative">
         {/* Messages area */}
         <ScrollArea className="flex-1 scroll-smooth" ref={scrollAreaRef}>
-          <div className="px-6">
+          <div ref={scrollContainerRef} className="h-full overflow-y-auto">
+          <div className="w-full flex justify-center px-6">
+            <div className="w-full max-w-4xl overflow-hidden">
           {messages.length === 0 ? (
             // Empty state with smart cards
             <div className="flex flex-col items-center justify-center h-full py-12">
@@ -337,17 +401,17 @@ export const MainChatPageV2: React.FC = () => {
                   {message.role === 'user' ? (
                     // User message
                     <div className="flex justify-end">
-                      <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-primary text-primary-foreground">
-                        <p className="text-sm leading-relaxed">{message.content}</p>
+                      <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-primary text-primary-foreground break-words overflow-hidden">
+                        <p className="text-sm leading-relaxed break-words">{message.content}</p>
                         <p className="text-xs text-primary-foreground/70 mt-1">
                           {new Date(message.timestamp).toLocaleTimeString('fr-FR')}
                         </p>
                       </div>
                     </div>
                   ) : (
-                    // Assistant message with rich content
-                    <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-500">
-                      <div className="w-full space-y-4">
+                    // Assistant message with rich content - Fade-in animation
+                    <div className="flex justify-start animate-slideUp">
+                      <div className="w-full space-y-4 break-words overflow-hidden">
                         {/* Chain of Thought */}
                         {message.thoughts && message.thoughts.length > 0 && (
                           <CollapsibleCoT
@@ -364,7 +428,7 @@ export const MainChatPageV2: React.FC = () => {
                         )}
 
                         {/* Main response with Rich Markdown */}
-                        <div className="rounded-2xl px-4 py-3 bg-secondary text-foreground">
+                        <div className="rounded-2xl px-4 py-3 bg-secondary text-foreground break-words overflow-hidden">
                           <RichMarkdown content={message.content} />
                         </div>
 
@@ -406,8 +470,8 @@ export const MainChatPageV2: React.FC = () => {
                 </div>
               ))}
 
-              {/* Current streaming thoughts */}
-              {isLoading && currentThoughts.length > 0 && (
+              {/* Current streaming thoughts - restent affichés MÊME après le loading */}
+              {currentThoughts.length > 0 && (
                 <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                   <CollapsibleCoT
                     steps={currentThoughts.map(t => ({
@@ -430,29 +494,69 @@ export const MainChatPageV2: React.FC = () => {
               <div ref={messagesEndRef} />
             </div>
           )}
+            </div>
+          </div>
           </div>
         </ScrollArea>
 
+        {/* Scroll to bottom button */}
+        {showScrollButton && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-24 right-8 z-10 p-3 bg-primary text-primary-foreground rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-110 animate-fadeIn"
+            aria-label="Descendre en bas"
+          >
+            <ArrowDown className="w-5 h-5" />
+          </button>
+        )}
+
         {/* Input area */}
         <div className="border-t border-border p-6 bg-background">
-          <div className="flex gap-3">
-            <Input
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !isLoading && handleSendMessage()}
-              placeholder="Posez votre question..."
-              className="flex-1"
-              disabled={isLoading}
-            />
-            {isLoading ? (
-              <Button onClick={handleStopStreaming} variant="destructive">
-                Arrêter
-              </Button>
-            ) : (
-              <Button onClick={handleSendMessage} disabled={!inputValue.trim()}>
-                Envoyer
-              </Button>
-            )}
+          <div className="w-full flex justify-center">
+            <div className="w-full max-w-4xl">
+              {/* Input row with integrated source selector */}
+              <div className="flex gap-2 items-end">
+                {/* Source Selector - ChatGPT style, left of textarea */}
+                <div className="flex items-end pb-2">
+                  <SourceSelector
+                    selectedSources={selectedSources}
+                    onChange={setSelectedSources}
+                  />
+                </div>
+
+                {/* Textarea */}
+                <Textarea
+                  ref={textareaRef}
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !isLoading) {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                  placeholder="Posez votre question... (Entrée pour envoyer, Maj+Entrée pour nouvelle ligne)"
+                  className="flex-1 min-h-[44px] max-h-[200px] resize-none"
+                  disabled={isLoading}
+                  rows={1}
+                />
+
+                {/* Send/Stop button */}
+                {isLoading ? (
+                  <Button onClick={handleStopStreaming} variant="destructive" size="default">
+                    Arrêter
+                  </Button>
+                ) : (
+                  <Button onClick={handleSendMessage} disabled={!inputValue.trim()} size="default">
+                    Envoyer
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>

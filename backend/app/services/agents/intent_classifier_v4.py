@@ -63,10 +63,7 @@ class IntentType(str, Enum):
     TRIGGER_WORKFLOW = "trigger_workflow"
     # Phase 2
     WEB_SEARCH = "web_search"
-    LEGAL_ANALYSIS = "legal_analysis"
-    LEGAL_COMPARISON = "legal_comparison"
-    LEGAL_ADVICE = "legal_advice"
-    SEARCH_JURISPRUDENCE = "search_jurisprudence"
+    LEGAL = "legal"  # Legal requests (agent decides specific action internally)
 
 
 class DataSource(str, Enum):
@@ -191,6 +188,74 @@ class EnhancedIntentClassifierV4:
             "transmets", "transmettre", "transmet"
         ]
 
+        # Legal keywords (general - agent will decide specific action)
+        self.legal_keywords = {
+            # Documents juridiques
+            "contrat": 0.95,
+            "bail": 0.95,
+            "règlement de copropriété": 0.95,
+            "pv d'ag": 0.90,
+            "assemblée générale": 0.85,
+            "procès-verbal": 0.90,
+            "mise en demeure": 0.95,
+            "décision de justice": 0.95,
+
+            # Actions juridiques
+            "analyser juridiquement": 0.95,
+            "analyse juridique": 0.95,
+            "conformité": 0.90,
+            "obligations légales": 0.90,
+            "risques juridiques": 0.95,
+            "clauses": 0.85,
+            "vérifier la conformité": 0.90,
+
+            # Lois et réglementations
+            "loi elan": 0.95,
+            "loi climat": 0.95,
+            "loi 1965": 0.95,
+            "loi du": 0.85,
+            "décret": 0.85,
+            "jurisprudence": 0.95,
+            "code civil": 0.90,
+            "légifrance": 0.95,
+
+            # Questions légales
+            "puis-je légalement": 0.90,
+            "ai-je le droit": 0.85,
+            "obligations du syndic": 0.90,
+            "conseil juridique": 0.95,
+            "avocat": 0.80,
+            "légal": 0.75,
+            "juridique": 0.75,
+
+            # Comparaisons
+            "comparer les contrats": 0.90,
+            "différence juridique": 0.85,
+        }
+
+        # Workflow/N8N keywords (automation)
+        self.workflow_keywords = {
+            # Automation triggers
+            "automatiser": 0.95,
+            "déclencher un workflow": 0.98,
+            "créer un processus": 0.90,
+            "workflow": 0.95,
+            "n8n": 0.98,
+
+            # Bulk actions
+            "envoyer à tous": 0.90,
+            "notifier tous les": 0.85,
+            "email groupé": 0.90,
+            "email en masse": 0.90,
+            "relancer tous": 0.85,
+            "masse": 0.80,
+            "bulk": 0.90,
+
+            # Scheduled actions
+            "programmer un envoi": 0.90,
+            "planifier": 0.85,
+        }
+
         # Confirmation keywords
         self.confirmation_keywords = [
             "oui", "yes", "d'accord", "ok", "valider", "confirmer",
@@ -270,10 +335,10 @@ class EnhancedIntentClassifierV4:
                        preprocessed=preprocessed_query[:50] if preprocessed_query != user_input else "no_changes")
 
             # Step 2: Check for pending clarification response
-            if state_manager and state_manager.state.get("pending_clarification"):
+            if state_manager and hasattr(state_manager.state, "pending_clarification") and state_manager.state.pending_clarification:
                 clarification_result = self._handle_clarification_response(
                     preprocessed_query,
-                    state_manager.state["pending_clarification"],
+                    state_manager.state.pending_clarification,
                     state_manager
                 )
                 if clarification_result:
@@ -578,9 +643,37 @@ class EnhancedIntentClassifierV4:
                     quick_rule_used="explicit_email_verb"
                 )
 
-        # Rule 4: Recent document mentions
-        if state_manager and state_manager.state.get("last_uploaded_documents"):
-            recent_docs = state_manager.state["last_uploaded_documents"][:3]
+        # Rule 4: Legal intent (high-confidence keywords)
+        legal_score = self._compute_legal_score(user_lower)
+        if legal_score >= 0.80:
+            return ClassificationResult(
+                intent=IntentType.LEGAL,
+                data_source=DataSource.RAG_ONLY,  # Legal agent may use RAG + Web
+                confidence=min(0.95, legal_score),
+                reasoning=f"Legal keywords detected (score: {legal_score:.2f})",
+                context_used=["legal_keywords"],
+                alternatives=[],
+                requires_clarification=False,
+                quick_rule_used="legal_keywords"
+            )
+
+        # Rule 5: Workflow intent (automation/bulk actions)
+        workflow_score = self._compute_workflow_score(user_lower)
+        if workflow_score >= 0.85:
+            return ClassificationResult(
+                intent=IntentType.TRIGGER_WORKFLOW,
+                data_source=DataSource.SQL_ONLY,  # Workflows usually need DB data
+                confidence=min(0.95, workflow_score),
+                reasoning=f"Workflow/automation keywords detected (score: {workflow_score:.2f})",
+                context_used=["workflow_keywords"],
+                alternatives=[],
+                requires_clarification=False,
+                quick_rule_used="workflow_keywords"
+            )
+
+        # Rule 6: Recent document mentions
+        if state_manager and state_manager.state.last_uploaded_documents:
+            recent_docs = state_manager.state.last_uploaded_documents[:3]
 
             for doc in recent_docs:
                 doc_filename = doc.get("filename", "").lower()
@@ -734,6 +827,36 @@ class EnhancedIntentClassifierV4:
 
         return min(score, 1.0)
 
+    def _compute_legal_score(self, query_lower: str) -> float:
+        """Compute LEGAL likelihood based on keywords"""
+        score = 0.0
+        matches = 0
+
+        for keyword, weight in self.legal_keywords.items():
+            if keyword in query_lower:
+                score += weight
+                matches += 1
+
+        if matches > 0:
+            score = score / matches
+
+        return min(score, 1.0)
+
+    def _compute_workflow_score(self, query_lower: str) -> float:
+        """Compute WORKFLOW likelihood based on keywords"""
+        score = 0.0
+        matches = 0
+
+        for keyword, weight in self.workflow_keywords.items():
+            if keyword in query_lower:
+                score += weight
+                matches += 1
+
+        if matches > 0:
+            score = score / matches
+
+        return min(score, 1.0)
+
     def _extract_business_entities(self, query_lower: str, detected_entities: Dict[str, Any]) -> List[str]:
         """Extract business entity references (copropriétaires, professionnels, etc.)"""
         entities = []
@@ -819,8 +942,8 @@ class EnhancedIntentClassifierV4:
         context_parts = []
         context_used = []
 
-        if state_manager and state_manager.state.get("last_uploaded_documents"):
-            recent_docs = state_manager.state["last_uploaded_documents"][:3]
+        if state_manager and state_manager.state.last_uploaded_documents:
+            recent_docs = state_manager.state.last_uploaded_documents[:3]
             doc_names = [doc["filename"] for doc in recent_docs]
             context_parts.append(f"Recent documents: {', '.join(doc_names)}")
             context_used.append("recent_documents")
@@ -862,8 +985,7 @@ Available Intents:
 8. general_question - General assistant questions
 9. trigger_workflow - Trigger automated workflows
 10. web_search - Search the web
-11. legal_analysis - Analyze legal documents
-12. legal_advice - Provide legal guidance
+11. legal - Legal requests (analysis, advice, comparison, jurisprudence)
 
 CRITICAL: If data source is HYBRID or AMBIGUOUS, consider hybrid_query intent.
 
@@ -915,10 +1037,7 @@ Respond in JSON format:
                 "general_question": IntentType.GENERAL_QUESTION,
                 "trigger_workflow": IntentType.TRIGGER_WORKFLOW,
                 "web_search": IntentType.WEB_SEARCH,
-                "legal_analysis": IntentType.LEGAL_ANALYSIS,
-                "legal_comparison": IntentType.LEGAL_COMPARISON,
-                "legal_advice": IntentType.LEGAL_ADVICE,
-                "search_jurisprudence": IntentType.SEARCH_JURISPRUDENCE,
+                "legal": IntentType.LEGAL,
             }
 
             intent = intent_mapping.get(intent_str, IntentType.GENERAL_QUESTION)
@@ -947,14 +1066,9 @@ Respond in JSON format:
                     reasoning=alt.get("reasoning", "")
                 ))
 
-            # Determine if clarification needed (will be enforced later)
-            requires_clarification = confidence < self.THRESHOLD_MEDIUM
+            # NEVER require clarification - always execute
+            requires_clarification = False
             clarification_question = None
-
-            if requires_clarification:
-                clarification_question = self._generate_clarification_question(
-                    intent, data_source, alternatives, user_input
-                )
 
             return ClassificationResult(
                 intent=intent,
@@ -988,41 +1102,35 @@ Respond in JSON format:
         state_manager
     ) -> ClassificationResult:
         """
-        CRITICAL: Enforce confidence thresholds
+        Smart confidence handling - NEVER ask for clarification
 
-        Never allow execution of low-confidence intents
+        Instead of blocking on low confidence:
+        - If data_source is AMBIGUOUS → default to HYBRID (search all sources)
+        - If intent is unclear → default to HYBRID_QUERY or GENERAL_QUESTION
+        - Always execute, never clarify
         """
+        # NEVER require clarification - always make a decision
+        result.requires_clarification = False
+        result.clarification_question = None
+
         if result.confidence < self.THRESHOLD_MEDIUM:
-            # FORCE clarification
-            result.requires_clarification = True
+            # Low confidence: default to smart hybrid mode
+            logger.info("low_confidence_auto_hybrid",
+                       original_intent=result.intent.value,
+                       original_source=result.data_source.value if result.data_source else None,
+                       confidence=result.confidence)
 
-            if not result.clarification_question:
-                result.clarification_question = self._generate_clarification_question(
-                    result.intent,
-                    result.data_source,
-                    result.alternatives,
-                    result.preprocessed_query or ""
-                )
+            # If data source is ambiguous, switch to HYBRID
+            if result.data_source == DataSource.AMBIGUOUS:
+                result.data_source = DataSource.HYBRID
+                result.intent = IntentType.HYBRID_QUERY
+                result.reasoning += " → Auto-switched to HYBRID mode due to ambiguity."
 
-            # Store pending clarification in state
-            if state_manager:
-                state_manager.state["pending_clarification"] = {
-                    "original_query": result.preprocessed_query,
-                    "type": "confidence_too_low",
-                    "confidence": result.confidence,
-                    "primary_intent": result.intent.value,
-                    "alternatives": [alt.dict() for alt in result.alternatives],
-                    "timestamp": datetime.now().isoformat(),
-                    "options": result.clarification_options or []
-                }
-
-            logger.warning("confidence_threshold_enforced",
-                          intent=result.intent.value,
-                          confidence=result.confidence,
-                          threshold=self.THRESHOLD_MEDIUM)
+            # Boost confidence slightly since we're making an informed default
+            result.confidence = max(result.confidence, 0.65)
 
         elif result.confidence < self.THRESHOLD_HIGH:
-            # Allow execution but log for monitoring
+            # Medium confidence: execute normally but log
             logger.info("medium_confidence_execution",
                        intent=result.intent.value,
                        confidence=result.confidence)
@@ -1109,7 +1217,6 @@ Respond in JSON format:
             IntentType.GENERAL_QUESTION: "Poser une question générale",
             IntentType.TRIGGER_WORKFLOW: "Déclencher un workflow",
             IntentType.WEB_SEARCH: "Rechercher sur le web",
-            IntentType.LEGAL_ANALYSIS: "Analyser un document juridique",
-            IntentType.LEGAL_ADVICE: "Obtenir un conseil juridique",
+            IntentType.LEGAL: "Demande juridique",
         }
         return labels.get(intent, "Autre action")

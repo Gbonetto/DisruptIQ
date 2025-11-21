@@ -33,10 +33,7 @@ class IntentType(str, Enum):
 
     # New Phase 2 intents (Web Search + Legal agents)
     WEB_SEARCH = "web_search"  # Search internet for current info
-    LEGAL_ANALYSIS = "legal_analysis"  # Analyze legal documents
-    LEGAL_COMPARISON = "legal_comparison"  # Compare legal docs
-    LEGAL_ADVICE = "legal_advice"  # Legal counsel/advice
-    SEARCH_JURISPRUDENCE = "search_jurisprudence"  # Find jurisprudence
+    LEGAL = "legal"  # Legal requests (agent decides specific action internally)
 
 
 class AgentResponse(BaseModel):
@@ -67,14 +64,16 @@ class OrchestratorAgent:
         # Import production components
         from .hybrid_executor import HybridExecutor
         from .response_fusion_agent import ResponseFusionAgent
-        from .intent_classifier_v3 import EnhancedIntentClassifierV3
+        from .intent_classifier_v4 import EnhancedIntentClassifierV4
 
-        # REMOVED: v2 classifier (unused, wastes 50MB memory)
-        # REMOVED: context_intelligence (file doesn't exist - causes ImportError)
-        # TEMPORARILY USING V3: V4 has compatibility issues with ConversationState
+        # V4 ACTIVATED: Fixes critical confidence enforcement bug
+        # - Never executes low-confidence intents (< 0.70)
+        # - Schema-aware SQL/RAG disambiguation
+        # - HYBRID_QUERY support for multi-source fusion
+        # - Structured clarification with user-friendly labels
 
         # Only instantiate what we actually use
-        self.intent_classifier_v4 = EnhancedIntentClassifierV3()  # Using V3 temporarily
+        self.intent_classifier_v4 = EnhancedIntentClassifierV4()
         self.hybrid_executor = HybridExecutor()
         self.fusion_agent = ResponseFusionAgent()
 
@@ -160,7 +159,8 @@ class OrchestratorAgent:
         context: Dict[str, Any] = None,
         conversation_history: List[Dict[str, str]] = None,
         thought_stream: ThoughtStream = None,
-        state_manager = None
+        state_manager = None,
+        selected_sources: Optional[List[str]] = None  # ['sql', 'rag', 'web'] or None for auto
     ) -> AgentResponse:
         """
         Main orchestration method - routes to appropriate agents
@@ -170,6 +170,7 @@ class OrchestratorAgent:
             db: Database session
             context: Optional context (files, metadata)
             conversation_history: Previous messages
+            selected_sources: User-selected sources (['sql', 'rag', 'web']) or None for auto-detection
 
         Returns:
             AgentResponse with results
@@ -296,22 +297,80 @@ class OrchestratorAgent:
                     logger.warning("query_enrichment_failed", error=str(e))
                     # Continue with original query if enrichment fails
 
-            # 2. Classify intention
-            if thought_stream:
-                await thought_stream.add_thought(
-                    ThoughtType.CLASSIFYING,
-                    title="Classification de l'intention utilisateur",
-                    content="J'analyse la demande pour déterminer l'action appropriée. Je vérifie les mots-clés, le contexte de la conversation, et les documents actifs pour classifier l'intention parmi : requête SQL, recherche documentaire (RAG), génération d'email, recherche web, analyse légale, etc.",
-                    agent="intent_classifier",
-                    progress=0.15
-                )
+            # 2. User-controlled source routing (bypass intent classifier if sources specified)
+            if selected_sources is not None and len(selected_sources) > 0:
+                logger.info("user_controlled_routing", selected_sources=selected_sources)
 
-            intent, classification_result = await self.classify_intention(
-                user_input,
-                context,
-                state_manager,
-                conversation_history
-            )
+                if thought_stream:
+                    sources_str = ", ".join(selected_sources)
+                    await thought_stream.add_thought(
+                        ThoughtType.PLANNING,
+                        title=f"Sources sélectionnées : {sources_str}",
+                        content=f"Vous avez choisi de rechercher dans : {sources_str}. Je vais interroger ces sources en parallèle.",
+                        agent="orchestrator",
+                        progress=0.15
+                    )
+
+                # Route directly based on user selection
+                if len(selected_sources) == 1:
+                    # Single source execution
+                    source = selected_sources[0]
+                    if source == 'sql':
+                        intent = IntentType.QUERY_DATA
+                        classification_result = None
+                    elif source == 'rag':
+                        intent = IntentType.SEARCH_DOCUMENTS
+                        classification_result = None
+                    elif source == 'web':
+                        intent = IntentType.WEB_SEARCH
+                        classification_result = None
+                    else:
+                        # Fallback to classifier for unknown sources
+                        logger.warning("unknown_source", source=source)
+                        intent, classification_result = await self.classify_intention(
+                            user_input, context, state_manager, conversation_history
+                        )
+                else:
+                    # Multi-source execution (HYBRID)
+                    logger.info("hybrid_execution_requested", sources=selected_sources)
+
+                    # Update state_manager with active_document_ids from context (if provided)
+                    if context and "active_document_ids" in context and state_manager:
+                        doc_ids = context["active_document_ids"]
+                        if doc_ids and len(doc_ids) > 0:
+                            state_manager.state.set_active_document_ids(doc_ids)
+                            logger.info("hybrid_active_docs_set_from_context", doc_ids=doc_ids)
+
+                    return await self._execute_hybrid_sources(
+                        user_input=user_input,
+                        db=db,
+                        selected_sources=selected_sources,
+                        thought_stream=thought_stream,
+                        state_manager=state_manager,
+                        conversation_history=conversation_history
+                    )
+            else:
+                # No source selected → Full hybrid mode (SQL + RAG + Web in parallel)
+                logger.info("auto_hybrid_mode", message="No sources selected, executing full hybrid")
+
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.PLANNING,
+                        title="Recherche automatique multi-sources",
+                        content="Aucune source spécifique sélectionnée. Je lance une recherche parallèle dans toutes les sources : base de données, documents et internet.",
+                        agent="orchestrator",
+                        progress=0.15
+                    )
+
+                # Execute full hybrid with all sources
+                return await self._execute_hybrid_sources(
+                    user_input=user_input,
+                    db=db,
+                    selected_sources=['sql', 'rag', 'web'],  # All sources
+                    thought_stream=thought_stream,
+                    state_manager=state_manager,
+                    conversation_history=conversation_history
+                )
 
             if thought_stream:
                 await thought_stream.add_thought(
@@ -400,19 +459,10 @@ class OrchestratorAgent:
 
             # NEW Phase 2 agents
             elif intent == IntentType.WEB_SEARCH:
-                return await self._handle_web_search(user_input, thought_stream)
+                return await self._handle_web_search(user_input, thought_stream, conversation_history)
 
-            elif intent == IntentType.LEGAL_ANALYSIS:
-                return await self._handle_legal_analysis(user_input, context, thought_stream)
-
-            elif intent == IntentType.LEGAL_COMPARISON:
-                return await self._handle_legal_comparison(user_input, context, thought_stream)
-
-            elif intent == IntentType.LEGAL_ADVICE:
-                return await self._handle_legal_advice(user_input, context, db, thought_stream)
-
-            elif intent == IntentType.SEARCH_JURISPRUDENCE:
-                return await self._handle_search_jurisprudence(user_input, db, thought_stream)
+            elif intent == IntentType.LEGAL:
+                return await self._handle_legal(user_input, context, db, thought_stream)
 
             else:  # GENERAL_QUESTION
                 logger.info("handling_general_question",
@@ -660,6 +710,8 @@ class OrchestratorAgent:
                 except Exception as e:
                     logger.warning("entity_graph_population_failed", error=str(e), exc_info=True)
 
+        # Return SQL response without inline sources (sources in data only)
+        # Frontend will display them in SourceCitationFooter
         return AgentResponse(
             success=result["success"],
             message=result["message"],
@@ -675,126 +727,52 @@ class OrchestratorAgent:
 
     async def _handle_search_documents(self, user_input: str, db: AsyncSession, state_manager = None, conversation_history: List[Dict] = None, thought_stream: ThoughtStream = None, context: Dict = None) -> AgentResponse:
         """
-        Handle document search via RAG
-
-        Simplified version: Direct RAG search without complex context analysis
+        Handle document search via RAG - Uses HybridExecutor for consistent enriched CoT
         """
         try:
             logger.info("handling_search_documents", query=user_input[:50])
 
-            # Extract active document IDs from context if available
-            document_ids = None
-            if context and "active_document_ids" in context:
-                document_ids = context["active_document_ids"]
-                logger.info("rag_filtering_by_documents", doc_ids=document_ids)
+            # Update state_manager with active_document_ids from context (if provided)
+            if context and "active_document_ids" in context and state_manager:
+                doc_ids = context["active_document_ids"]
+                if doc_ids and len(doc_ids) > 0:
+                    state_manager.state.set_active_document_ids(doc_ids)
+                    logger.info("rag_active_docs_set_from_context", doc_ids=doc_ids)
 
-            # Thought 1: Recherche documentaire
-            if thought_stream:
-                await thought_stream.add_thought(
-                    ThoughtType.EXECUTING,
-                    title="Recherche dans les documents",
-                    content="Je cherche dans vos documents les informations pertinentes pour répondre à votre question.",
-                    agent="rag_agent",
-                    progress=0.3
-                )
-
-            # Simple RAG search with optional document filtering
-            search_results = await self.rag_service.search(
+            # Use HybridExecutor with RAG_ONLY intent for consistent enriched CoT
+            hybrid_result = await self.hybrid_executor.execute_hybrid(
                 query=user_input,
-                limit=5,
-                document_ids=document_ids,
-                use_reranker=True,
-                use_hybrid=True
+                db=db,
+                state_manager=state_manager,
+                intent="RAG_ONLY",
+                thought_stream=thought_stream
             )
 
-            if not search_results or len(search_results) == 0:
-                if thought_stream:
-                    await thought_stream.add_thought(
-                        ThoughtType.COMPLETED,
-                        title="Aucun résultat",
-                        content="Aucune information pertinente trouvée dans les documents.",
-                        agent="rag_agent",
-                        progress=1.0
-                    )
+            # Use ResponseFusionAgent to format the response (same as hybrid mode)
+            if hybrid_result.has_rag and hybrid_result.rag_result:
+                fused = await self.fusion_agent.fuse_responses(user_input, hybrid_result)
+
+                # Prepare response data with sources
+                response_data = {}
+                if hybrid_result.rag_result.data:
+                    response_data = hybrid_result.rag_result.data
+
+                return AgentResponse(
+                    success=fused.text != "",
+                    message=fused.text,
+                    data=response_data,
+                    agents_used=["rag_agent"],
+                    confidence=hybrid_result.rag_result.confidence
+                )
+            else:
+                # No RAG results found
                 return AgentResponse(
                     success=True,
                     message="Je n'ai trouvé aucune information pertinente dans les documents disponibles.",
                     agents_used=["rag_agent"],
-                    confidence=0.0
+                    confidence=0.0,
+                    data={"sources": []}
                 )
-
-            # Thought 2: Génération de la réponse
-            if thought_stream:
-                # Build a more informative message
-                doc_names = [r['metadata'].get('source', 'Inconnu') for r in search_results[:3]]
-                doc_list = ", ".join(doc_names)
-                if len(search_results) > 3:
-                    doc_list += f" et {len(search_results) - 3} autre(s)"
-
-                filter_info = ""
-                if document_ids:
-                    filter_info = f" (filtré sur {len(document_ids)} document(s) sélectionné(s))"
-
-                content_msg = f"J'ai trouvé {len(search_results)} résultat(s) pertinent(s){filter_info}.\n\n**Documents:** {doc_list}\n\nJe génère maintenant une réponse complète basée sur ces documents."
-
-                await thought_stream.add_thought(
-                    ThoughtType.PROCESSING,
-                    title="Analyse des documents",
-                    content=content_msg,
-                    agent="rag_agent",
-                    progress=0.6
-                )
-
-            # Generate response using LLM with retrieved context
-            context_text = "\n\n".join([
-                f"Document: {r['metadata'].get('source', 'Inconnu')}\nContenu: {r['content']}"
-                for r in search_results
-            ])
-
-            # Construct prompt with context and question
-            prompt = f"""Tu es un assistant intelligent qui aide les utilisateurs à trouver des informations dans leurs documents.
-
-Contexte récupéré:
-{context_text}
-
-Question de l'utilisateur: {user_input}
-
-Réponds à la question de manière précise et complète en utilisant uniquement les informations du contexte ci-dessus."""
-
-            llm_response = await self.llm_service.generate_response(
-                prompt=prompt,
-                temperature=0.3,
-                max_tokens=2000
-            )
-
-            # Thought 3: Terminé
-            if thought_stream:
-                await thought_stream.add_thought(
-                    ThoughtType.COMPLETED,
-                    title="Réponse générée",
-                    content="J'ai terminé l'analyse et généré une réponse complète basée sur vos documents.",
-                    agent="rag_agent",
-                    progress=1.0
-                )
-
-            # Format sources for frontend
-            sources = [
-                {
-                    "type": "document",
-                    "filename": r["metadata"].get("source", "Inconnu"),
-                    "score": round(r.get("score", 0), 3),
-                    "excerpt": r["content"][:200] + "..." if len(r["content"]) > 200 else r["content"]
-                }
-                for r in search_results
-            ]
-
-            return AgentResponse(
-                success=True,
-                message=llm_response,
-                data={"sources": sources},
-                agents_used=["rag_agent"],
-                confidence=0.85
-            )
 
         except Exception as e:
             logger.error("rag_search_failed", error=str(e), exc_info=True)
@@ -1438,282 +1416,257 @@ Réponds à la question de manière précise et complète en utilisant uniquemen
 
     # ========== NEW PHASE 2 AGENT HANDLERS ==========
 
-    async def _handle_web_search(self, user_input: str, thought_stream: ThoughtStream = None) -> AgentResponse:
-        """Handle web search requests"""
+    async def _handle_web_search(self, user_input: str, thought_stream: ThoughtStream = None, conversation_history: List[Dict] = None) -> AgentResponse:
+        """Handle web search requests - Unified format with CoT and elegant sources"""
         try:
             from .websearch_agent import WebSearchAgent
 
             web_agent = WebSearchAgent()
 
+            # Thought 1: Starting search - DeepSeek narrative style
             if thought_stream:
                 await thought_stream.add_thought(
-                    ThoughtType.SEARCHING,
-                    title="Recherche sur le web",
-                    content=f"Je recherche sur internet : « {user_input} »",
-                    agent="websearch_agent",
-                    progress=0.5
+                    ThoughtType.EXECUTING,
+                    title="Ok, je lance une recherche sur internet. J'utilise DuckDuckGo pour trouver les informations les plus récentes et pertinentes.",
+                    content="",  # Empty for DeepSeek style
+                    agent="websearch",
+                    progress=0.4
                 )
 
-            # Perform search
+            # Perform search with conversation history for contextual understanding
             search_results = await web_agent.search(
                 query=user_input,
                 num_results=5,
                 search_depth="basic",
-                region="fr-fr"
+                region="fr-fr",
+                conversation_history=conversation_history
             )
 
+            # Thought 2: Results found - DeepSeek narrative style WITH METADATA (like RAG)
             if thought_stream:
-                await thought_stream.add_thought(
-                    ThoughtType.PROCESSING,
-                    title="Synthèse des résultats",
-                    content=f"J'ai trouvé {len(search_results.results)} résultats. Je vais synthétiser les informations les plus pertinentes.",
-                    agent="websearch_agent",
-                    progress=0.8
-                )
+                if search_results.results:
+                    # Calculate metadata for rich CoT (similar to RAG)
+                    top_scores = [r.relevance_score for r in search_results.results[:3]]
+                    scores_display = [f'{int(s*100)}%' for s in top_scores if s > 0]
+                    avg_score = sum(top_scores) / len(top_scores) if top_scores else 0
 
-            # Format results with answer + sources
-            formatted_message = ""
+                    # Extract domains for context
+                    domains = []
+                    for r in search_results.results[:3]:
+                        if r.url:
+                            try:
+                                domain = r.url.split("/")[2]
+                                domains.append(domain)
+                            except:
+                                pass
+                    domains_str = ", ".join(set(domains[:3])) if domains else "sources web variées"
 
+                    # Quality assessment based on scores (like RAG)
+                    if avg_score >= 0.8:
+                        quality_assessment = f"Excellent ! Les sources semblent très fiables ({', '.join(scores_display[:3])}). Sources principales : {domains_str}."
+                    elif avg_score >= 0.6:
+                        quality_assessment = f"Scores corrects ({', '.join(scores_display[:3])}). Les informations sont utiles. Sources : {domains_str}."
+                    else:
+                        quality_assessment = f"Scores moyens ({', '.join(scores_display[:3])}). Les sources web ne sont peut-être pas totalement pertinentes. Sources : {domains_str}."
+
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title=f"Trouvé {len(search_results.results)} sources web. Meilleurs scores : {', '.join(scores_display[:3])}. {quality_assessment}",
+                        content="",  # Empty for DeepSeek style
+                        agent="websearch",
+                        progress=0.7
+                    )
+                else:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title="Hmm, aucun résultat pertinent trouvé sur le web. Soit l'information n'est pas publiquement disponible, soit il faudrait reformuler la question différemment.",
+                        content="",  # Empty for DeepSeek style
+                        agent="websearch",
+                        progress=0.7
+                    )
+
+            # Build structured sources for frontend (same format as RAG/SQL)
+            structured_sources = []
+            for idx, result in enumerate(search_results.results[:5], 1):
+                # Extract domain for cleaner display
+                domain = ""
+                if result.url:
+                    try:
+                        domain = result.url.split("/")[2]
+                    except:
+                        domain = result.url
+
+                structured_sources.append({
+                    "type": "web",
+                    "id": idx,
+                    "title": result.title,
+                    "url": result.url,
+                    "excerpt": result.snippet,
+                    "text": result.snippet,  # For display consistency
+                    "confidence": result.relevance_score,
+                    "score": result.relevance_score,
+                    "metadata": {
+                        "domain": domain,
+                        "source": "duckduckgo"
+                    }
+                })
+
+            # Use synthesized answer from WebSearchAgent (already uses Mistral LLM with citations)
             if search_results.synthesized_answer:
-                formatted_message += search_results.synthesized_answer + "\n\n"
+                response_message = search_results.synthesized_answer
+            else:
+                # Fallback: Create basic synthesis if LLM failed
+                if search_results.results:
+                    response_message = f"Voici les informations trouvées sur internet concernant « {user_input} » :\n\n"
+                    for idx, result in enumerate(search_results.results[:3], 1):
+                        response_message += f"{idx}. {result.snippet[:200]}...\n\n"
+                else:
+                    response_message = f"❌ Aucune information trouvée sur internet pour : « {user_input} ».\n\n**Suggestions** :\n- Reformulez avec d'autres mots\n- Vérifiez l'orthographe\n- Essayez une question plus générale"
 
-            if search_results.results:
-                formatted_message += "## 🔍 Sources\n\n"
-                for idx, result in enumerate(search_results.results[:5], 1):
-                    formatted_message += f"**[{idx}] {result.title}**\n"
-                    formatted_message += f"{result.snippet[:200]}...\n"
-                    formatted_message += f"🔗 {result.url}\n\n"
+            # Thought 3: Synthesis complete - DeepSeek narrative style WITH METADATA
+            if thought_stream:
+                if structured_sources:
+                    # Calculate synthesis confidence (similar to RAG)
+                    synthesis_confidence = int(search_results.confidence * 100) if search_results.confidence else 0
+                    source_count = len(structured_sources)
+
+                    # Build natural narrative based on confidence
+                    if synthesis_confidence >= 80:
+                        confidence_narrative = f"Parfait ! J'ai synthétisé {source_count} sources avec {synthesis_confidence}% de confiance. Les informations sont claires et cohérentes."
+                    elif synthesis_confidence >= 60:
+                        confidence_narrative = f"Synthèse terminée avec {synthesis_confidence}% de confiance sur {source_count} sources. Les informations sont utiles mais parfois incomplètes."
+                    else:
+                        confidence_narrative = f"Synthèse terminée mais ma confiance est moyenne ({synthesis_confidence}%). Les {source_count} sources ne couvrent peut-être pas complètement le sujet."
+
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title=confidence_narrative,
+                        content="",  # Empty for DeepSeek style
+                        agent="synthesis",
+                        progress=1.0
+                    )
+                else:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title="Synthèse terminée mais aucune source fiable trouvée. La réponse risque d'être limitée.",
+                        content="",
+                        agent="synthesis",
+                        progress=1.0
+                    )
 
             return AgentResponse(
                 success=True,
-                message=formatted_message,
-                data=search_results.to_dict(),
+                message=response_message,
+                data={
+                    "sources": structured_sources,  # Structured format for frontend
+                    "source_count": len(structured_sources),
+                    "search_provider": "duckduckgo"
+                },
                 agents_used=["websearch_agent"],
                 confidence=search_results.confidence
             )
 
         except Exception as e:
+            error_str = str(e).lower()
             logger.error("web_search_failed", error=str(e), exc_info=True)
+
+            # User-friendly error messages
+            if "ratelimit" in error_str or "202" in error_str:
+                user_message = "⚠️ Le service de recherche web est temporairement surchargé. Veuillez réessayer dans quelques secondes."
+            else:
+                user_message = f"❌ Erreur lors de la recherche web : {str(e)}\n\n**Suggestions** :\n- Réessayez dans quelques secondes\n- Vérifiez votre connexion internet\n- Utilisez d'autres sources (documents, base de données)"
+
             return AgentResponse(
                 success=False,
-                message=f"Erreur lors de la recherche web: {str(e)}",
-                agents_used=["websearch_agent"]
+                message=user_message,
+                agents_used=["websearch_agent"],
+                data={"sources": []}
             )
 
-    async def _handle_legal_analysis(self, user_input: str, context: Dict[str, Any], thought_stream: ThoughtStream = None) -> AgentResponse:
-        """Handle legal document analysis"""
+    async def _handle_legal(
+        self,
+        user_input: str,
+        context: Dict[str, Any],
+        db: AsyncSession,
+        thought_stream: ThoughtStream = None
+    ) -> AgentResponse:
+        """
+        Unified handler for all legal requests.
+
+        Architecture principle:
+        - Orchestrator routes to LegalAgent (decides WHICH agent)
+        - LegalAgent decides the specific action (decides HOW to process)
+
+        This handler simply passes the raw request to LegalAgent.process_request(),
+        which will internally classify the intent and call the appropriate method
+        (analyze, compare, advise, search jurisprudence).
+        """
         try:
             from .legal_agent import LegalAgent
 
             legal_agent = LegalAgent()
 
+            # Add initial thought
             if thought_stream:
                 await thought_stream.add_thought(
                     ThoughtType.ANALYZING,
-                    title="Analyse juridique",
-                    content="Analyse juridique du document en cours...",
+                    title="Traitement de la demande juridique",
+                    content="Analyse de votre demande juridique...",
                     agent="legal_agent",
-                    progress=0.5
+                    progress=0.3
                 )
 
-            # Extract document from context
-            document_text = context.get("document_text", "") if context else ""
-            if not document_text:
-                return AgentResponse(
-                    success=False,
-                    message="❌ Aucun document à analyser. Veuillez uploader un document d'abord.",
-                    agents_used=["legal_agent"]
-                )
-
-            # Perform full legal analysis
-            result = await legal_agent.analyze_document(
-                document_text=document_text,
-                analysis_type="full"
+            # Pass raw request to LegalAgent - it will decide what to do
+            result = await legal_agent.process_request(
+                user_input=user_input,
+                context=context,
+                db=db
             )
 
-            # Format response
-            if "error" in result:
-                return AgentResponse(
-                    success=False,
-                    message=result["error"],
-                    agents_used=["legal_agent"]
-                )
-
-            # Build formatted message
-            formatted_message = f"## Analyse juridique\n\n"
-            formatted_message += f"**Type de document:** {legal_agent.document_types.get(result.get('document_type', 'autre'), 'Document juridique')}\n\n"
-
-            if result.get("summary"):
-                formatted_message += f"### Résumé\n{result['summary']}\n\n"
-
-            if result.get("risks"):
-                formatted_message += f"### Risques identifiés ({len(result['risks'])})\n"
-                for risk in result["risks"][:5]:  # Top 5
-                    severity_emoji = {"low": "🟢", "medium": "🟡", "high": "🟠", "critical": "🔴"}.get(risk.get("severity", "medium"), "⚪")
-                    formatted_message += f"{severity_emoji} **{risk.get('category', 'Risque')}**: {risk.get('description', '')}\n"
-                formatted_message += "\n"
-
-            if result.get("obligations"):
-                formatted_message += f"### Obligations principales ({len(result['obligations'])})\n"
-                for obligation in result["obligations"][:5]:
-                    formatted_message += f"- **{obligation.get('partie', '')}**: {obligation.get('description', '')}\n"
-                formatted_message += "\n"
-
-            if result.get("recommendations"):
-                formatted_message += f"### Recommandations\n"
-                for idx, rec in enumerate(result["recommendations"], 1):
-                    formatted_message += f"{idx}. {rec}\n"
-
-            return AgentResponse(
-                success=True,
-                message=formatted_message,
-                data=result,
-                agents_used=["legal_agent"],
-                confidence=0.9
-            )
-
-        except Exception as e:
-            logger.error("legal_analysis_failed", error=str(e), exc_info=True)
-            return AgentResponse(
-                success=False,
-                message=f"Erreur lors de l'analyse juridique: {str(e)}",
-                agents_used=["legal_agent"]
-            )
-
-    async def _handle_legal_comparison(self, user_input: str, context: Dict[str, Any], thought_stream: ThoughtStream = None) -> AgentResponse:
-        """Handle legal document comparison"""
-        try:
-            from .legal_agent import LegalAgent
-
-            legal_agent = LegalAgent()
-
+            # Update thought based on action performed
             if thought_stream:
+                action_labels = {
+                    "analyze": "Analyse juridique",
+                    "compare": "Comparaison juridique",
+                    "advice": "Conseil juridique",
+                    "jurisprudence": "Recherche de jurisprudence"
+                }
+                action_label = action_labels.get(result.get("action", "unknown"), "Traitement juridique")
+
                 await thought_stream.add_thought(
-                    ThoughtType.ANALYZING,
-                    title="Comparaison juridique",
-                    content="Comparaison de documents juridiques...",
+                    ThoughtType.COMPLETED,
+                    title=f"{action_label} terminée",
+                    content="",
                     agent="legal_agent",
-                    progress=0.5
+                    progress=0.9
                 )
 
-            # Extract documents from context
-            doc1 = context.get("document1", "") if context else ""
-            doc2 = context.get("document2", "") if context else ""
-
-            if not doc1 or not doc2:
-                return AgentResponse(
-                    success=False,
-                    message="❌ Deux documents sont nécessaires pour la comparaison.",
-                    agents_used=["legal_agent"]
-                )
-
-            result = await legal_agent.compare_legal_documents(
-                doc1=doc1,
-                doc2=doc2,
-                comparison_type="general"
-            )
-
-            return AgentResponse(
-                success=result["success"],
-                message=result["comparison"],
-                data=result,
-                agents_used=["legal_agent"],
-                confidence=result.get("confidence", 0.9)
-            )
-
-        except Exception as e:
-            logger.error("legal_comparison_failed", error=str(e), exc_info=True)
-            return AgentResponse(
-                success=False,
-                message=f"Erreur lors de la comparaison juridique: {str(e)}",
-                agents_used=["legal_agent"]
-            )
-
-    async def _handle_legal_advice(self, user_input: str, context: Dict[str, Any], db: AsyncSession, thought_stream: ThoughtStream = None) -> AgentResponse:
-        """Handle legal advice requests"""
-        try:
-            from .legal_agent import LegalAgent
-
-            legal_agent = LegalAgent()
-
-            if thought_stream:
-                await thought_stream.add_thought(
-                    ThoughtType.ANALYZING,
-                    title="Conseil juridique",
-                    content="Recherche d'informations juridiques...",
-                    agent="legal_agent",
-                    progress=0.5
-                )
-
-            result = await legal_agent.provide_legal_advice(
-                situation=user_input,
-                context=context or {}
-            )
-
-            # Flatten sources structure for FastAPI validation (sources must be a list, not a dict)
-            flattened_data = result.copy()
+            # Flatten sources if needed (for FastAPI validation)
+            flattened_data = result.get("result", {}).copy()
             if "sources" in flattened_data and isinstance(flattened_data["sources"], dict):
-                # Convert {'rag': [...], 'web': [...]} to a flat list with metadata
                 all_sources = []
                 for source_type, items in flattened_data["sources"].items():
                     if isinstance(items, list):
                         for item in items:
                             if isinstance(item, dict):
-                                item["source_type"] = source_type  # Add type as metadata
+                                item["source_type"] = source_type
                                 all_sources.append(item)
                 flattened_data["sources"] = all_sources
 
+            # Return AgentResponse
             return AgentResponse(
-                success=result["success"],
-                message=result["advice"],
+                success=result.get("success", False),
+                message=result.get("message", ""),
                 data=flattened_data,
                 agents_used=["legal_agent"],
-                confidence=result.get("confidence", 0.85),
-                suggestions=["Consulter un avocat pour confirmation", "Demander une analyse approfondie"]
+                confidence=result.get("result", {}).get("confidence", 0.8)
             )
 
         except Exception as e:
-            logger.error("legal_advice_failed", error=str(e), exc_info=True)
+            logger.error("legal_request_failed", error=str(e), exc_info=True)
             return AgentResponse(
                 success=False,
-                message=f"Erreur lors de la fourniture du conseil juridique: {str(e)}",
-                agents_used=["legal_agent"]
-            )
-
-    async def _handle_search_jurisprudence(self, user_input: str, db: AsyncSession, thought_stream: ThoughtStream = None) -> AgentResponse:
-        """Handle jurisprudence search"""
-        try:
-            from .legal_agent import LegalAgent
-
-            legal_agent = LegalAgent()
-
-            if thought_stream:
-                await thought_stream.add_thought(
-                    ThoughtType.SEARCHING,
-                    title="Recherche de jurisprudence",
-                    content="Recherche de jurisprudence pertinente...",
-                    agent="legal_agent",
-                    progress=0.5
-                )
-
-            result = await legal_agent.search_jurisprudence(
-                legal_question=user_input,
-                case_type="copropriete"
-            )
-
-            return AgentResponse(
-                success=result["success"],
-                message=result["jurisprudence"],
-                data=result,
-                agents_used=["legal_agent"],
-                confidence=result.get("confidence", 0.8)
-            )
-
-        except Exception as e:
-            logger.error("jurisprudence_search_failed", error=str(e), exc_info=True)
-            return AgentResponse(
-                success=False,
-                message=f"Erreur lors de la recherche de jurisprudence: {str(e)}",
+                message=f"Erreur lors du traitement de la demande juridique: {str(e)}",
                 agents_used=["legal_agent"]
             )
 
@@ -2164,3 +2117,539 @@ Réponds uniquement avec le contenu, sans préambule."""
 
             response_parts.append("\n---\n_Sources citées ci-dessus._")
             return "".join(response_parts)
+
+    async def _execute_hybrid_sources(
+        self,
+        user_input: str,
+        db,
+        selected_sources: List[str],
+        thought_stream=None,
+        state_manager=None,
+        conversation_history: List[Dict] = None
+    ) -> AgentResponse:
+        """
+        Execute multiple sources in parallel (user-controlled HYBRID mode)
+
+        This is the core of the Search-First architecture:
+        - User selects ['sql', 'rag'] → Execute both in parallel
+        - User selects ['sql', 'rag', 'web'] → Execute all three
+        - Results are fused intelligently by ResponseFusionAgent
+
+        Args:
+            user_input: User's query
+            db: Database session
+            selected_sources: List of sources to query
+            thought_stream: Optional thought stream
+            state_manager: State manager
+
+        Returns:
+            AgentResponse with fused results from all sources
+        """
+        try:
+            logger.info("hybrid_sources_execution_started",
+                       query=user_input[:50],
+                       sources=selected_sources)
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.EXECUTING,
+                    title=f"D'accord, je lance des recherches parallèles dans {', '.join(selected_sources)} pour avoir une vue complète.",
+                    content="",  # Empty for DeepSeek style
+                    agent="orchestrator",
+                    progress=0.4
+                )
+
+            # Execute HybridExecutor based on selected sources
+            has_web = 'web' in selected_sources
+            has_sql = 'sql' in selected_sources
+            has_rag = 'rag' in selected_sources
+
+            # Web only
+            if has_web and not has_sql and not has_rag:
+                return await self._handle_web_search(user_input, thought_stream, conversation_history)
+
+            # Execute SQL/RAG sources first
+            sql_rag_response = None
+            web_response = None
+
+            # Execute all selected sources in parallel
+            import asyncio as aio
+            tasks = []
+            task_names = []
+
+            # SQL/RAG task
+            if has_sql or has_rag:
+                intent = "HYBRID" if has_sql and has_rag else ("SQL_ONLY" if has_sql else "RAG_ONLY")
+                logger.info("hybrid_executor_intent", intent=intent, has_sql=has_sql, has_rag=has_rag, selected_sources=selected_sources)
+
+                async def run_sql_rag():
+                    return await self.hybrid_executor.execute_hybrid(
+                        query=user_input,
+                        db=db,
+                        state_manager=state_manager,
+                        intent=intent,
+                        thought_stream=thought_stream
+                    )
+                tasks.append(run_sql_rag())
+                task_names.append("sql_rag")
+
+            # Web task - Use enriched CoT version
+            if has_web:
+                async def run_web():
+                    from .websearch_agent import WebSearchAgent
+                    web_agent = WebSearchAgent()
+
+                    # Thought 1: Starting web search - DeepSeek narrative style
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.EXECUTING,
+                            title="Ok, je lance aussi une recherche sur internet. J'utilise DuckDuckGo pour trouver les informations les plus récentes et pertinentes.",
+                            content="",
+                            agent="websearch",
+                            progress=0.4
+                        )
+
+                    # Perform search with conversation history
+                    search_results = await web_agent.search(
+                        query=user_input,
+                        num_results=5,
+                        region="fr-fr",
+                        conversation_history=conversation_history
+                    )
+
+                    # Thought 2: Results found - DeepSeek narrative style WITH METADATA
+                    if thought_stream:
+                        if search_results.results:
+                            # Calculate metadata for rich CoT
+                            top_scores = [r.relevance_score for r in search_results.results[:3]]
+                            scores_display = [f'{int(s*100)}%' for s in top_scores if s > 0]
+                            avg_score = sum(top_scores) / len(top_scores) if top_scores else 0
+
+                            # Extract domains
+                            domains = []
+                            for r in search_results.results[:3]:
+                                if r.url:
+                                    try:
+                                        domain = r.url.split("/")[2]
+                                        domains.append(domain)
+                                    except:
+                                        pass
+                            domains_str = ", ".join(set(domains[:3])) if domains else "sources web variées"
+
+                            # Quality assessment
+                            if avg_score >= 0.8:
+                                quality_assessment = f"Excellent ! Les sources web semblent très fiables ({', '.join(scores_display[:3])}). Sources principales : {domains_str}."
+                            elif avg_score >= 0.6:
+                                quality_assessment = f"Scores corrects ({', '.join(scores_display[:3])}). Les informations web sont utiles. Sources : {domains_str}."
+                            else:
+                                quality_assessment = f"Scores moyens ({', '.join(scores_display[:3])}). Les sources web ne sont peut-être pas totalement pertinentes. Sources : {domains_str}."
+
+                            await thought_stream.add_thought(
+                                ThoughtType.COMPLETED,
+                                title=f"Trouvé {len(search_results.results)} sources web. Meilleurs scores : {', '.join(scores_display[:3])}. {quality_assessment}",
+                                content="",
+                                agent="websearch",
+                                progress=0.7
+                            )
+                        else:
+                            await thought_stream.add_thought(
+                                ThoughtType.COMPLETED,
+                                title="Hmm, aucun résultat pertinent trouvé sur le web pour enrichir la réponse.",
+                                content="",
+                                agent="websearch",
+                                progress=0.7
+                            )
+
+                    return search_results
+
+                tasks.append(run_web())
+                task_names.append("web")
+
+            # Execute all tasks in parallel
+            results = await aio.gather(*tasks, return_exceptions=True)
+
+            # Process results
+            sql_rag_result = None
+            web_result = None
+            agents_used = []
+
+            for i, name in enumerate(task_names):
+                if isinstance(results[i], Exception):
+                    logger.error(f"hybrid_task_failed", task=name, error=str(results[i]))
+                    continue
+                if name == "sql_rag":
+                    sql_rag_result = results[i]
+                    if sql_rag_result.has_sql:
+                        agents_used.append("sql_agent")
+                    if sql_rag_result.has_rag:
+                        agents_used.append("rag_agent")
+                elif name == "web":
+                    web_result = results[i]
+                    if web_result and web_result.results:
+                        agents_used.append("websearch_agent")
+
+            # Build response using unified fusion approach
+            response_data = {"sources": selected_sources}
+            all_sources = []
+
+            # Case 1: No web - use ResponseFusionAgent (already works well for SQL+RAG)
+            if not has_web and sql_rag_result:
+                fused = await self.fusion_agent.fuse_responses(user_input, sql_rag_result)
+
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title="Terminé",
+                        content="",
+                        agent="orchestrator"
+                    )
+
+                # Update response_data with SQL results if any
+                if sql_rag_result.has_sql and sql_rag_result.sql_result.data:
+                    response_data.update(sql_rag_result.sql_result.data)
+
+                return AgentResponse(
+                    success=fused.text != "",
+                    message=fused.text,
+                    data=response_data,
+                    agents_used=agents_used
+                )
+
+            # Case 2: With web - create unified fusion with all sources
+            # Collect data for fusion
+            sql_data_formatted = ""
+            rag_chunks_text = ""
+            web_text = ""
+
+            # Format SQL data - ONLY if SQL was selected
+            if has_sql and sql_rag_result and sql_rag_result.has_sql:
+                sql_data = sql_rag_result.sql_result.data
+                rows = sql_data.get("results", []) if sql_data else []
+                if rows:
+                    response_data.update(sql_rag_result.sql_result.data)
+                    sql_data_formatted = await self.fusion_agent._format_sql_results(user_input, rows)
+                    all_sources.append({"type": "sql", "title": "Base de données DisruptIQ"})
+            else:
+                logger.info("sql_not_selected_or_no_results", has_sql=has_sql, selected=selected_sources)
+
+            # Get RAG raw chunks - ONLY if RAG was selected
+            rag_duplicates_count = 0
+            if has_rag and sql_rag_result and sql_rag_result.has_rag:
+                rag_data = sql_rag_result.rag_result.data or {}
+                chunks = rag_data.get("chunks", [])
+                rag_sources = rag_data.get("sources", [])
+
+                if chunks:
+                    # Track seen sources to deduplicate
+                    seen_sources = {}
+                    total_chunks = len(chunks[:10])
+
+                    # Use more chunks and longer content to preserve all RAG information
+                    for i, chunk in enumerate(chunks[:10], 1):
+                        source_name = chunk.get("source", chunk.get("metadata", {}).get("filename", "Document"))
+                        content = chunk.get("text", chunk.get("content", ""))[:1500]  # Increased from 600
+
+                        # Deduplicate by source name
+                        if source_name in seen_sources:
+                            rag_duplicates_count += 1
+                            # Merge content from duplicate source
+                            existing_idx = seen_sources[source_name]
+                            continue
+
+                        seen_sources[source_name] = len(all_sources)
+                        rag_chunks_text += f"**[Document {i}: {source_name}]**\n{content}\n\n"
+
+                        all_sources.append({
+                            "type": "rag",
+                            "id": i,
+                            "title": source_name,
+                            "document": source_name,
+                            "confidence": chunk.get("score", chunk.get("cross_encoder_score", 0.5))
+                        })
+
+            # Format Web results - Include URLs in context for proper citations
+            if web_result and web_result.results:
+                web_parts = []
+                if web_result.synthesized_answer:
+                    web_parts.append(web_result.synthesized_answer)
+                # Add source attribution for each result
+                for idx, r in enumerate(web_result.results[:3], 1):
+                    domain = r.url.split("/")[2] if r.url and "/" in r.url else "web"
+                    web_parts.append(f"**[Source {idx}: {r.title}]** ({domain})")
+                    all_sources.append({
+                        "type": "web",
+                        "id": idx,
+                        "title": r.title,
+                        "url": r.url
+                    })
+                web_text = "\n".join(web_parts)
+
+            # Check if we have any content
+            if not sql_data_formatted and not rag_chunks_text and not web_text:
+                return AgentResponse(
+                    success=False,
+                    message="❌ Aucune information trouvée dans les sources sélectionnées.",
+                    data={},
+                    agents_used=agents_used
+                )
+
+            # Create unified fusion with LLM
+            fused_message = await self._create_unified_fusion_v2(
+                query=user_input,
+                sql_data=sql_data_formatted,
+                rag_chunks=rag_chunks_text,
+                web_text=web_text,
+                all_sources=all_sources
+            )
+
+            # Add deduplication info to thought stream
+            if thought_stream and rag_duplicates_count > 0:
+                await thought_stream.add_thought(
+                    ThoughtType.PROCESSING,
+                    title=f"Nettoyage : {rag_duplicates_count} doublon(s) supprimé(s) des sources pour éviter la répétition.",
+                    content="",
+                    agent="orchestrator"
+                )
+
+            # Thought 3: Synthesis complete with metadata (enriched)
+            if thought_stream:
+                # Count sources by type for narrative
+                sources_by_type = {"sql": 0, "rag": 0, "web": 0}
+                for src in all_sources:
+                    src_type = src.get("type", "")
+                    if src_type in sources_by_type:
+                        sources_by_type[src_type] += 1
+
+                # Build source summary
+                source_parts = []
+                if sources_by_type["sql"] > 0:
+                    source_parts.append(f"{sources_by_type['sql']} source(s) SQL")
+                if sources_by_type["rag"] > 0:
+                    source_parts.append(f"{sources_by_type['rag']} document(s)")
+                if sources_by_type["web"] > 0:
+                    source_parts.append(f"{sources_by_type['web']} source(s) web")
+
+                source_summary = " + ".join(source_parts) if source_parts else "sources multiples"
+                total_sources = sum(sources_by_type.values())
+
+                # Calculate average confidence if available
+                confidences = [src.get("confidence", src.get("score", 0)) for src in all_sources if src.get("confidence") or src.get("score")]
+                avg_confidence = int(sum(confidences) / len(confidences) * 100) if confidences else 0
+
+                # Build narrative based on confidence and source diversity
+                if avg_confidence >= 80:
+                    synthesis_narrative = f"Parfait ! J'ai fusionné {total_sources} sources ({source_summary}) avec {avg_confidence}% de confiance. Les informations se complètent bien et sont cohérentes."
+                elif avg_confidence >= 60:
+                    synthesis_narrative = f"Synthèse terminée avec {avg_confidence}% de confiance sur {total_sources} sources ({source_summary}). Les informations sont utiles mais certaines sont incomplètes."
+                else:
+                    synthesis_narrative = f"Synthèse terminée mais ma confiance est moyenne ({avg_confidence}%). Les {total_sources} sources ({source_summary}) ne couvrent peut-être pas complètement le sujet."
+
+                await thought_stream.add_thought(
+                    ThoughtType.COMPLETED,
+                    title=synthesis_narrative,
+                    content="",
+                    agent="synthesis"
+                )
+
+            # Replace string array with structured source objects for frontend display
+            response_data["sources"] = all_sources
+            response_data["duplicates_removed"] = rag_duplicates_count
+
+            return AgentResponse(
+                success=True,
+                message=fused_message,
+                data=response_data,
+                agents_used=agents_used
+            )
+
+        except Exception as e:
+            logger.error("hybrid_sources_execution_failed", error=str(e), exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"❌ Erreur lors de l'exécution multi-sources : {str(e)}",
+                data={},
+                agents_used=[]
+            )
+
+    async def _create_unified_fusion_v2(
+        self,
+        query: str,
+        sql_data: str,
+        rag_chunks: str,
+        web_text: str,
+        all_sources: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Create a unified, well-formatted response with proper sources
+        V2: Better formatting, no redundancy, proper source attribution
+        """
+        try:
+            # Build context sections
+            context_sections = []
+            if sql_data:
+                context_sections.append(f"### BASE DE DONNÉES\n{sql_data}")
+            if rag_chunks:
+                context_sections.append(f"### DOCUMENTS\n{rag_chunks}")
+            if web_text:
+                context_sections.append(f"### INTERNET\n{web_text}")
+
+            context = "\n\n".join(context_sections)
+
+            # Build source citation guide based on actual sources used
+            source_cite_examples = []
+            if sql_data:
+                source_cite_examples.append("(base de données)")
+            if rag_chunks:
+                # Extract actual document names from rag_chunks
+                source_cite_examples.append("(document: [nom du fichier].pdf)")
+            if web_text:
+                # Extract actual domains from web sources
+                web_domains = [s.get("url", "").split("/")[2] if s.get("url") and "/" in s.get("url", "") else ""
+                              for s in all_sources if s.get("type") == "web"]
+                web_domains = [d for d in web_domains if d][:2]
+                if web_domains:
+                    source_cite_examples.append(f"(web: {web_domains[0]})")
+                else:
+                    source_cite_examples.append("(web: [domaine])")
+            source_cite_guide = ", ".join(source_cite_examples) if source_cite_examples else "(source)"
+
+            fusion_prompt = f"""Tu es un assistant expert. Synthétise les informations ci-dessous en UNE réponse claire et complète.
+
+**Question:** {query}
+
+**Données collectées:**
+{context}
+
+---
+
+**RÈGLES STRICTES:**
+1. **UNE SEULE réponse fluide** - PAS de sections séparées par source
+2. **Fusionne intelligemment** - Si une personne apparaît dans plusieurs sources, combine ses informations
+3. **PRÉCISION FACTUELLE** - NE JAMAIS attribuer une information à la mauvaise personne. Si NEC+ est un prestataire de nettoyage, ne pas dire que "Laurent Moussu travaille chez NEC+"
+4. **Zéro redondance** - Ne répète JAMAIS la même information
+5. **Format markdown élégant:**
+   - Utilise des titres ## si pertinent
+   - **Gras** pour noms et infos clés
+   - Listes à puces si plusieurs éléments
+6. **AUCUNE citation inline** - NE JAMAIS écrire (document: x.pdf) ou (web: site.com) dans le texte car les sources sont affichées automatiquement en bas
+7. **Commence directement** par la réponse, sans "Voici" ni préambule
+8. **Inclus les détails importants** des documents (montants, dates, adresses, numéros)
+9. **NE JAMAIS lister les sources à la fin** - Elles sont ajoutées automatiquement
+10. **Termine proprement** - pas de phrase incomplète
+
+**Réponse:**"""
+
+            fused_content = await self.llm_service.generate_response(fusion_prompt)
+
+            # Clean up any source lists the LLM might have added despite instructions
+            import re
+            # Remove patterns like "(Sources : ...)" or "Sources:" at the end
+            fused_content = re.sub(r'\n*\*?\(Sources?\s*:.*?\)\*?\s*$', '', fused_content, flags=re.IGNORECASE | re.DOTALL)
+            fused_content = re.sub(r'\n*Sources?\s*:\s*\[.*?\]\s*$', '', fused_content, flags=re.IGNORECASE | re.DOTALL)
+            fused_content = fused_content.strip()
+
+            # Return content without inline sources - frontend will display them
+            return fused_content
+
+        except Exception as e:
+            logger.error("unified_fusion_v2_failed", error=str(e))
+            return f"Erreur lors de la fusion: {str(e)}"
+
+    def _format_sources_section(self, sources: List[Dict[str, Any]], min_score: float = 0.73) -> str:
+        """Format sources as a clean markdown section with deduplication and relevance filtering"""
+        if not sources:
+            return ""
+
+        lines = ["---", "### 📚 Sources"]
+        seen = set()  # Track unique sources
+
+        for src in sources:
+            source_type = src.get("type", "unknown")
+
+            # Filter out low-relevance RAG sources
+            if source_type == "rag":
+                score = src.get("confidence", src.get("score", 1.0))
+                if score < min_score:
+                    continue
+
+            title = src.get("title", src.get("name", "Source"))
+            url = src.get("url", src.get("link"))
+            doc_name = src.get("document", title) if source_type == "rag" else title
+
+            # Create unique key for deduplication
+            unique_key = f"{source_type}:{doc_name}:{url or ''}"
+            if unique_key in seen:
+                continue
+            seen.add(unique_key)
+
+            if source_type == "sql":
+                lines.append(f"- 🗄️ **Base de données**: {title}")
+            elif source_type == "rag":
+                lines.append(f"- 📄 **Document**: {doc_name}")
+            elif source_type == "web":
+                if url:
+                    lines.append(f"- 🌐 **Web**: [{title}]({url})")
+                else:
+                    lines.append(f"- 🌐 **Web**: {title}")
+            else:
+                lines.append(f"- {title}")
+
+        # Only return if we have actual sources (not just headers)
+        if len(lines) <= 2:
+            return ""
+
+        return "\n".join(lines)
+
+    async def _create_unified_fusion(
+        self,
+        query: str,
+        context_parts: List[str],
+        has_sql: bool,
+        has_rag: bool,
+        has_web: bool
+    ) -> str:
+        """
+        Create a unified, coherent response from multiple sources using LLM
+        """
+        try:
+            # Build source indicators
+            sources_used = []
+            if has_sql:
+                sources_used.append("base de données")
+            if has_rag:
+                sources_used.append("documents")
+            if has_web:
+                sources_used.append("internet")
+
+            context = "\n\n".join(context_parts)
+
+            fusion_prompt = f"""Tu es un assistant expert qui synthétise des informations provenant de plusieurs sources pour répondre à une question.
+
+**Question:** {query}
+
+**Sources consultées:** {', '.join(sources_used)}
+
+**Informations collectées:**
+{context}
+
+---
+
+**Instructions STRICTES:**
+1. Produis UNE SEULE réponse fluide et cohérente (pas de sections [BASE DE DONNÉES], [DOCUMENTS], etc.)
+2. Fusionne intelligemment les informations - ne répète JAMAIS la même info
+3. Si une personne apparaît dans plusieurs sources, combine toutes les infos sur elle
+4. Cite les sources de façon légère: (base de données), (documents), (internet)
+5. Si les sources se contredisent, mentionne-le brièvement
+6. Inclus les informations IMPORTANTES des documents (contrats, rôles, etc.)
+7. Format: texte fluide avec paragraphes, utilise **gras** pour les noms et infos clés
+8. Commence directement par la réponse, sans préambule
+
+**Réponse:**"""
+
+            # Use the LLM for fusion
+            return await self.llm_service.generate_response(fusion_prompt)
+
+        except Exception as e:
+            logger.error("unified_fusion_failed", error=str(e))
+            # Fallback: return concatenated parts
+            return "\n\n".join(context_parts)

@@ -28,6 +28,7 @@ class SQLResult(BaseModel):
     message: str
     query_executed: Optional[str] = None
     rows_returned: int = 0
+    tables: List[str] = []  # Table names used in the query
 
 
 class RAGResult(BaseModel):
@@ -69,7 +70,8 @@ class HybridExecutor:
         query: str,
         db,
         state_manager=None,
-        intent: str = "HYBRID"
+        intent: str = "HYBRID",
+        thought_stream=None
     ) -> HybridResult:
         """
         Execute SQL and RAG in parallel based on intent
@@ -90,18 +92,18 @@ class HybridExecutor:
 
             # Execute based on intent
             if intent == "SQL_ONLY":
-                return await self._execute_sql_only(query, db, state_manager)
+                return await self._execute_sql_only(query, db, state_manager, thought_stream)
 
             elif intent == "RAG_ONLY":
-                return await self._execute_rag_only(query, db, state_manager)
+                return await self._execute_rag_only(query, db, state_manager, thought_stream)
 
             elif intent == "HYBRID":
-                return await self._execute_both_parallel(query, db, state_manager)
+                return await self._execute_both_parallel(query, db, state_manager, thought_stream)
 
             else:
                 logger.warning("unknown_intent", intent=intent)
                 # Fallback to RAG
-                return await self._execute_rag_only(query, db, state_manager)
+                return await self._execute_rag_only(query, db, state_manager, thought_stream)
 
         except Exception as e:
             logger.error("hybrid_execution_failed", error=str(e), exc_info=True)
@@ -117,7 +119,8 @@ class HybridExecutor:
         self,
         query: str,
         db,
-        state_manager
+        state_manager,
+        thought_stream=None
     ) -> HybridResult:
         """Execute SQL agent only"""
         from .sql_agent import SQLAgent
@@ -131,7 +134,8 @@ class HybridExecutor:
             success=sql_result_dict.get("success", False),
             data=sql_result_dict.get("data"),
             message=sql_result_dict.get("message", ""),
-            rows_returned=len(sql_result_dict.get("data", {}).get("results", []))
+            rows_returned=len(sql_result_dict.get("data", {}).get("results", [])),
+            tables=sql_result_dict.get("tables", [])  # Extract table names from sql_agent response
         )
 
         logger.info("sql_execution_completed",
@@ -152,11 +156,16 @@ class HybridExecutor:
         self,
         query: str,
         db,
-        state_manager
+        state_manager,
+        thought_stream=None
     ) -> HybridResult:
         """Execute RAG agent only"""
         from app.services.rag_service import RAGService
         from .synthesis_agent import SynthesisAgent
+        from .thought_stream import ThoughtType
+
+        import time
+        start_time = time.time()
 
         logger.info("executing_rag_only", query=query[:50])
 
@@ -165,13 +174,24 @@ class HybridExecutor:
 
         # Get active document IDs from state
         document_ids = None
+        filter_info = "tous les documents"
         if state_manager and state_manager.state.active_document_ids is not None:
             # Only use filter if there are actual IDs (non-empty list)
             if len(state_manager.state.active_document_ids) > 0:
                 document_ids = state_manager.state.active_document_ids
+                filter_info = f"{len(document_ids)} document(s) sélectionné(s)"
                 logger.info("rag_filtering_by_active_docs", count=len(document_ids))
             else:
                 logger.info("rag_no_active_docs_set_searching_all")
+
+        # Emit thought: Starting search - DeepSeek format (narrative in title, details in content)
+        if thought_stream:
+            await thought_stream.add_thought(
+                ThoughtType.EXECUTING,
+                title=f"Ok, je cherche dans {filter_info}. J'utilise une recherche hybride (sémantique + mots-clés) pour maximiser mes chances de trouver quelque chose de pertinent.",
+                content="",  # Empty for DeepSeek style
+                agent="rag"
+            )
 
         # Retrieve chunks (increased from 5 to 15 for better precision)
         chunks = await rag_service.search(
@@ -183,7 +203,39 @@ class HybridExecutor:
             use_query_expansion=True  # Generate query variants for better recall
         )
 
-        logger.info("rag_search_returned", chunks_count=len(chunks), query=query[:50], filtered_by_docs=document_ids is not None)
+        search_duration = time.time() - start_time
+        logger.info("rag_search_returned", chunks_count=len(chunks), query=query[:50], filtered_by_docs=document_ids is not None, duration=search_duration)
+
+        # Emit thought: Results found - DeepSeek format (everything in title as narrative)
+        if thought_stream:
+            if chunks:
+                # Calculate score info
+                top_scores = [chunk.get('cross_encoder_score', chunk.get('score', 0)) for chunk in chunks[:3]]
+                scores_display = [f'{int(s*100)}%' for s in top_scores if s]
+
+                # Evaluate quality - DeepSeek style narrative
+                avg_score = sum(top_scores[:3]) / len(top_scores) if top_scores else 0
+                if avg_score >= 0.8:
+                    quality_assessment = "Excellent ! Les passages semblent très pertinents, je devrais pouvoir donner une réponse précise."
+                elif avg_score >= 0.6:
+                    quality_assessment = "Scores corrects. Les informations sont utiles mais peut-être un peu incomplètes."
+                else:
+                    quality_assessment = "Hmm... scores moyens ({', '.join(scores_display[:3])}). Les documents ne mentionnent peut-être le sujet que partiellement."
+
+                # DeepSeek format: full narrative in title
+                await thought_stream.add_thought(
+                    ThoughtType.COMPLETED,
+                    title=f"Trouvé {len(chunks)} passages en {search_duration:.1f}s. Meilleurs scores : {', '.join(scores_display[:3])}. {quality_assessment}",
+                    content="",  # Empty for DeepSeek style
+                    agent="rag"
+                )
+            else:
+                await thought_stream.add_thought(
+                    ThoughtType.COMPLETED,
+                    title=f"Recherche terminée en {search_duration:.1f}s mais aucun passage pertinent trouvé. Soit l'information n'existe pas dans les documents, soit il faudrait reformuler la question différemment.",
+                    content="",  # Empty for DeepSeek style
+                    agent="rag"
+                )
 
         # 🔴 CRITICAL FIX: NEVER ignore user's explicit document selection!
         # If user selected documents and we get no results, it means:
@@ -213,6 +265,16 @@ class HybridExecutor:
                 confidence=0.0
             )
         else:
+            # Emit thought: Synthesizing response - DeepSeek format
+            synthesis_start = time.time()
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.EXECUTING,
+                    title=f"Maintenant je vais analyser et combiner ces {len(chunks)} passages. Je vérifie aussi s'il y a des contradictions entre les sources.",
+                    content="",  # Empty for DeepSeek style
+                    agent="synthesis"
+                )
+
             # Synthesize with citations
             is_procedural = self._is_procedural(query)
             synthesized = await synthesis_agent.synthesize_with_citations(
@@ -220,6 +282,40 @@ class HybridExecutor:
                 chunks=chunks,
                 is_procedural=is_procedural
             )
+
+            synthesis_duration = time.time() - synthesis_start
+            total_duration = time.time() - start_time
+
+            # Emit thought: Synthesis complete - DeepSeek format (full narrative)
+            if thought_stream:
+                confidence = int(synthesized.overall_confidence * 100)
+                factual_count = len([s for s in synthesized.sentences if s.is_factual])
+
+                # Build natural narrative - DeepSeek style
+                if confidence >= 80:
+                    confidence_narrative = f"Parfait ! J'ai une réponse solide avec {confidence}% de confiance. Les {len(synthesized.sources)} sources sont détaillées et cohérentes, j'ai extrait {factual_count} fait{'s' if factual_count > 1 else ''}."
+                elif confidence >= 60:
+                    confidence_narrative = f"Synthèse terminée en {synthesis_duration:.1f}s avec {confidence}% de confiance. Les {len(synthesized.sources)} sources contiennent l'info mais de façon partielle. J'ai quand même pu extraire {factual_count} fait{'s' if factual_count > 1 else ''}."
+                else:
+                    confidence_narrative = f"Hmm, synthèse terminée mais ma confiance est faible ({confidence}%). Les informations sont fragmentaires sur les {len(synthesized.sources)} sources. Les documents ne couvrent peut-être pas bien le sujet."
+
+                # Add contradiction warning if needed
+                if synthesized.has_contradictions:
+                    confidence_narrative += " ⚠️ Attention : j'ai détecté des contradictions entre les sources."
+
+                await thought_stream.add_thought(
+                    ThoughtType.COMPLETED,
+                    title=confidence_narrative,
+                    content="",  # Empty for DeepSeek style
+                    agent="synthesis"
+                )
+
+            # Clean HTML tags from synthesized text (remove <!--COT_START--> etc.)
+            import re
+            cleaned_text = re.sub(r'<!--COT_START-->.*?<!--COT_END-->', '', synthesized.text, flags=re.DOTALL)
+            cleaned_text = re.sub(r'<!--ANSWER_START-->|<!--ANSWER_END-->', '', cleaned_text)
+            cleaned_text = re.sub(r'<!--SOURCES_START-->.*?<!--SOURCES_END-->', '', cleaned_text, flags=re.DOTALL)
+            cleaned_text = cleaned_text.strip()
 
             # Prepare sources with proper frontend format (preserve all scoring metadata)
             sources = [
@@ -240,12 +336,13 @@ class HybridExecutor:
 
             rag_result = RAGResult(
                 success=True,
-                message=synthesized.text,
+                message=cleaned_text,  # Use cleaned text without HTML tags
                 data={
                     "sources": sources,
                     "sentences": [s.dict() for s in synthesized.sentences],
                     "has_contradictions": synthesized.has_contradictions,
-                    "warnings": synthesized.warnings
+                    "warnings": synthesized.warnings,
+                    "chunks": chunks  # 🔴 CRITICAL: Include raw chunks for fusion (preserves all details)
                 },
                 sources=sources,
                 chunks_retrieved=len(chunks),
@@ -271,7 +368,8 @@ class HybridExecutor:
         self,
         query: str,
         db,
-        state_manager
+        state_manager,
+        thought_stream=None
     ) -> HybridResult:
         """
         Execute SQL and RAG in parallel for HYBRID intent
@@ -282,8 +380,8 @@ class HybridExecutor:
         logger.info("executing_both_parallel", query=query[:50])
 
         # Execute both in parallel using asyncio.gather
-        sql_task = self._execute_sql_only(query, db, state_manager)
-        rag_task = self._execute_rag_only(query, db, state_manager)
+        sql_task = self._execute_sql_only(query, db, state_manager, thought_stream)
+        rag_task = self._execute_rag_only(query, db, state_manager, thought_stream)
 
         sql_hybrid, rag_hybrid = await asyncio.gather(
             sql_task,

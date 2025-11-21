@@ -94,6 +94,235 @@ class LegalAgent:
 
         logger.info("legal_agent_initialized", document_types=len(self.document_types))
 
+    async def process_request(
+        self,
+        user_input: str,
+        context: Optional[Dict[str, Any]] = None,
+        db = None
+    ) -> Dict[str, Any]:
+        """
+        Central entry point for all legal requests.
+
+        The LegalAgent analyzes the user's request and decides which specific
+        action to perform (analyze, compare, advise, search jurisprudence).
+
+        Architecture principle:
+        - Orchestrator routes to LegalAgent (WHAT agent)
+        - LegalAgent decides the action (HOW to process)
+
+        Args:
+            user_input: Raw user query
+            context: Optional context (uploaded documents, etc.)
+            db: Database session if needed
+
+        Returns:
+            Dict with:
+                - action: Action performed ("analyze", "compare", "advice", "jurisprudence")
+                - result: Result from the specific action
+                - success: Boolean success status
+                - message: Human-readable message
+        """
+        try:
+            logger.info("legal_request_received", query=user_input[:100])
+
+            # Step 1: Classify the legal intent internally
+            legal_intent = await self._classify_legal_intent(user_input, context)
+
+            logger.info("legal_intent_classified",
+                       intent=legal_intent["action"],
+                       confidence=legal_intent["confidence"])
+
+            # Step 2: Route to appropriate action based on internal classification
+            if legal_intent["action"] == "analyze":
+                # Document analysis (full, risk, summary, compliance)
+                document_text = self._extract_document_from_context(context)
+                if not document_text:
+                    return {
+                        "action": "analyze",
+                        "success": False,
+                        "message": "❌ Aucun document à analyser. Veuillez uploader un document d'abord.",
+                        "result": {}
+                    }
+
+                analysis_mode = legal_intent.get("mode", "full")
+                result = await self.analyze_document(
+                    document_text=document_text,
+                    analysis_type=analysis_mode
+                )
+
+                return {
+                    "action": "analyze",
+                    "mode": analysis_mode,
+                    "success": "error" not in result,
+                    "message": self._format_analysis_result(result),
+                    "result": result
+                }
+
+            elif legal_intent["action"] == "compare":
+                # Document comparison
+                doc1, doc2 = self._extract_two_documents_from_context(context)
+                if not doc1 or not doc2:
+                    return {
+                        "action": "compare",
+                        "success": False,
+                        "message": "❌ Deux documents sont nécessaires pour la comparaison.",
+                        "result": {}
+                    }
+
+                result = await self.compare_legal_documents(doc1=doc1, doc2=doc2)
+
+                return {
+                    "action": "compare",
+                    "success": result.get("success", False),
+                    "message": result.get("comparison", ""),
+                    "result": result
+                }
+
+            elif legal_intent["action"] == "advice":
+                # Legal advice/counsel
+                result = await self.provide_legal_advice(
+                    situation=user_input,
+                    context=context or {}
+                )
+
+                return {
+                    "action": "advice",
+                    "success": result.get("success", False),
+                    "message": result.get("advice", ""),
+                    "result": result
+                }
+
+            elif legal_intent["action"] == "jurisprudence":
+                # Jurisprudence search
+                result = await self.search_jurisprudence(
+                    legal_question=user_input,
+                    case_type="copropriete"
+                )
+
+                return {
+                    "action": "jurisprudence",
+                    "success": result.get("success", False),
+                    "message": result.get("summary", ""),
+                    "result": result
+                }
+
+            else:
+                # Fallback: general legal question
+                return {
+                    "action": "unknown",
+                    "success": False,
+                    "message": "❌ Je n'ai pas pu déterminer le type de demande juridique.",
+                    "result": {"intent": legal_intent}
+                }
+
+        except Exception as e:
+            logger.error("legal_request_processing_failed", error=str(e), exc_info=True)
+            return {
+                "action": "error",
+                "success": False,
+                "message": f"Erreur lors du traitement de la demande juridique : {str(e)}",
+                "result": {}
+            }
+
+    async def _classify_legal_intent(
+        self,
+        user_input: str,
+        context: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Internal classification of legal intent.
+
+        Determines:
+        - analyze (+ mode: full, risk, summary, compliance)
+        - compare
+        - advice
+        - jurisprudence
+        """
+        user_lower = user_input.lower()
+
+        # Quick rules for legal intent classification
+
+        # 1. Document analysis
+        if any(keyword in user_lower for keyword in [
+            "analyser", "analyse", "analyser ce", "analyser le",
+            "identifier les risques", "vérifier", "contrôler",
+            "conformité", "obligations", "clauses"
+        ]):
+            # Determine analysis mode
+            mode = "full"  # Default
+            if "risque" in user_lower or "dangereux" in user_lower:
+                mode = "risk"
+            elif "résumé" in user_lower or "résume" in user_lower:
+                mode = "summary"
+            elif "conformité" in user_lower or "conforme" in user_lower:
+                mode = "compliance"
+
+            return {"action": "analyze", "mode": mode, "confidence": 0.9}
+
+        # 2. Document comparison
+        if any(keyword in user_lower for keyword in [
+            "comparer", "comparaison", "différence", "écart",
+            "versus", "vs", "par rapport"
+        ]):
+            return {"action": "compare", "confidence": 0.85}
+
+        # 3. Jurisprudence search
+        if any(keyword in user_lower for keyword in [
+            "jurisprudence", "décision de justice", "jugement",
+            "arrêt", "tribunal", "cour"
+        ]):
+            return {"action": "jurisprudence", "confidence": 0.9}
+
+        # 4. Legal advice (default for legal questions)
+        # If it's a legal question without specific action
+        return {"action": "advice", "confidence": 0.75}
+
+    def _extract_document_from_context(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Extract document text from context"""
+        if not context:
+            return None
+        return context.get("document_text", None)
+
+    def _extract_two_documents_from_context(self, context: Optional[Dict[str, Any]]) -> tuple:
+        """Extract two documents from context for comparison"""
+        if not context:
+            return (None, None)
+        doc1 = context.get("document1", None)
+        doc2 = context.get("document2", None)
+        return (doc1, doc2)
+
+    def _format_analysis_result(self, result: Dict[str, Any]) -> str:
+        """Format analysis result for human-readable message"""
+        if "error" in result:
+            return result["error"]
+
+        # Build formatted message
+        formatted = f"## Analyse juridique\n\n"
+        formatted += f"**Type de document:** {self.document_types.get(result.get('document_type', 'autre'), 'Document juridique')}\n\n"
+
+        if result.get("summary"):
+            formatted += f"### Résumé\n{result['summary']}\n\n"
+
+        if result.get("risks"):
+            formatted += f"### Risques identifiés ({len(result['risks'])})\n"
+            for risk in result["risks"][:5]:  # Top 5
+                severity_emoji = {"low": "🟢", "medium": "🟡", "high": "🟠", "critical": "🔴"}.get(risk.get("severity", "medium"), "⚪")
+                formatted += f"{severity_emoji} **{risk.get('category', 'Risque')}**: {risk.get('description', '')}\n"
+            formatted += "\n"
+
+        if result.get("obligations"):
+            formatted += f"### Obligations principales ({len(result['obligations'])})\n"
+            for obligation in result["obligations"][:5]:
+                formatted += f"- **{obligation.get('partie', '')}**: {obligation.get('description', '')}\n"
+            formatted += "\n"
+
+        if result.get("recommendations"):
+            formatted += f"### Recommandations\n"
+            for idx, rec in enumerate(result["recommendations"], 1):
+                formatted += f"{idx}. {rec}\n"
+
+        return formatted
+
     async def analyze_document(
         self,
         document_text: str,
@@ -604,6 +833,387 @@ Réponds de manière claire, précise et professionnelle. Si l'information n'est
                 })
 
         return qa_results
+
+    async def compare_legal_documents(
+        self,
+        doc1: str,
+        doc2: str,
+        comparison_type: str = "general"
+    ) -> Dict[str, Any]:
+        """
+        Compare two legal documents
+
+        Args:
+            doc1: First document text
+            doc2: Second document text
+            comparison_type: Type of comparison ("general", "clauses", "risks")
+
+        Returns:
+            Dict with:
+                - success: Boolean
+                - comparison: Formatted comparison result
+                - differences: List of key differences
+                - similarities: List of similarities
+                - confidence: Confidence score
+        """
+        try:
+            logger.info("legal_comparison_started", doc1_length=len(doc1), doc2_length=len(doc2))
+
+            prompt = f"""Tu es un expert juridique spécialisé en droit immobilier français.
+
+Compare ces deux documents juridiques et identifie :
+1. Les différences principales (clauses, conditions, montants, durées)
+2. Les similitudes
+3. Les points d'attention
+
+DOCUMENT 1 :
+{doc1[:4000]}
+
+DOCUMENT 2 :
+{doc2[:4000]}
+
+Réponds en format JSON:
+{{
+  "differences": [
+    {{"aspect": "Durée", "doc1": "3 ans", "doc2": "1 an", "importance": "high"}},
+    ...
+  ],
+  "similarities": [
+    {{"aspect": "Type de contrat", "description": "Contrat de syndic standard"}}
+  ],
+  "summary": "Résumé de la comparaison en 2-3 phrases"
+}}
+"""
+
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=1000
+            )
+
+            # Parse JSON
+            import json
+            try:
+                result = json.loads(response)
+            except json.JSONDecodeError:
+                match = re.search(r'\{.*\}', response, re.DOTALL)
+                if match:
+                    result = json.loads(match.group())
+                else:
+                    result = {"differences": [], "similarities": [], "summary": response}
+
+            # Format comparison message
+            comparison_message = "## Comparaison de documents juridiques\n\n"
+
+            if result.get("summary"):
+                comparison_message += f"{result['summary']}\n\n"
+
+            if result.get("differences"):
+                comparison_message += f"### Différences principales ({len(result['differences'])})\n"
+                for diff in result["differences"][:10]:
+                    importance_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(diff.get("importance", "medium"), "⚪")
+                    comparison_message += f"{importance_emoji} **{diff.get('aspect', '')}**\n"
+                    comparison_message += f"  - Document 1: {diff.get('doc1', '')}\n"
+                    comparison_message += f"  - Document 2: {diff.get('doc2', '')}\n\n"
+
+            if result.get("similarities"):
+                comparison_message += f"### Points communs ({len(result['similarities'])})\n"
+                for sim in result["similarities"][:5]:
+                    comparison_message += f"- **{sim.get('aspect', '')}**: {sim.get('description', '')}\n"
+
+            logger.info("legal_comparison_completed",
+                       differences_count=len(result.get("differences", [])),
+                       similarities_count=len(result.get("similarities", [])))
+
+            return {
+                "success": True,
+                "comparison": comparison_message,
+                "differences": result.get("differences", []),
+                "similarities": result.get("similarities", []),
+                "confidence": 0.85
+            }
+
+        except Exception as e:
+            logger.error("legal_comparison_failed", error=str(e), exc_info=True)
+            return {
+                "success": False,
+                "comparison": f"Erreur lors de la comparaison : {str(e)}",
+                "differences": [],
+                "similarities": [],
+                "confidence": 0.0
+            }
+
+    async def provide_legal_advice(
+        self,
+        situation: str,
+        context: Dict[str, Any] = {}
+    ) -> Dict[str, Any]:
+        """
+        Provide legal advice based on a situation
+
+        Args:
+            situation: Description of the legal situation/question
+            context: Additional context
+
+        Returns:
+            Dict with:
+                - success: Boolean
+                - advice: Legal advice text
+                - relevant_laws: List of relevant laws
+                - recommendations: List of recommendations
+                - sources: List of sources (RAG + Web if needed)
+                - confidence: Confidence score
+        """
+        try:
+            logger.info("legal_advice_started", situation=situation[:100])
+
+            # First, try to find relevant documents in RAG
+            rag_sources = []
+            try:
+                rag_results = await self.rag_service.search_similar_chunks(
+                    query=situation,
+                    top_k=3
+                )
+                rag_sources = [
+                    {
+                        "type": "rag",
+                        "title": chunk.get("filename", "Document"),
+                        "content": chunk.get("content", "")[:300],
+                        "score": chunk.get("score", 0.0)
+                    }
+                    for chunk in rag_results
+                ]
+            except Exception as e:
+                logger.warning("rag_search_failed_for_legal_advice", error=str(e))
+
+            # Build context for LLM
+            context_str = ""
+            if rag_sources:
+                context_str = "\n\nDOCUMENTS PERTINENTS :\n"
+                for idx, src in enumerate(rag_sources, 1):
+                    context_str += f"{idx}. {src['title']}: {src['content']}\n"
+
+            # Identify relevant laws
+            relevant_laws = []
+            situation_lower = situation.lower()
+            for law_key, law_info in self.legal_references.items():
+                if any(topic in situation_lower for topic in law_info["topics"]):
+                    relevant_laws.append(law_info)
+
+            laws_str = ""
+            if relevant_laws:
+                laws_str = "\n\nLOIS PERTINENTES :\n"
+                for law in relevant_laws:
+                    laws_str += f"- {law['name']}: {law['description']}\n"
+
+            # Generate advice
+            prompt = f"""Tu es un expert juridique spécialisé en droit immobilier français.
+
+Fournis un conseil juridique professionnel et détaillé pour cette situation :
+
+SITUATION :
+{situation}
+{context_str}
+{laws_str}
+
+Réponds en format JSON :
+{{
+  "advice": "Conseil juridique détaillé (3-5 paragraphes)",
+  "key_points": [
+    "Point juridique important 1",
+    "Point juridique important 2"
+  ],
+  "recommendations": [
+    "Recommandation 1",
+    "Recommandation 2"
+  ],
+  "warnings": [
+    "Mise en garde si nécessaire"
+  ]
+}}
+
+IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'avis d'un avocat.
+"""
+
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.2,
+                max_tokens=1200
+            )
+
+            # Parse JSON
+            import json
+            try:
+                result = json.loads(response)
+            except json.JSONDecodeError:
+                match = re.search(r'\{.*\}', response, re.DOTALL)
+                if match:
+                    result = json.loads(match.group())
+                else:
+                    result = {"advice": response, "key_points": [], "recommendations": [], "warnings": []}
+
+            # Format advice message
+            advice_message = "## Conseil Juridique\n\n"
+            advice_message += f"{result.get('advice', '')}\n\n"
+
+            if result.get("key_points"):
+                advice_message += "### Points juridiques importants\n"
+                for point in result["key_points"]:
+                    advice_message += f"- {point}\n"
+                advice_message += "\n"
+
+            if result.get("recommendations"):
+                advice_message += "### Recommandations\n"
+                for idx, rec in enumerate(result["recommendations"], 1):
+                    advice_message += f"{idx}. {rec}\n"
+                advice_message += "\n"
+
+            if result.get("warnings"):
+                advice_message += "### ⚠️ Mises en garde\n"
+                for warning in result["warnings"]:
+                    advice_message += f"- {warning}\n"
+                advice_message += "\n"
+
+            # Add disclaimer
+            advice_message += "\n---\n\n"
+            advice_message += "**Disclaimer** : Ce conseil est fourni à titre informatif uniquement et ne constitue pas un avis juridique. "
+            advice_message += "Pour des situations spécifiques, consultez un avocat qualifié.\n"
+
+            logger.info("legal_advice_completed", rag_sources_count=len(rag_sources))
+
+            return {
+                "success": True,
+                "advice": advice_message,
+                "relevant_laws": [law["name"] for law in relevant_laws],
+                "recommendations": result.get("recommendations", []),
+                "sources": {
+                    "rag": rag_sources,
+                    "laws": relevant_laws
+                },
+                "confidence": 0.80
+            }
+
+        except Exception as e:
+            logger.error("legal_advice_failed", error=str(e), exc_info=True)
+            return {
+                "success": False,
+                "advice": f"Erreur lors de la génération du conseil juridique : {str(e)}",
+                "relevant_laws": [],
+                "recommendations": [],
+                "sources": {},
+                "confidence": 0.0
+            }
+
+    async def search_jurisprudence(
+        self,
+        legal_question: str,
+        case_type: str = "copropriete"
+    ) -> Dict[str, Any]:
+        """
+        Search for relevant jurisprudence (case law)
+
+        Args:
+            legal_question: Legal question or topic
+            case_type: Type of case ("copropriete", "travaux", "general")
+
+        Returns:
+            Dict with:
+                - success: Boolean
+                - summary: Summary of findings
+                - cases: List of relevant cases
+                - confidence: Confidence score
+        """
+        try:
+            logger.info("jurisprudence_search_started", question=legal_question[:100])
+
+            # Note: In production, this would connect to a real jurisprudence database
+            # (e.g., Légifrance API, Doctrine.fr API, or internal RAG with jurisprudence)
+            # For now, we'll use a combination of RAG + Web search
+
+            # Try RAG first (if jurisprudence documents are indexed)
+            rag_cases = []
+            try:
+                rag_results = await self.rag_service.search_similar_chunks(
+                    query=f"jurisprudence {legal_question}",
+                    top_k=5
+                )
+                rag_cases = [
+                    {
+                        "source": "RAG",
+                        "title": chunk.get("filename", "Document"),
+                        "excerpt": chunk.get("content", "")[:400],
+                        "relevance": chunk.get("score", 0.0)
+                    }
+                    for chunk in rag_results
+                    if chunk.get("score", 0) > 0.7
+                ]
+            except Exception as e:
+                logger.warning("rag_search_failed_for_jurisprudence", error=str(e))
+
+            # Use Web Search as fallback/complement (if WebSearchAgent available)
+            web_cases = []
+            try:
+                from .websearch_agent import WebSearchAgent
+                web_agent = WebSearchAgent()
+                web_results = await web_agent.search(
+                    query=f"jurisprudence copropriété {legal_question}",
+                    num_results=5,
+                    region="fr-fr"
+                )
+
+                web_cases = [
+                    {
+                        "source": "Web",
+                        "title": result.title,
+                        "url": result.url,
+                        "excerpt": result.snippet[:300],
+                        "relevance": result.relevance_score
+                    }
+                    for result in web_results.results[:3]
+                ]
+            except Exception as e:
+                logger.warning("web_search_failed_for_jurisprudence", error=str(e))
+
+            # Combine and format results
+            all_cases = rag_cases + web_cases
+
+            if not all_cases:
+                return {
+                    "success": False,
+                    "summary": f"Aucune jurisprudence trouvée pour : {legal_question}",
+                    "cases": [],
+                    "confidence": 0.0
+                }
+
+            # Generate summary
+            summary_message = f"## Jurisprudence : {legal_question}\n\n"
+            summary_message += f"Trouvé {len(all_cases)} cas pertinents :\n\n"
+
+            for idx, case in enumerate(all_cases, 1):
+                summary_message += f"### {idx}. {case['title']}\n"
+                summary_message += f"**Source** : {case['source']}\n"
+                if case.get("url"):
+                    summary_message += f"**Lien** : [{case['url']}]({case['url']})\n"
+                summary_message += f"**Pertinence** : {int(case['relevance']*100)}%\n"
+                summary_message += f"\n{case['excerpt']}\n\n"
+
+            logger.info("jurisprudence_search_completed", cases_found=len(all_cases))
+
+            return {
+                "success": True,
+                "summary": summary_message,
+                "cases": all_cases,
+                "confidence": 0.75
+            }
+
+        except Exception as e:
+            logger.error("jurisprudence_search_failed", error=str(e), exc_info=True)
+            return {
+                "success": False,
+                "summary": f"Erreur lors de la recherche de jurisprudence : {str(e)}",
+                "cases": [],
+                "confidence": 0.0
+            }
 
     def get_capabilities(self) -> Dict[str, Any]:
         """Get legal agent capabilities"""
