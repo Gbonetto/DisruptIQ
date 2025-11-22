@@ -35,6 +35,7 @@ async def assistant_chat_stream(
     session_id: str = "default",  # Session ID for state tracking
     active_document_ids: str = "[]",  # Active document IDs for RAG filtering
     selected_sources: str = "[]",  # User-selected sources ['sql', 'rag', 'web']
+    ui_context: str = "{}",  # UI Context for bypass optimization (Sprint 1)
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -94,13 +95,19 @@ async def assistant_chat_stream(
             except json.JSONDecodeError:
                 parsed_selected_sources = []
 
+            try:
+                parsed_ui_context = json.loads(ui_context)
+            except json.JSONDecodeError:
+                parsed_ui_context = {}
+
             # DEBUG: Log what we received
             logger.info("stream_request_received",
                        message=message[:50],
                        active_document_ids_raw=active_document_ids,
                        parsed_doc_ids=parsed_doc_ids,
                        has_doc_ids=len(parsed_doc_ids) > 0,
-                       selected_sources=parsed_selected_sources)
+                       selected_sources=parsed_selected_sources,
+                       ui_context=parsed_ui_context)
 
             # Initialize thought stream
             thought_stream = get_thought_stream(session_id)
@@ -157,6 +164,14 @@ async def assistant_chat_stream(
                     if current_state.topic:
                         context["topic"] = current_state.topic
                         logger.info("context_enriched_with_topic", topic=current_state.topic)
+
+                    # Add UI context for bypass optimization (Sprint 1 - Level 0)
+                    if parsed_ui_context:
+                        context.update(parsed_ui_context)
+                        logger.info("context_enriched_with_ui_context",
+                                   ui_mode=parsed_ui_context.get('ui_mode'),
+                                   action_button=parsed_ui_context.get('action_button'),
+                                   has_selected_doc=parsed_ui_context.get('selected_document_id') is not None)
 
                     # Process request (this will emit thoughts)
                     result = await orchestrator.process(

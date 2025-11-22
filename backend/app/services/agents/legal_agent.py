@@ -130,7 +130,7 @@ class LegalAgent:
             },
             {
                 "name": "Clause attributive de juridiction abusive",
-                "pattern": r"comp(?:é|e)tence\s+exclusive.*?tribunal",
+                "pattern": r"(?:comp(?:é|e)tence|juridiction)\s+(?:exclusive|attributive).*?(?:tribunal|cour)",
                 "severity": "medium",
                 "legal_basis": "Article L212-2 Code de l'organisation judiciaire",
                 "description": "Clause imposant une juridiction éloignée du domicile du consommateur",
@@ -175,6 +175,38 @@ class LegalAgent:
                 "legal_basis": "Loi Chatel 2008",
                 "description": "Reconduction tacite sans information préalable du cocontractant",
                 "recommendation": "Information obligatoire 3 mois avant échéance + possibilité résiliation"
+            },
+            {
+                "name": "Délai de préavis excessif",
+                "pattern": r"pr(?:é|e)avis.*?(\d+)\s+(?:mois|an)",
+                "severity": "high",
+                "legal_basis": "Jurisprudence : préavis raisonnable",
+                "description": "Délai de préavis de résiliation supérieur à 6 mois considéré comme excessif",
+                "recommendation": "Préavis de 3 mois maximum (6 mois si contrat pluriannuel)"
+            },
+            {
+                "name": "Clause pénale disproportionnée",
+                "pattern": r"clause\s+p(?:é|e)nale.*?(\d+)\s*(?:%|€|euros)",
+                "severity": "high",
+                "legal_basis": "Article 1231-5 Code civil",
+                "description": "Clause pénale manifestement disproportionnée peut être réduite par le juge",
+                "recommendation": "Clause pénale proportionnée au préjudice réellement subi"
+            },
+            {
+                "name": "Absence d'agrément obligatoire AG",
+                "pattern": r"(?:peut|pourra).*?(?:engager|réaliser).*?travaux(?!.*assembl(?:é|e)e)",
+                "severity": "critical",
+                "legal_basis": "Article 18 Loi du 10 juillet 1965",
+                "description": "Travaux importants sans approbation de l'assemblée générale",
+                "recommendation": "Travaux > seuil doivent être votés en AG"
+            },
+            {
+                "name": "Honoraires indexés sans plafond",
+                "pattern": r"(?:honoraires|tarif).*?(?:index(?:é|e)|r(?:é|e)vis)(?!.*plafond|maximum)",
+                "severity": "medium",
+                "legal_basis": "Principe de proportionnalité",
+                "description": "Indexation des honoraires sans limitation peut être abusive",
+                "recommendation": "Plafonner l'indexation (ex: max +5%/an) ou lier à indice officiel"
             }
         ]
 
@@ -317,10 +349,30 @@ class LegalAgent:
 
             elif legal_intent["action"] == "jurisprudence":
                 # Jurisprudence search
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.EXECUTING,
+                        title="Recherche de jurisprudence",
+                        content=f"Interrogation des bases légales pour : {user_input[:80]}...",
+                        agent="LegalAgent",
+                        progress=0.4
+                    )
+
                 result = await self.search_jurisprudence(
                     legal_question=user_input,
-                    case_type="copropriete"
+                    case_type="copropriete",
+                    thought_stream=thought_stream
                 )
+
+                if thought_stream:
+                    cases_count = len(result.get("cases", []))
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.COMPLETED,
+                        title=f"✅ Recherche terminée - {cases_count} cas trouvés",
+                        content="",
+                        agent="LegalAgent",
+                        progress=1.0
+                    )
 
                 return {
                     "action": "jurisprudence",
@@ -1562,11 +1614,18 @@ IMPORTANT : Compare TOUS les aspects clés (durée, prix, clauses, obligations, 
                 max_tokens=2000
             )
 
-            # Parse JSON
+            # Parse JSON - strip markdown code blocks
             cleaned_response = response.strip()
-            if cleaned_response.startswith("```"):
-                cleaned_response = re.sub(r'^```(?:json)?\s*\n', '', cleaned_response)
-                cleaned_response = re.sub(r'\n```\s*$', '', cleaned_response)
+
+            # Remove markdown code blocks (both ```json and ```)
+            if "```" in cleaned_response:
+                # Extract content between ``` markers
+                match = re.search(r'```(?:json)?\s*\n(.*?)```', cleaned_response, re.DOTALL)
+                if match:
+                    cleaned_response = match.group(1).strip()
+                else:
+                    # Fallback: remove ``` markers
+                    cleaned_response = re.sub(r'```(?:json)?', '', cleaned_response).strip()
 
             try:
                 result = json.loads(cleaned_response)
@@ -1877,7 +1936,8 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
     async def search_jurisprudence(
         self,
         legal_question: str,
-        case_type: str = "copropriete"
+        case_type: str = "copropriete",
+        thought_stream: Optional[ThoughtStream] = None
     ) -> Dict[str, Any]:
         """
         Search for relevant jurisprudence (case law)
@@ -1905,6 +1965,14 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
             legifrance_cases = []
             legifrance_service = get_legifrance_service()
             if legifrance_service:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title="Interrogation de Légifrance (base officielle)",
+                        content="Recherche dans la base de données juridique officielle française...",
+                        agent="LegalAgent",
+                        progress=0.5
+                    )
                 try:
                     logger.info("querying_legifrance_api")
                     legifrance_result = await legifrance_service.search_jurisprudence(
@@ -1914,14 +1982,23 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
                     )
 
                     if legifrance_result.get("success") and legifrance_result.get("results"):
+                        import re
+
+                        def clean_html_tags(text: str) -> str:
+                            """Remove HTML tags like <mark>, <em>, etc."""
+                            if not text:
+                                return text
+                            # Remove all HTML tags
+                            return re.sub(r'<[^>]+>', '', text)
+
                         legifrance_cases = [
                             {
                                 "source": "Légifrance (Officiel)",
-                                "title": case.get("title", ""),
+                                "title": clean_html_tags(case.get("title", "")),
                                 "jurisdiction": case.get("jurisdiction", ""),
                                 "date": case.get("date", ""),
                                 "numero": case.get("numero", ""),
-                                "excerpt": case.get("summary", "")[:400],
+                                "excerpt": clean_html_tags(case.get("summary", "")[:400]),
                                 "url": case.get("url", ""),
                                 "relevance": 0.95  # High relevance for official sources
                             }
@@ -1955,6 +2032,14 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
 
             # Use Web Search as fallback/complement (if WebSearchAgent available)
             web_cases = []
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.PROCESSING,
+                    title="Recherche web complémentaire",
+                    content="Consultation de sources web pour compléter les résultats...",
+                    agent="LegalAgent",
+                    progress=0.7
+                )
             try:
                 from .websearch_agent import WebSearchAgent
                 web_agent = WebSearchAgent()
@@ -1988,33 +2073,113 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
                     "confidence": 0.0
                 }
 
-            # Generate summary
-            summary_message = f"## Jurisprudence : {legal_question}\n\n"
-            summary_message += f"Trouvé {len(all_cases)} cas pertinents :\n\n"
+            # Generate summary with structured format (like RAG Agent)
+            # Use LLM to synthesize findings with proper citations
+            summary_parts = []
 
-            for idx, case in enumerate(all_cases, 1):
-                summary_message += f"### {idx}. {case['title']}\n"
-                summary_message += f"**Source** : {case['source']}\n"
+            # Build main analysis with inline citations
+            summary_parts.append(f"## Analyse jurisprudentielle : {legal_question}\n\n")
 
-                # Additional fields for Légifrance cases
-                if case.get("jurisdiction"):
-                    summary_message += f"**Juridiction** : {case['jurisdiction']}\n"
-                if case.get("date"):
-                    summary_message += f"**Date** : {case['date']}\n"
-                if case.get("numero"):
-                    summary_message += f"**Numéro** : {case['numero']}\n"
+            if len(all_cases) > 0:
+                # Prepare case excerpts for LLM synthesis
+                cases_for_synthesis = "\n\n".join([
+                    f"[{idx}] {case['title']}\n{case['excerpt'][:500]}"
+                    for idx, case in enumerate(all_cases, 1)
+                ])
 
-                if case.get("url"):
-                    summary_message += f"**Lien** : [{case['url']}]({case['url']})\n"
-                summary_message += f"**Pertinence** : {int(case['relevance']*100)}%\n"
-                summary_message += f"\n{case['excerpt']}\n\n"
+                # Generate synthesis using LLM
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title=f"Synthèse de {len(all_cases)} cas trouvés",
+                        content="Génération d'une analyse structurée avec citations...",
+                        agent="LegalAgent",
+                        progress=0.85
+                    )
+
+                synthesis_prompt = f"""Tu es un expert juridique. Synthétise ces {len(all_cases)} cas de jurisprudence en un texte structuré.
+
+IMPORTANT :
+- Cite systématiquement les sources avec [1], [2], [3]
+- Rédige 2-3 paragraphes cohérents (pas de liste à puces)
+- Reste factuel et précis
+- Ne mentionne PAS les numéros de source dans les titres
+
+CAS DE JURISPRUDENCE :
+{cases_for_synthesis}
+
+QUESTION :
+{legal_question}
+
+Rédige une synthèse jurisprudentielle professionnelle avec citations [1], [2], [3]."""
+
+                try:
+                    synthesis_text = await self.llm_service.generate_response(
+                        prompt=synthesis_prompt,
+                        temperature=0.2,
+                        max_tokens=600
+                    )
+                    summary_parts.append(synthesis_text.strip() + "\n\n")
+                except Exception as e:
+                    logger.warning("synthesis_generation_failed", error=str(e))
+                    # Fallback: simple list
+                    summary_parts.append(f"**{len(all_cases)} cas pertinents identifiés** :\n\n")
+                    for idx, case in enumerate(all_cases, 1):
+                        excerpt_clean = case['excerpt'].strip()[:300]
+                        summary_parts.append(f"- {excerpt_clean}... [{idx}]\n")
+                    summary_parts.append("\n")
+
+                # Add sources section at the end (like RAG Agent)
+                summary_parts.append(f"\n---\n\n### Sources ({len(all_cases)})\n\n")
+
+                for idx, case in enumerate(all_cases, 1):
+                    summary_parts.append(f"**[{idx}]** {case['title']}\n")
+                    summary_parts.append(f"- **Source** : {case['source']}\n")
+
+                    # Additional fields for Légifrance cases
+                    if case.get("jurisdiction"):
+                        summary_parts.append(f"- **Juridiction** : {case['jurisdiction']}\n")
+                    if case.get("date"):
+                        summary_parts.append(f"- **Date** : {case['date']}\n")
+                    if case.get("numero"):
+                        summary_parts.append(f"- **Numéro** : {case['numero']}\n")
+
+                    if case.get("url"):
+                        summary_parts.append(f"- **Lien** : [{case['url']}]({case['url']})\n")
+
+                    # Fix: relevance_score is already 0-1 ratio, convert properly to percentage
+                    relevance_pct = int(case['relevance'] * 100) if case['relevance'] <= 1.0 else int(case['relevance'])
+                    summary_parts.append(f"- **Pertinence** : {min(relevance_pct, 100)}%\n\n")
+            else:
+                summary_parts.append("Aucun cas pertinent trouvé.\n")
+
+            summary_message = "".join(summary_parts)
 
             logger.info("jurisprudence_search_completed", cases_found=len(all_cases))
+
+            # Return with sources in standard format for frontend
+            structured_sources = []
+            for idx, case in enumerate(all_cases, 1):
+                structured_sources.append({
+                    "type": "legal_jurisprudence",
+                    "id": idx,
+                    "title": case['title'],
+                    "source": case['source'],
+                    "url": case.get('url', ''),
+                    "excerpt": case['excerpt'],
+                    "confidence": case['relevance'],
+                    "metadata": {
+                        "jurisdiction": case.get('jurisdiction', ''),
+                        "date": case.get('date', ''),
+                        "numero": case.get('numero', '')
+                    }
+                })
 
             return {
                 "success": True,
                 "summary": summary_message,
                 "cases": all_cases,
+                "sources": structured_sources,  # Add structured sources like RAG
                 "confidence": 0.75
             }
 

@@ -38,40 +38,16 @@ Date: November 2025
 import re
 import structlog
 from typing import Dict, Any, List, Optional, Tuple
-from enum import Enum
 from pydantic import BaseModel
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.services.llm_service import LLMService
+# Import centralized intent system
+from app.models.intent import IntentType, DataSource, Domain
 
 logger = structlog.get_logger()
-
-
-class IntentType(str, Enum):
-    """Types of user intentions"""
-    QUERY_DATA = "query_data"  # SQL queries (DB only)
-    SEARCH_DOCUMENTS = "search_documents"  # RAG search (docs only)
-    HYBRID_QUERY = "hybrid_query"  # NEW: SQL + RAG fusion
-    SEND_EMAIL = "send_email"
-    CONFIRM_EMAIL = "confirm_email"
-    REQUEST_QUOTES = "request_quotes"
-    ANALYZE_DOCUMENT = "analyze_document"
-    GENERATE_DIGEST = "generate_digest"
-    GENERAL_QUESTION = "general_question"
-    TRIGGER_WORKFLOW = "trigger_workflow"
-    # Phase 2
-    WEB_SEARCH = "web_search"
-    LEGAL = "legal"  # Legal requests (agent decides specific action internally)
-
-
-class DataSource(str, Enum):
-    """Data source for query execution"""
-    SQL_ONLY = "sql_only"  # Database only
-    RAG_ONLY = "rag_only"  # Documents only
-    HYBRID = "hybrid"  # Both SQL + RAG
-    AMBIGUOUS = "ambiguous"  # Needs clarification
 
 
 class AlternativeIntent(BaseModel):

@@ -21,9 +21,11 @@ import {
 } from '@/lib/api-v2';
 import { useActiveDocuments } from '@/contexts/ActiveDocumentsContext';
 import { SourceSelector } from '@/components/SourceSelector';
+import { useUIContext } from '@/hooks/useUIContext';
 
 export const MainChatPageV2: React.FC = () => {
   const { activeDocumentIds } = useActiveDocuments();
+  const { buildContext } = useUIContext();
 
   // State
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -218,14 +220,22 @@ export const MainChatPageV2: React.FC = () => {
         data: m.data,
       }));
 
-      // Start SSE streaming with active document IDs and selected sources
-      console.log('[MainChatPageV2] Sending message with active docs:', activeDocumentIds, 'selected sources:', selectedSources);
+      // Build UI context for bypass optimization (Sprint 1 - Level 0)
+      const uiContext = buildContext();
+
+      // Start SSE streaming with active document IDs, selected sources, and UI context
+      console.log('[MainChatPageV2] Sending message with:');
+      console.log('  - Active docs:', activeDocumentIds);
+      console.log('  - Selected sources:', selectedSources);
+      console.log('  - UI Context:', uiContext);
+
       const eventSource = assistantV2Api.streamChat(
         userMessage,
         history,
         conversationId.toString(),
         activeDocumentIds,
-        selectedSources
+        selectedSources,
+        uiContext  // ← NEW: Pass UI context for bypass
       );
       eventSourceRef.current = eventSource;
 

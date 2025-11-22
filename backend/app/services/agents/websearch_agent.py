@@ -754,8 +754,8 @@ Requête reformulée:"""
         Returns:
             Contextualized answer with citations
         """
-        # Enrich query with context
-        enriched_query = self._enrich_query_with_context(query, context)
+        # Enrich query with context (use synchronous version)
+        enriched_query = self._enrich_query_simple(query, context)
 
         logger.info(
             "websearch_context_enrichment",
@@ -776,9 +776,9 @@ Requête reformulée:"""
 
         return answer
 
-    def _enrich_query_with_context(self, query: str, context: Dict[str, Any]) -> str:
+    def _enrich_query_simple(self, query: str, context: Dict[str, Any]) -> str:
         """
-        Enrich query with conversation context
+        Enrich query with conversation context (simple synchronous version)
 
         Args:
             query: Original query

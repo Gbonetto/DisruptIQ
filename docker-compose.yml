@@ -71,6 +71,9 @@ services:
       # Gmail
       GMAIL_CREDENTIALS_PATH: ${GMAIL_CREDENTIALS_PATH}
       GMAIL_TOKEN_PATH: ${GMAIL_TOKEN_PATH}
+      # Légifrance API
+      LEGIFRANCE_CLIENT_ID: ${LEGIFRANCE_CLIENT_ID}
+      LEGIFRANCE_CLIENT_SECRET: ${LEGIFRANCE_CLIENT_SECRET}
       # SSL
       REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt

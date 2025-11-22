@@ -5,8 +5,6 @@ Routes user requests to appropriate specialized agents
 
 import structlog
 from typing import Dict, Any, List, Optional
-from enum import Enum
-from pydantic import BaseModel
 
 from app.services.llm_service import LLMService
 from app.services.rag_service import RAGService
@@ -15,35 +13,18 @@ from app.services.agents.thought_stream import ThoughtStream, ThoughtType
 from app.services.agents.state_registry import StateManager
 from app.utils.sql_validation import validate_sql_query
 
+# Import centralized intent system
+from app.models.intent import (
+    IntentType,
+    Domain,
+    DataSource,
+    IntentClassification,
+    AgentResponse,
+    INTENT_AGENT_MAP,
+    INTENT_DEFAULT_SOURCES,
+)
+
 logger = structlog.get_logger()
-
-
-class IntentType(str, Enum):
-    """Types of user intentions (V4 - includes new agents)"""
-    # Core intents
-    QUERY_DATA = "query_data"  # SQL queries (copropriétaires, copropriétés, etc.)
-    SEARCH_DOCUMENTS = "search_documents"  # RAG search (contracts, regulations)
-    SEND_EMAIL = "send_email"  # Generate and send emails
-    CONFIRM_EMAIL = "confirm_email"  # Confirm sending email after draft review
-    REQUEST_QUOTES = "request_quotes"  # Request devis from vendors
-    ANALYZE_DOCUMENT = "analyze_document"  # OCR + extraction
-    GENERATE_DIGEST = "generate_digest"  # Generate email digest
-    GENERAL_QUESTION = "general_question"  # General assistant question
-    TRIGGER_WORKFLOW = "trigger_workflow"  # Explicit N8N workflow trigger
-
-    # New Phase 2 intents (Web Search + Legal agents)
-    WEB_SEARCH = "web_search"  # Search internet for current info
-    LEGAL = "legal"  # Legal requests (agent decides specific action internally)
-
-
-class AgentResponse(BaseModel):
-    """Standardized agent response format"""
-    success: bool
-    message: str
-    data: Optional[Dict[str, Any]] = None
-    agents_used: List[str] = []
-    confidence: float = 1.0
-    suggestions: List[str] = []
 
 
 class OrchestratorAgent:
@@ -64,20 +45,33 @@ class OrchestratorAgent:
         # Import production components
         from .hybrid_executor import HybridExecutor
         from .response_fusion_agent import ResponseFusionAgent
-        from .intent_classifier_v4 import EnhancedIntentClassifierV4
+        from .intent_classifier_v5 import IntentClassifierV5
 
-        # V4 ACTIVATED: Fixes critical confidence enforcement bug
-        # - Never executes low-confidence intents (< 0.70)
-        # - Schema-aware SQL/RAG disambiguation
-        # - HYBRID_QUERY support for multi-source fusion
-        # - Structured clarification with user-friendly labels
+        # V5 ACTIVATED (Phase 2): Clean classifier using centralized intent system
+        # - Uses app.models.intent directly
+        # - Simplified logic (70% Quick Rules + 30% LLM)
+        # - Returns IntentClassification model
+        # - No legacy enum complexity
+
+        # SPRINT 1 OPTIMIZATIONS (Phase 2.5): Level 0 Bypass
+        # - Template Filter: 10% bypass (greetings, thanks, etc.)
+        # - UI Context Bypass: 30% bypass (UI mode, action buttons)
+        # - Total: 40% queries never hit classification (0ms, $0)
+        from app.services.template_filter import TemplateFilter, UIContextBypass
 
         # Only instantiate what we actually use
-        self.intent_classifier_v4 = EnhancedIntentClassifierV4()
+        self.intent_classifier = IntentClassifierV5()  # V5 replaces V4
         self.hybrid_executor = HybridExecutor()
         self.fusion_agent = ResponseFusionAgent()
 
-        logger.info("orchestrator_agent_initialized", version="v4.0_optimized")
+        # Level 0 optimization
+        self.template_filter = TemplateFilter()
+        self.ui_context_bypass = UIContextBypass()
+
+        logger.info("orchestrator_agent_initialized",
+                   version="v5.1_sprint1",
+                   classifier="v5",
+                   optimizations=["template_filter", "ui_context_bypass"])
 
     async def classify_intention(
         self,
@@ -99,54 +93,30 @@ class OrchestratorAgent:
             IntentType enum
         """
         try:
-            # Use v4 production classifier with Web Search and Legal agents
-            classification_result = await self.intent_classifier_v4.classify(
+            # Use v5 simplified classifier with centralized intent system
+            classification_result = await self.intent_classifier.classify(
                 user_input=user_input,
+                context=context,
                 conversation_history=conversation_history,
-                state_manager=state_manager,
-                context=context
             )
 
             # Log detailed classification info
-            logger.info("intention_classified_v4",
+            logger.info("intention_classified_v5",
                        user_input=user_input[:50],
                        intent=classification_result.intent.value,
+                       domain=classification_result.domain.value,
                        confidence=classification_result.confidence,
+                       suggested_sources=[s.value for s in classification_result.suggested_sources],
                        reasoning=classification_result.reasoning[:100] if classification_result.reasoning else None)
 
-            # Log alternatives for debugging
-            if classification_result.alternatives:
-                try:
-                    # V3/V4 compatibility: handle both tuple and object formats
-                    alt_summary = []
-                    for alt in classification_result.alternatives:
-                        if isinstance(alt, tuple):
-                            # V4 format: (IntentType, confidence)
-                            alt_summary.append(f"{alt[0].value}({alt[1]:.2f})")
-                        elif hasattr(alt, 'intent') and hasattr(alt, 'confidence'):
-                            # V3 format: AlternativeIntent object
-                            alt_summary.append(f"{alt.intent.value}({alt.confidence:.2f})")
-                    logger.info("alternative_intents", alternatives=alt_summary)
-                except Exception as e:
-                    logger.warning("failed_to_parse_alternatives", error=str(e))
-            else:
-                logger.info("no_alternative_intents")
-
             # If requires clarification, log it
-            if classification_result.requires_clarification:
+            if classification_result.needs_clarification:
                 logger.warning("low_confidence_classification",
                              confidence=classification_result.confidence,
                              clarification=classification_result.clarification_question)
 
-            # Check for multi-step plan
-            if classification_result.multi_step_plan and len(classification_result.multi_step_plan) > 0:
-                logger.info("multi_step_plan_detected",
-                           plan=[step.value for step in classification_result.multi_step_plan],
-                           main_intent=classification_result.intent.value)
-
-            # Convert IntentTypeV4 to IntentType (cast by value)
-            intent_value = classification_result.intent.value
-            return IntentType(intent_value), classification_result
+            # Return intent and full classification (no conversion needed - enums are preserved)
+            return classification_result.intent, classification_result
 
         except Exception as e:
             logger.error("intention_classification_failed", error=str(e), exc_info=True)
@@ -176,6 +146,71 @@ class OrchestratorAgent:
             AgentResponse with results
         """
         try:
+            # ================================================================
+            # NIVEAU 0: PRE-FILTRAGE (40% bypass) - Sprint 1 Optimization
+            # ================================================================
+            # Check template patterns first (greetings, thanks, etc.)
+            template_result = self.template_filter.check(user_input)
+
+            if template_result and template_result.get('bypass_sma'):
+                # Full bypass - return canned response immediately
+                logger.info("level_0_bypass_sma",
+                           method=template_result.get('method'),
+                           category=template_result.get('category'))
+
+                return AgentResponse(
+                    success=True,
+                    message=template_result['response'],
+                    data={},
+                    agents_used=['TemplateFilter'],
+                    sources_used=[],
+                    confidence=1.0,
+                    suggestions=[],
+                    warnings=[]
+                )
+
+            # Check UI context (UI mode, action buttons, selected docs)
+            if context is None:
+                context = {}
+
+            ui_bypass_result = self.ui_context_bypass.check(context)
+
+            # Store bypass results for later use in classification
+            bypass_intent = None
+            bypass_classification = None
+
+            if template_result and template_result.get('bypass_classification'):
+                # Skip classification but continue to SMA
+                bypass_intent = template_result['intent']
+                bypass_classification = IntentClassification(
+                    intent=template_result['intent'],
+                    domain=template_result['domain'],
+                    confidence=template_result['confidence'],
+                    reasoning=template_result['reasoning'],
+                    multi_step_plan=None  # Bypass always single-step
+                )
+                logger.info("level_0_bypass_classification_template",
+                           intent=bypass_intent.value,
+                           method=template_result.get('method'))
+
+            elif ui_bypass_result and ui_bypass_result.get('bypass_classification'):
+                # Skip classification but continue to SMA
+                bypass_intent = ui_bypass_result['intent']
+                bypass_classification = IntentClassification(
+                    intent=ui_bypass_result['intent'],
+                    domain=ui_bypass_result['domain'],
+                    confidence=ui_bypass_result['confidence'],
+                    reasoning=ui_bypass_result['reasoning'],
+                    multi_step_plan=None  # Bypass always single-step
+                )
+                logger.info("level_0_bypass_classification_ui",
+                           intent=bypass_intent.value,
+                           method=ui_bypass_result.get('method'))
+
+            # ================================================================
+            # CONTINUE NORMAL FLOW (with or without bypass)
+            # ================================================================
+
             # 0. Pre-populate EntityGraph if empty (first query of session)
             if state_manager:
                 entity_graph = state_manager.get_entity_graph()
@@ -297,8 +332,17 @@ class OrchestratorAgent:
                     logger.warning("query_enrichment_failed", error=str(e))
                     # Continue with original query if enrichment fails
 
-            # 2. User-controlled source routing (bypass intent classifier if sources specified)
-            if selected_sources is not None and len(selected_sources) > 0:
+            # 2. Check if we have a bypass classification from Level 0
+            if bypass_classification is not None:
+                # Use bypassed intent directly (skip classification)
+                intent = bypass_intent
+                classification_result = bypass_classification
+                logger.info("using_bypass_classification", intent=intent.value, method=classification_result.reasoning)
+
+                # Continue to agent execution (skip to line ~410)
+
+            # 3. User-controlled source routing (bypass intent classifier if sources specified)
+            elif selected_sources is not None and len(selected_sources) > 0:
                 logger.info("user_controlled_routing", selected_sources=selected_sources)
 
                 if thought_stream:
@@ -350,24 +394,22 @@ class OrchestratorAgent:
                         conversation_history=conversation_history
                     )
             else:
-                # No source selected → Full hybrid mode (SQL + RAG + Web in parallel)
-                logger.info("auto_hybrid_mode", message="No sources selected, executing full hybrid")
+                # No bypass, no source selected → Call classifier to determine intent
+                logger.info("calling_classifier", message="No bypass or source selection, classifying intent")
 
                 if thought_stream:
                     await thought_stream.add_thought(
-                        ThoughtType.PLANNING,
-                        title="Recherche automatique multi-sources",
-                        content="Aucune source spécifique sélectionnée. Je lance une recherche parallèle dans toutes les sources : base de données, documents et internet.",
-                        agent="orchestrator",
+                        ThoughtType.CLASSIFYING,
+                        title="Classification de l'intention",
+                        content="Analyse de votre demande pour déterminer la meilleure façon d'y répondre...",
+                        agent="intent_classifier",
                         progress=0.15
                     )
 
-                # Execute full hybrid with all sources
-                return await self._execute_hybrid_sources(
+                # Call the intent classifier
+                intent, classification_result = await self.classify_intention(
                     user_input=user_input,
-                    db=db,
-                    selected_sources=['sql', 'rag', 'web'],  # All sources
-                    thought_stream=thought_stream,
+                    context=context,
                     state_manager=state_manager,
                     conversation_history=conversation_history
                 )
@@ -384,7 +426,7 @@ class OrchestratorAgent:
             logger.info("processing_request", intent=intent.value, input=user_input[:50])
 
             # Check for multi-step workflow
-            if classification_result and classification_result.multi_step_plan:
+            if classification_result and hasattr(classification_result, 'multi_step_plan') and classification_result.multi_step_plan:
                 logger.info("executing_multi_step_workflow",
                            steps=[s.value for s in classification_result.multi_step_plan])
 
@@ -406,11 +448,10 @@ class OrchestratorAgent:
                     IntentType.SEARCH_DOCUMENTS: "RAG Agent (recherche sémantique + Qdrant)",
                     IntentType.SEND_EMAIL: "Email Agent + Workflow Agent (génération + envoi via N8N)",
                     IntentType.REQUEST_QUOTES: "SQL Agent + Template Agent + Workflow Agent",
-                    IntentType.ANALYZE_DOCUMENT: "OCR Agent (extraction Tesseract + analyse)",
                     IntentType.TRIGGER_WORKFLOW: "Workflow Agent (déclenchement N8N)",
                     IntentType.GENERAL_QUESTION: "LLM Direct (Mistral/GPT-4o)",
                     IntentType.WEB_SEARCH: "Web Search Agent (Tavily API)",
-                    IntentType.LEGAL_ANALYSIS: "Legal Agent (analyse juridique)",
+                    IntentType.LEGAL: "Legal Agent (analyse juridique)",
                 }
                 agent_desc = intent_descriptions.get(intent, 'agents appropriés')
                 await thought_stream.add_thought(
@@ -442,17 +483,8 @@ class OrchestratorAgent:
                     user_input, db, context, thought_stream, state_manager
                 )
 
-            elif intent == IntentType.CONFIRM_EMAIL:
-                return await self._handle_confirm_email(user_input, context, db)
-
             elif intent == IntentType.REQUEST_QUOTES:
                 return await self._handle_request_quotes(user_input, db)
-
-            elif intent == IntentType.ANALYZE_DOCUMENT:
-                return await self._handle_analyze_document(user_input, context, db)
-
-            elif intent == IntentType.GENERATE_DIGEST:
-                return await self._handle_generate_digest(user_input, db)
 
             elif intent == IntentType.TRIGGER_WORKFLOW:
                 return await self._handle_trigger_workflow(user_input, db)
@@ -897,7 +929,14 @@ class OrchestratorAgent:
 
                     # Check emails_available (direct field from SQL agent)
                     if "emails_available" in result_data and isinstance(result_data["emails_available"], list):
-                        recipients_found = [str(email) for email in result_data["emails_available"] if email]
+                        # Handle both dict format ({email: "...", name: "..."}) and string format
+                        for email_item in result_data["emails_available"]:
+                            if email_item:  # Skip None/empty
+                                if isinstance(email_item, dict):
+                                    email_value = email_item.get("email", str(email_item))
+                                    recipients_found.append(str(email_value))
+                                else:
+                                    recipients_found.append(str(email_item))
                         logger.info("emails_found_in_emails_available", count=len(recipients_found))
 
                     # Also try results field with email column
@@ -1028,7 +1067,14 @@ class OrchestratorAgent:
 
         # Add recipient info if found
         if recipients_from_context:
-            enriched_input += f"\n\nDestinataires suggérés: {', '.join(recipients_from_context)}"
+            # Handle both dict format ({email: "...", name: "..."}) and string format
+            recipient_strs = []
+            for recipient in recipients_from_context:
+                if isinstance(recipient, dict):
+                    recipient_strs.append(recipient.get("email", str(recipient)))
+                else:
+                    recipient_strs.append(str(recipient))
+            enriched_input += f"\n\nDestinataires suggérés: {', '.join(recipient_strs)}"
 
         # Step 1: Generate email draft
         email_draft = await email_agent.generate_email(enriched_input, db)
@@ -1056,9 +1102,18 @@ class OrchestratorAgent:
         body = draft_data.get("body", "")
 
         # Format preview message
+        # Handle both dict format and string format for recipients
+        recipient_display = []
+        if recipients:
+            for recipient in recipients:
+                if isinstance(recipient, dict):
+                    recipient_display.append(recipient.get("email", str(recipient)))
+                else:
+                    recipient_display.append(str(recipient))
+
         message_parts = [
             "📧 **Brouillon d'email généré**\n",
-            f"\n**Destinataires:** {', '.join(recipients) if recipients else 'Non spécifiés'}",
+            f"\n**Destinataires:** {', '.join(recipient_display) if recipient_display else 'Non spécifiés'}",
             f"\n**Objet:** {subject}",
             f"\n\n**Message:**\n```\n{body}\n```\n",
             "\n---",
@@ -1085,71 +1140,6 @@ class OrchestratorAgent:
                 "❌ Annuler"
             ]
         )
-
-    async def _handle_confirm_email(
-        self,
-        user_input: str,
-        context: Dict[str, Any],
-        db: AsyncSession
-    ) -> AgentResponse:
-        """
-        Handle email sending confirmation after draft review
-
-        Requires draft data in context from previous interaction
-        """
-        from .workflow_agent import WorkflowAgent
-
-        # Check if we have draft data in context
-        if not context or "email_draft" not in context:
-            return AgentResponse(
-                success=False,
-                message="❌ Je n'ai pas de brouillon d'email en attente. Veuillez d'abord générer un brouillon avec une commande comme 'Envoyer email à [destinataire]'.",
-                agents_used=["orchestrator"],
-                suggestions=[
-                    "Envoyer email aux copropriétaires",
-                    "Prévenir les voisins",
-                    "Répondre à un email"
-                ]
-            )
-
-        draft_data = context["email_draft"]
-        workflow_agent = WorkflowAgent()
-
-        try:
-            # Trigger N8N workflow to send email
-            workflow_result = await workflow_agent.trigger_email_draft(draft_data)
-
-            if workflow_result["success"]:
-                return AgentResponse(
-                    success=True,
-                    message=f"✅ **Email envoyé avec succès!**\n\n{workflow_result['message']}",
-                    data=workflow_result.get("data"),
-                    agents_used=["workflow_agent"],
-                    suggestions=[
-                        "Voir mes emails envoyés",
-                        "Envoyer un autre email"
-                    ]
-                )
-            else:
-                return AgentResponse(
-                    success=False,
-                    message=f"❌ **Échec de l'envoi de l'email**\n\n{workflow_result['message']}\n\nVoulez-vous réessayer ?",
-                    data=workflow_result.get("data"),
-                    agents_used=["workflow_agent"],
-                    suggestions=[
-                        "Réessayer",
-                        "Modifier le brouillon",
-                        "Annuler"
-                    ]
-                )
-
-        except Exception as e:
-            logger.error("email_confirmation_failed", error=str(e), exc_info=True)
-            return AgentResponse(
-                success=False,
-                message=f"❌ Une erreur s'est produite lors de l'envoi : {str(e)}",
-                agents_used=["workflow_agent"]
-            )
 
     async def _handle_request_quotes(self, user_input: str, db: AsyncSession) -> AgentResponse:
         """Handle vendor quote requests"""
@@ -1617,10 +1607,12 @@ class OrchestratorAgent:
                 )
 
             # Pass raw request to LegalAgent - it will decide what to do
+            # IMPORTANT: Pass thought_stream so Legal Agent can display its Chain of Thought
             result = await legal_agent.process_request(
                 user_input=user_input,
                 context=context,
-                db=db
+                db=db,
+                thought_stream=thought_stream
             )
 
             # Update thought based on action performed
@@ -1903,14 +1895,12 @@ Réponds de manière claire, professionnelle et utile. Si tu peux aider avec une
             IntentType.SEARCH_DOCUMENTS: self._handle_search_documents,
             IntentType.SEND_EMAIL: self._handle_send_email_intelligent,
             IntentType.REQUEST_QUOTES: self._handle_request_quotes,
-            IntentType.ANALYZE_DOCUMENT: self._handle_analyze_document,
             IntentType.TRIGGER_WORKFLOW: self._handle_trigger_workflow,
             IntentType.WEB_SEARCH: self._handle_web_search,
-            IntentType.LEGAL_ADVICE: self._handle_legal_advice,
-            IntentType.LEGAL_ANALYSIS: self._handle_legal_analysis,
-            IntentType.LEGAL_COMPARISON: self._handle_legal_comparison,
-            IntentType.SEARCH_JURISPRUDENCE: self._handle_search_jurisprudence,
+            IntentType.LEGAL: self._handle_legal,  # Single LEGAL intent (agent decides action internally)
             IntentType.GENERAL_QUESTION: self._handle_general_question,
+            # Legacy (backward compatibility)
+            IntentType.HYBRID_QUERY: self._handle_query_data,  # DEPRECATED: Route to QUERY_DATA
         }
 
         handler = handler_map.get(intent)

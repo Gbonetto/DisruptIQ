@@ -13,7 +13,7 @@ import uuid
 import asyncio
 
 from app.core.database import get_db
-from app.services.agents.orchestrator_agent import AgentResponse
+from app.models.intent import AgentResponse  # Centralized intent system
 from app.services.agents.orchestrator_factory import get_orchestrator
 from app.services.agents.thought_stream import get_thought_stream, cleanup_stream, ThoughtType
 
