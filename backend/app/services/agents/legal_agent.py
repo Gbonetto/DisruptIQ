@@ -32,9 +32,14 @@ import structlog
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import re
+import hashlib
+import json
 
 from app.services.llm_service import LLMService
 from app.services.rag_service import RAGService
+from app.core.redis_client import get_redis_client
+from app.services.agents.thought_stream import ThoughtStream, ThoughtType
+from app.services.legifrance_service import get_legifrance_service
 
 logger = structlog.get_logger()
 
@@ -54,6 +59,11 @@ class LegalAgent:
     def __init__(self):
         self.llm_service = LLMService()
         self.rag_service = RAGService()
+        self.redis_client = get_redis_client()
+
+        # Cache configuration
+        self.cache_ttl = 3600 * 24 * 7  # 7 days for legal analysis
+        self.cache_enabled = True
 
         # Legal document types
         self.document_types = {
@@ -92,13 +102,92 @@ class LegalAgent:
             }
         }
 
-        logger.info("legal_agent_initialized", document_types=len(self.document_types))
+        # Abusive clauses database (based on French jurisprudence)
+        self.abusive_clauses_patterns = [
+            {
+                "name": "Reconduction tacite excessive",
+                "pattern": r"reconduction\s+(?:automatique|tacite)(?:.*?pour.*?(\d+)\s+(?:an|année))?",
+                "severity": "critical",
+                "legal_basis": "Article 1210 Code civil, Loi ALUR 2014",
+                "description": "Clause de reconduction tacite sans préavis suffisant ou pour durée excessive",
+                "recommendation": "Durée max 3 ans avec résiliation possible moyennant préavis 3-6 mois"
+            },
+            {
+                "name": "Indemnité de résiliation disproportionnée",
+                "pattern": r"indemn(?:ité|isation).*?r(?:é|e)siliation.*?(\d+)\s+mois",
+                "severity": "high",
+                "legal_basis": "Jurisprudence : clause pénale disproportionnée",
+                "description": "Indemnité de résiliation excessive (jurisprudence considère > 6 mois comme abusif)",
+                "recommendation": "Plafonner à 3 mois d'honoraires maximum ou supprimer"
+            },
+            {
+                "name": "Pénalité de retard excessive",
+                "pattern": r"p(?:é|e)nalit(?:é|e).*?retard.*?(\d+)\s*%",
+                "severity": "medium",
+                "legal_basis": "Décret 2020-1736 (taux légal + 10 points max)",
+                "description": "Pénalités de retard supérieures au taux légal + 10 points",
+                "recommendation": "Utiliser taux légal (actuellement ~3.4%) + max 10 points"
+            },
+            {
+                "name": "Clause attributive de juridiction abusive",
+                "pattern": r"comp(?:é|e)tence\s+exclusive.*?tribunal",
+                "severity": "medium",
+                "legal_basis": "Article L212-2 Code de l'organisation judiciaire",
+                "description": "Clause imposant une juridiction éloignée du domicile du consommateur",
+                "recommendation": "Compétence du tribunal du lieu de situation de l'immeuble"
+            },
+            {
+                "name": "Exclusion de responsabilité illégale",
+                "pattern": r"(?:exclut|exclusion).*?responsabilit(?:é|e).*?(?:toute|totale)",
+                "severity": "critical",
+                "legal_basis": "Article 1231-3 Code civil",
+                "description": "Clause excluant totalement la responsabilité du professionnel (interdite)",
+                "recommendation": "Responsabilité limitée aux fautes prouvées, jamais exclusion totale"
+            },
+            {
+                "name": "Plafond de travaux urgents excessif",
+                "pattern": r"travaux.*?urgence.*?(\d+[\s\.]?\d*)\s*(?:€|euros)",
+                "severity": "high",
+                "legal_basis": "Article 18 Loi 1965",
+                "description": "Plafond de travaux d'urgence sans AG trop élevé (>10,000€ suspect)",
+                "recommendation": "Plafond raisonnable 2,000-5,000€ selon taille copropriété"
+            },
+            {
+                "name": "Absence de clause de résiliation",
+                "pattern": r"(?!.*r(?:é|e)siliation).*dur(?:é|e)e.*?(\d+)\s+an",
+                "severity": "high",
+                "legal_basis": "Principe de liberté contractuelle",
+                "description": "Contrat sans possibilité de résiliation pendant la durée",
+                "recommendation": "Ajouter clause de résiliation avec préavis raisonnable"
+            },
+            {
+                "name": "Modification unilatérale du contrat",
+                "pattern": r"(?:modifier|modification).*?(?:unilat(?:é|e)ral|de plein droit)",
+                "severity": "high",
+                "legal_basis": "Article 1103 Code civil (principe consensualisme)",
+                "description": "Clause permettant modification unilatérale sans accord",
+                "recommendation": "Toute modification doit être acceptée par les deux parties"
+            },
+            {
+                "name": "Tacite reconduction sans information",
+                "pattern": r"tacite.*?reconduction(?!.*information|pr(?:é|e)avis)",
+                "severity": "critical",
+                "legal_basis": "Loi Chatel 2008",
+                "description": "Reconduction tacite sans information préalable du cocontractant",
+                "recommendation": "Information obligatoire 3 mois avant échéance + possibilité résiliation"
+            }
+        ]
+
+        logger.info("legal_agent_initialized",
+                   document_types=len(self.document_types),
+                   abusive_clauses_patterns=len(self.abusive_clauses_patterns))
 
     async def process_request(
         self,
         user_input: str,
         context: Optional[Dict[str, Any]] = None,
-        db = None
+        db = None,
+        thought_stream: Optional[ThoughtStream] = None
     ) -> Dict[str, Any]:
         """
         Central entry point for all legal requests.
@@ -114,6 +203,7 @@ class LegalAgent:
             user_input: Raw user query
             context: Optional context (uploaded documents, etc.)
             db: Database session if needed
+            thought_stream: Optional ThoughtStream for real-time CoT
 
         Returns:
             Dict with:
@@ -125,12 +215,33 @@ class LegalAgent:
         try:
             logger.info("legal_request_received", query=user_input[:100])
 
+            # Stream: Starting legal analysis
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.ANALYZING,
+                    title="Analyse juridique",
+                    content=f"Classification de la demande juridique : {user_input[:100]}...",
+                    agent="LegalAgent",
+                    progress=0.1
+                )
+
             # Step 1: Classify the legal intent internally
             legal_intent = await self._classify_legal_intent(user_input, context)
 
             logger.info("legal_intent_classified",
                        intent=legal_intent["action"],
                        confidence=legal_intent["confidence"])
+
+            # Stream: Intent classified
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.CLASSIFYING,
+                    title="Intent juridique détecté",
+                    content=f"Action : {legal_intent['action']}, Mode : {legal_intent.get('mode', 'N/A')}, Confiance : {legal_intent['confidence']:.0%}",
+                    agent="LegalAgent",
+                    data={"intent": legal_intent},
+                    progress=0.2
+                )
 
             # Step 2: Route to appropriate action based on internal classification
             if legal_intent["action"] == "analyze":
@@ -145,9 +256,21 @@ class LegalAgent:
                     }
 
                 analysis_mode = legal_intent.get("mode", "full")
+
+                # Stream: Analyzing document
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.EXECUTING,
+                        title=f"Analyse de document ({analysis_mode})",
+                        content=f"Analyse en cours du document ({len(document_text)} caractères)...",
+                        agent="LegalAgent",
+                        progress=0.3
+                    )
+
                 result = await self.analyze_document(
                     document_text=document_text,
-                    analysis_type=analysis_mode
+                    analysis_type=analysis_mode,
+                    thought_stream=thought_stream
                 )
 
                 return {
@@ -237,45 +360,376 @@ class LegalAgent:
         - compare
         - advice
         - jurisprudence
+
+        Enhanced with:
+        - Multiple linguistic variants
+        - Question vs command detection
+        - Mixed requests handling
         """
         user_lower = user_input.lower()
 
-        # Quick rules for legal intent classification
+        # Enhanced keyword sets with linguistic variants
+
+        # Analysis keywords (extended)
+        analyze_keywords = [
+            # Commands
+            "analyser", "analyse", "analyser ce", "analyser le", "analyser la",
+            "étudier", "étude", "examiner", "examen",
+            "décortiquer", "décortique",
+            # Summaries
+            "résume", "résumer", "résumé", "fais-moi un résumé", "faire un résumé",
+            "synthèse", "synthétise", "synthétiser",
+            "en bref", "l'essentiel",
+            # Verification
+            "identifier les risques", "vérifier", "contrôler", "vérification", "contrôle",
+            "conformité", "obligations", "clauses",
+            "checker", "check",
+            # Extraction
+            "extraire", "extraction", "lister", "liste",
+            "quelles sont les clauses", "quels sont les risques"
+        ]
+
+        # Risk keywords (extended)
+        risk_keywords = [
+            "risque", "risques", "dangereux", "danger",
+            "problème", "problèmes", "problématique",
+            "red flag", "alerte", "alertes",
+            "vigilance", "attention",
+            "point d'attention", "points d'attention",
+            "suspicious", "suspect",
+            "clause abusive", "clauses abusives"
+        ]
+
+        # Summary keywords (extended)
+        summary_keywords = [
+            "résumé", "résume", "résumer",
+            "synthèse", "synthétise", "synthétiser",
+            "en bref", "l'essentiel", "principales",
+            "points clés", "points importants",
+            "grandes lignes", "aperçu général",
+            "vue d'ensemble", "overview"
+        ]
+
+        # Compliance keywords (extended)
+        compliance_keywords = [
+            "conformité", "conforme", "conformes",
+            "légal", "légale", "légalement",
+            "réglementaire", "réglementation",
+            "respect de la loi", "respecte la loi",
+            "en accord avec", "selon la loi",
+            "loi elan", "loi climat", "loi 1965",
+            "aux normes", "norme"
+        ]
+
+        # Comparison keywords (extended)
+        compare_keywords = [
+            "comparer", "comparaison", "compare",
+            "différence", "différences", "écart", "écarts",
+            "versus", "vs", "par rapport à",
+            "contraste", "opposer",
+            "mettre en parallèle", "parallèle",
+            "similitude", "similarités",
+            "quel est le meilleur", "lequel choisir"
+        ]
+
+        # Jurisprudence keywords (extended)
+        jurisprudence_keywords = [
+            "jurisprudence", "jurisprudences",
+            "décision de justice", "décisions de justice",
+            "jugement", "jugements",
+            "arrêt", "arrêts",
+            "tribunal", "tribunaux",
+            "cour", "cours",
+            "cas similaire", "cas similaires",
+            "précédent", "précédents juridiques",
+            "cassation", "appel",
+            "contentieux"
+        ]
 
         # 1. Document analysis
-        if any(keyword in user_lower for keyword in [
-            "analyser", "analyse", "analyser ce", "analyser le",
-            "identifier les risques", "vérifier", "contrôler",
-            "conformité", "obligations", "clauses"
-        ]):
+        if any(keyword in user_lower for keyword in analyze_keywords):
             # Determine analysis mode
             mode = "full"  # Default
-            if "risque" in user_lower or "dangereux" in user_lower:
+
+            if any(keyword in user_lower for keyword in risk_keywords):
                 mode = "risk"
-            elif "résumé" in user_lower or "résume" in user_lower:
+            elif any(keyword in user_lower for keyword in summary_keywords):
                 mode = "summary"
-            elif "conformité" in user_lower or "conforme" in user_lower:
+            elif any(keyword in user_lower for keyword in compliance_keywords):
                 mode = "compliance"
 
-            return {"action": "analyze", "mode": mode, "confidence": 0.9}
+            return {"action": "analyze", "mode": mode, "confidence": 0.95}
 
         # 2. Document comparison
-        if any(keyword in user_lower for keyword in [
-            "comparer", "comparaison", "différence", "écart",
-            "versus", "vs", "par rapport"
-        ]):
-            return {"action": "compare", "confidence": 0.85}
+        if any(keyword in user_lower for keyword in compare_keywords):
+            return {"action": "compare", "confidence": 0.90}
 
         # 3. Jurisprudence search
-        if any(keyword in user_lower for keyword in [
-            "jurisprudence", "décision de justice", "jugement",
-            "arrêt", "tribunal", "cour"
-        ]):
-            return {"action": "jurisprudence", "confidence": 0.9}
+        if any(keyword in user_lower for keyword in jurisprudence_keywords):
+            return {"action": "jurisprudence", "confidence": 0.95}
 
         # 4. Legal advice (default for legal questions)
-        # If it's a legal question without specific action
-        return {"action": "advice", "confidence": 0.75}
+        # Questions typically start with: quoi, comment, pourquoi, quelles, quel, est-ce que
+        question_indicators = ["quoi", "comment", "pourquoi", "quelles", "quel",
+                               "est-ce que", "puis-je", "peut-on", "dois-je"]
+
+        is_question = any(user_lower.startswith(q) or f" {q} " in user_lower
+                          for q in question_indicators)
+
+        confidence = 0.80 if is_question else 0.75
+        return {"action": "advice", "confidence": confidence}
+
+    async def _detect_abusive_clauses(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Detect potentially abusive clauses using pattern matching and jurisprudence.
+
+        Returns list of detected abusive clauses with:
+        - name: Clause name
+        - severity: critical/high/medium/low
+        - legal_basis: Legal reference
+        - description: Why it's problematic
+        - recommendation: How to fix it
+        - context: Where found in document
+        """
+        try:
+            detected_clauses = []
+            text_lower = text.lower()
+
+            for clause_pattern in self.abusive_clauses_patterns:
+                # Search for pattern
+                matches = re.finditer(clause_pattern["pattern"], text_lower, re.IGNORECASE | re.DOTALL)
+
+                for match in matches:
+                    # Extract context around the match
+                    start = max(0, match.start() - 100)
+                    end = min(len(text), match.end() + 100)
+                    context = text[start:end]
+
+                    # Additional validation for numeric thresholds
+                    is_abusive = True
+
+                    # Validate indemnity amount (> 6 months is abusive)
+                    if clause_pattern["name"] == "Indemnité de résiliation disproportionnée":
+                        if match.groups():
+                            months = int(match.group(1))
+                            is_abusive = months > 6
+
+                    # Validate penalty rate (> 13.4% is excessive given current legal rate ~3.4%)
+                    elif clause_pattern["name"] == "Pénalité de retard excessive":
+                        if match.groups():
+                            rate = float(match.group(1))
+                            is_abusive = rate > 13.4  # Legal rate + 10 points
+
+                    # Validate urgency works ceiling (> 10,000€ is suspect)
+                    elif clause_pattern["name"] == "Plafond de travaux urgents excessif":
+                        if match.groups():
+                            amount_str = match.group(1).replace(' ', '').replace('.', '')
+                            try:
+                                amount = float(amount_str)
+                                is_abusive = amount > 10000
+                            except ValueError:
+                                is_abusive = False
+
+                    if is_abusive:
+                        detected_clauses.append({
+                            "name": clause_pattern["name"],
+                            "severity": clause_pattern["severity"],
+                            "legal_basis": clause_pattern["legal_basis"],
+                            "description": clause_pattern["description"],
+                            "recommendation": clause_pattern["recommendation"],
+                            "context": context,
+                            "matched_text": match.group(0)
+                        })
+
+            # Deduplicate by name
+            unique_clauses = []
+            seen_names = set()
+            for clause in detected_clauses:
+                if clause["name"] not in seen_names:
+                    seen_names.add(clause["name"])
+                    unique_clauses.append(clause)
+
+            logger.info("abusive_clauses_detected", count=len(unique_clauses))
+
+            return unique_clauses
+
+        except Exception as e:
+            logger.error("abusive_clause_detection_failed", error=str(e))
+            return []
+
+    async def _extract_entities(self, text: str) -> Dict[str, Any]:
+        """
+        Extract structured entities from legal document using NER.
+
+        Entities extracted:
+        - MONTANT: Monetary amounts (€30,000)
+        - DUREE: Time periods (5 ans, 3 mois)
+        - PARTIE: Parties involved (syndic, copropriétaires)
+        - DATE: Dates
+        - TAUX: Rates/percentages (15%)
+        - CLAUSE: Specific clause types
+        """
+        try:
+            # Regex patterns for entity extraction
+            entities = {
+                "montants": [],
+                "durees": [],
+                "parties": [],
+                "dates": [],
+                "taux": [],
+                "clauses": []
+            }
+
+            # Extract monetary amounts
+            montant_pattern = r'(\d+[\s\.]?\d*)\s*(?:€|euros?|EUR)'
+            montants = re.finditer(montant_pattern, text, re.IGNORECASE)
+            for match in montants:
+                value_str = match.group(1).replace(' ', '').replace('.', '')
+                try:
+                    value = float(value_str)
+                    entities["montants"].append({
+                        "value": value,
+                        "formatted": f"{value:,.0f} €",
+                        "context": text[max(0, match.start()-50):match.end()+50]
+                    })
+                except ValueError:
+                    pass
+
+            # Extract time durations
+            duree_pattern = r'(\d+)\s*(an(?:s|née)?|mois|jour(?:s)?|semaine(?:s)?)'
+            durees = re.finditer(duree_pattern, text, re.IGNORECASE)
+            for match in durees:
+                number = int(match.group(1))
+                unit = match.group(2).lower()
+                entities["durees"].append({
+                    "number": number,
+                    "unit": unit,
+                    "formatted": f"{number} {unit}",
+                    "context": text[max(0, match.start()-50):match.end()+50]
+                })
+
+            # Extract rates/percentages
+            taux_pattern = r'(\d+(?:[,\.]\d+)?)\s*%'
+            taux = re.finditer(taux_pattern, text)
+            for match in taux:
+                rate_str = match.group(1).replace(',', '.')
+                try:
+                    rate = float(rate_str)
+                    entities["taux"].append({
+                        "value": rate,
+                        "formatted": f"{rate}%",
+                        "context": text[max(0, match.start()-50):match.end()+50]
+                    })
+                except ValueError:
+                    pass
+
+            # Extract parties (common legal entities)
+            parties_keywords = [
+                "syndic", "copropriétaire", "copropriétaires", "bailleur",
+                "locataire", "prestataire", "entrepreneur", "architecte",
+                "conseil syndical", "assemblée générale", "propriétaire"
+            ]
+            for keyword in parties_keywords:
+                if keyword in text.lower():
+                    # Find context around the party mention
+                    pattern = re.compile(rf'\b{keyword}\b', re.IGNORECASE)
+                    for match in pattern.finditer(text):
+                        entities["parties"].append({
+                            "name": keyword.title(),
+                            "context": text[max(0, match.start()-50):match.end()+50]
+                        })
+
+            # Extract dates (basic patterns)
+            date_pattern = r'\b(\d{1,2})\s+(janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)\s+(\d{4})\b'
+            dates = re.finditer(date_pattern, text, re.IGNORECASE)
+            for match in dates:
+                entities["dates"].append({
+                    "day": match.group(1),
+                    "month": match.group(2),
+                    "year": match.group(3),
+                    "formatted": f"{match.group(1)} {match.group(2)} {match.group(3)}",
+                    "context": text[max(0, match.start()-30):match.end()+30]
+                })
+
+            # Extract specific clauses
+            clause_keywords = [
+                "reconduction tacite", "résiliation", "préavis",
+                "indemnité", "pénalité", "clause pénale", "force majeure",
+                "garantie", "assurance", "responsabilité"
+            ]
+            for keyword in clause_keywords:
+                if keyword in text.lower():
+                    pattern = re.compile(rf'\b{keyword}\b', re.IGNORECASE)
+                    for match in pattern.finditer(text):
+                        entities["clauses"].append({
+                            "type": keyword.title(),
+                            "context": text[max(0, match.start()-80):match.end()+80]
+                        })
+
+            # Deduplicate entities
+            entities["montants"] = list({m["formatted"]: m for m in entities["montants"]}.values())
+            entities["durees"] = list({d["formatted"]: d for d in entities["durees"]}.values())
+            entities["parties"] = list({p["name"]: p for p in entities["parties"]}.values())
+            entities["dates"] = list({d["formatted"]: d for d in entities["dates"]}.values())
+            entities["taux"] = list({t["formatted"]: t for t in entities["taux"]}.values())
+            entities["clauses"] = list({c["type"]: c for c in entities["clauses"]}.values())
+
+            logger.info("entities_extracted",
+                       montants=len(entities["montants"]),
+                       durees=len(entities["durees"]),
+                       parties=len(entities["parties"]))
+
+            return entities
+
+        except Exception as e:
+            logger.error("entity_extraction_failed", error=str(e))
+            return {
+                "montants": [],
+                "durees": [],
+                "parties": [],
+                "dates": [],
+                "taux": [],
+                "clauses": []
+            }
+
+    def _generate_cache_key(self, document_text: str, analysis_type: str) -> str:
+        """
+        Generate cache key from document content and analysis type.
+        Uses SHA256 hash of document + analysis type for deterministic caching.
+        """
+        content = f"{document_text}:{analysis_type}"
+        hash_digest = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        return f"legal_analysis:{hash_digest}"
+
+    async def _get_cached_analysis(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        """Retrieve cached analysis result from Redis"""
+        if not self.cache_enabled or not self.redis_client:
+            return None
+
+        try:
+            cached = await self.redis_client.get(cache_key)
+            if cached:
+                logger.info("cache_hit", cache_key=cache_key[:20] + "...")
+                return json.loads(cached)
+        except Exception as e:
+            logger.warning("cache_get_error", error=str(e))
+
+        return None
+
+    async def _set_cached_analysis(self, cache_key: str, result: Dict[str, Any]) -> None:
+        """Store analysis result in Redis cache"""
+        if not self.cache_enabled or not self.redis_client:
+            return
+
+        try:
+            await self.redis_client.setex(
+                cache_key,
+                self.cache_ttl,
+                json.dumps(result, ensure_ascii=False)
+            )
+            logger.info("cache_set", cache_key=cache_key[:20] + "...", ttl=self.cache_ttl)
+        except Exception as e:
+            logger.warning("cache_set_error", error=str(e))
 
     def _extract_document_from_context(self, context: Optional[Dict[str, Any]]) -> Optional[str]:
         """Extract document text from context"""
@@ -327,7 +781,8 @@ class LegalAgent:
         self,
         document_text: str,
         analysis_type: str = "full",
-        specific_questions: Optional[List[str]] = None
+        specific_questions: Optional[List[str]] = None,
+        thought_stream: Optional[ThoughtStream] = None
     ) -> Dict[str, Any]:
         """
         Analyze a legal document
@@ -367,11 +822,24 @@ class LegalAgent:
         try:
             logger.info("legal_analysis_started", text_length=len(document_text), analysis_type=analysis_type)
 
+            # Check cache first
+            cache_key = self._generate_cache_key(document_text, analysis_type)
+            cached_result = await self._get_cached_analysis(cache_key)
+
+            if cached_result:
+                logger.info("legal_analysis_cache_hit", analysis_type=analysis_type)
+                # Add cache metadata
+                cached_result["metadata"]["cached"] = True
+                cached_result["metadata"]["retrieved_at"] = datetime.now().isoformat()
+                return cached_result
+
             # Initialize result structure
             result = {
                 "document_type": None,
                 "summary": None,
                 "key_information": {},
+                "entities": {},  # NER extracted entities
+                "abusive_clauses": [],  # Auto-detected abusive clauses
                 "obligations": [],
                 "risks": [],
                 "compliance": {},
@@ -381,34 +849,114 @@ class LegalAgent:
                 "metadata": {
                     "analyzed_at": datetime.now().isoformat(),
                     "analysis_type": analysis_type,
-                    "text_length": len(document_text)
+                    "text_length": len(document_text),
+                    "cached": False
                 }
             }
 
             # Step 1: Classify document type
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.PROCESSING,
+                    title="Classification du document",
+                    content="Identification du type de document juridique...",
+                    agent="LegalAgent",
+                    progress=0.4
+                )
             result["document_type"] = await self._classify_legal_document(document_text)
 
-            # Step 2: Extract key information
+            # Step 2: Extract entities (NER)
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.PROCESSING,
+                    title="Extraction des entités (NER)",
+                    content="Extraction des montants, durées, parties, dates, taux...",
+                    agent="LegalAgent",
+                    progress=0.45
+                )
+            result["entities"] = await self._extract_entities(document_text)
+
+            # Step 3: Extract key information
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.PROCESSING,
+                    title="Extraction des informations clés",
+                    content=f"Type détecté : {self.document_types.get(result['document_type'], result['document_type'])}",
+                    agent="LegalAgent",
+                    progress=0.5
+                )
             result["key_information"] = await self._extract_key_information(document_text, result["document_type"])
 
             # Step 3: Generate summary
             if analysis_type in ["full", "summary"]:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title="Génération du résumé",
+                        content="Synthèse des éléments principaux du document...",
+                        agent="LegalAgent",
+                        progress=0.6
+                    )
                 result["summary"] = await self._generate_summary(document_text, result["document_type"])
 
             # Step 4: Identify obligations
             if analysis_type in ["full", "risk"]:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title="Identification des obligations",
+                        content="Extraction des obligations contractuelles...",
+                        agent="LegalAgent",
+                        progress=0.65
+                    )
                 result["obligations"] = await self._extract_obligations(document_text)
 
-            # Step 5: Risk analysis
+            # Step 5: Detect abusive clauses (pattern-based)
             if analysis_type in ["full", "risk"]:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title="Détection de clauses abusives",
+                        content="Scan automatique des clauses problématiques (jurisprudence)...",
+                        agent="LegalAgent",
+                        progress=0.68
+                    )
+                result["abusive_clauses"] = await self._detect_abusive_clauses(document_text)
+
+            # Step 6: Risk analysis (LLM-based)
+            if analysis_type in ["full", "risk"]:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title="Analyse des risques juridiques",
+                        content="Détection des clauses problématiques et red flags...",
+                        agent="LegalAgent",
+                        progress=0.75
+                    )
                 result["risks"] = await self._analyze_risks(document_text, result["document_type"])
 
-            # Step 6: Compliance check
+            # Step 7: Compliance check
             if analysis_type in ["full", "compliance"]:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title="Vérification de conformité",
+                        content="Contrôle par rapport aux lois ELAN, Climat, et 1965...",
+                        agent="LegalAgent",
+                        progress=0.80
+                    )
                 result["compliance"] = await self._check_compliance(document_text, result["document_type"])
 
             # Step 7: Generate recommendations
             if analysis_type == "full":
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title="Génération des recommandations",
+                        content=f"{len(result['risks'])} risques identifiés, élaboration des recommandations...",
+                        agent="LegalAgent",
+                        progress=0.90
+                    )
                 result["recommendations"] = await self._generate_recommendations(
                     document_text,
                     result["document_type"],
@@ -417,10 +965,26 @@ class LegalAgent:
                 )
 
             # Step 8: Identify relevant law citations
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.PROCESSING,
+                    title="Identification des références légales",
+                    content="Recherche des lois et articles applicables...",
+                    agent="LegalAgent",
+                    progress=0.95
+                )
             result["citations"] = await self._identify_citations(document_text)
 
             # Step 9: Answer specific questions if provided
             if specific_questions:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        thought_type=ThoughtType.PROCESSING,
+                        title="Réponse aux questions spécifiques",
+                        content=f"Traitement de {len(specific_questions)} question(s)...",
+                        agent="LegalAgent",
+                        progress=0.98
+                    )
                 result["qa"] = await self._answer_questions(document_text, specific_questions)
 
             logger.info(
@@ -429,6 +993,22 @@ class LegalAgent:
                 risks_count=len(result["risks"]),
                 obligations_count=len(result["obligations"])
             )
+
+            # Stream: Analysis completed
+            if thought_stream:
+                abusive_count = len(result.get("abusive_clauses", []))
+                abusive_msg = f", {abusive_count} clauses abusives" if abusive_count > 0 else ""
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.COMPLETED,
+                    title="Analyse juridique terminée",
+                    content=f"✅ Document analysé : {len(result['risks'])} risques, {len(result['obligations'])} obligations{abusive_msg}",
+                    agent="LegalAgent",
+                    data={"summary": result.get("summary", "")[:200]},
+                    progress=1.0
+                )
+
+            # Cache the result
+            await self._set_cached_analysis(cache_key, result)
 
             return result
 
@@ -603,43 +1183,103 @@ Réponds avec une liste JSON d'objets. Exemple :
             return []
 
     async def _analyze_risks(self, text: str, doc_type: str) -> List[Dict[str, Any]]:
-        """Analyze legal risks and red flags"""
+        """Analyze legal risks and red flags with enhanced few-shot prompting"""
         try:
-            prompt = f"""Tu es un expert juridique spécialisé en droit immobilier français.
+            prompt = f"""Tu es un avocat spécialisé en droit de la copropriété et droit immobilier français.
 
 Ce document est de type : {self.document_types.get(doc_type, "document juridique")}
 
-Identifie les risques juridiques et clauses potentiellement problématiques.
+Identifie TOUS les risques juridiques, clauses abusives ou problématiques selon la jurisprudence française.
 
-Pour chaque risque :
-- severity : "low", "medium", "high", "critical"
-- category : catégorie du risque (financier, temporel, responsabilité, etc.)
-- description : description claire du risque
-- recommendation : recommandation pour atténuer le risque
+EXEMPLES DE RISQUES À DÉTECTER :
 
-DOCUMENT :
+1. Durée excessive ou reconduction tacite :
+   - Contrat > 3 ans sans justification
+   - Reconduction automatique sans préavis
+   - Absence de clause de résiliation
+
+2. Clauses financières abusives :
+   - Indemnités de résiliation disproportionnées (> 6 mois)
+   - Pénalités de retard excessives (> taux légal + 10 points)
+   - Plafonds de travaux d'urgence trop élevés
+
+3. Déséquilibre contractuel :
+   - Clause attributive de compétence abusive
+   - Clause pénale disproportionnée
+   - Exclusion de responsabilité illégale
+
+4. Non-conformité réglementaire :
+   - Absence d'obligations légales (loi ELAN, loi Climat)
+   - Clauses contraires à l'ordre public
+   - Non-respect des règles de copropriété
+
+DOCUMENT À ANALYSER :
 {text[:5000]}
 
-Réponds avec une liste JSON d'objets.
+Réponds UNIQUEMENT avec un JSON array strict au format suivant (pas de markdown, pas de texte avant/après) :
+
+[
+  {{
+    "severity": "critical",
+    "category": "temporel",
+    "description": "Clause de reconduction tacite de 3 ans sans préavis minimum de 6 mois",
+    "legal_reference": "Article 1210 Code civil, Loi ALUR 2014",
+    "recommendation": "Exiger une durée initiale de 3 ans maximum avec résiliation à tout moment moyennant préavis de 3 mois"
+  }},
+  {{
+    "severity": "high",
+    "category": "financier",
+    "description": "Indemnité de résiliation anticipée de 12 mois d'honoraires",
+    "legal_reference": "Jurisprudence : clause pénale disproportionnée",
+    "recommendation": "Négocier une indemnité plafonnée à 3 mois maximum ou suppression totale"
+  }}
+]
+
+Severity : "low" | "medium" | "high" | "critical"
+Category : "financier" | "temporel" | "responsabilité" | "conformité" | "déséquilibre" | "autre"
 """
 
             response = await self.llm_service.generate_response(
                 prompt=prompt,
-                temperature=0.2,
-                max_tokens=1000
+                temperature=0.1,  # Plus déterministe
+                max_tokens=1500  # Plus d'espace pour détails
             )
 
-            # Parse JSON
+            # Parse JSON with robust error handling
             import json
+
+            # Clean response (remove markdown code blocks if present)
+            cleaned_response = response.strip()
+            if cleaned_response.startswith("```"):
+                # Remove markdown code fences
+                cleaned_response = re.sub(r'^```(?:json)?\s*\n', '', cleaned_response)
+                cleaned_response = re.sub(r'\n```\s*$', '', cleaned_response)
+
             try:
-                risks = json.loads(response)
-                return risks if isinstance(risks, list) else []
+                risks = json.loads(cleaned_response)
+                if isinstance(risks, list):
+                    # Validate and enrich each risk
+                    validated_risks = []
+                    for risk in risks:
+                        if isinstance(risk, dict) and "severity" in risk and "description" in risk:
+                            # Add legal_reference if missing
+                            if "legal_reference" not in risk:
+                                risk["legal_reference"] = "À vérifier"
+                            validated_risks.append(risk)
+                    return validated_risks
+                return []
             except json.JSONDecodeError:
-                match = re.search(r'\[.*\]', response, re.DOTALL)
+                # Fallback: try to extract JSON array from response
+                match = re.search(r'\[\s*\{.*?\}\s*\]', cleaned_response, re.DOTALL)
                 if match:
-                    risks = json.loads(match.group())
-                    return risks if isinstance(risks, list) else []
+                    try:
+                        risks = json.loads(match.group())
+                        return risks if isinstance(risks, list) else []
+                    except json.JSONDecodeError:
+                        logger.warning("risks_json_parse_failed", response_preview=cleaned_response[:200])
+                        return []
                 else:
+                    logger.warning("risks_no_json_found", response_preview=cleaned_response[:200])
                     return []
 
         except Exception as e:
@@ -834,6 +1474,136 @@ Réponds de manière claire, précise et professionnelle. Si l'information n'est
 
         return qa_results
 
+    async def compare_multiple_legal_documents(
+        self,
+        documents: List[str],
+        doc_names: Optional[List[str]] = None,
+        comparison_type: str = "general"
+    ) -> Dict[str, Any]:
+        """
+        Compare 3-5 legal documents simultaneously.
+
+        Args:
+            documents: List of 3-5 document texts
+            doc_names: Optional list of document names (e.g., ["Contrat A", "Contrat B", ...])
+            comparison_type: Type of comparison ("general", "clauses", "risks", "pricing")
+
+        Returns:
+            Dict with:
+                - success: Boolean
+                - comparison_table: Matrix comparison table
+                - best_document: Recommended document with justification
+                - differences: List of key differences by category
+                - summary: Executive summary
+        """
+        try:
+            num_docs = len(documents)
+            if num_docs < 3 or num_docs > 5:
+                return {
+                    "success": False,
+                    "error": f"Nombre de documents invalide : {num_docs} (attendu: 3-5)",
+                    "comparison_table": [],
+                    "best_document": None,
+                    "differences": [],
+                    "summary": ""
+                }
+
+            # Generate default names if not provided
+            if not doc_names:
+                doc_names = [f"Document {i+1}" for i in range(num_docs)]
+
+            logger.info("multi_document_comparison_started", count=num_docs)
+
+            # Build comparison prompt
+            docs_text = ""
+            for idx, (doc, name) in enumerate(zip(documents, doc_names)):
+                docs_text += f"\n\n### {name} :\n{doc[:2000]}\n"
+
+            prompt = f"""Tu es un expert juridique spécialisé en comparaison de contrats immobiliers.
+
+Compare ces {num_docs} documents et crée un tableau récapitulatif détaillé.
+
+{docs_text}
+
+Réponds en format JSON strict :
+{{
+  "comparison_table": [
+    {{
+      "criteria": "Durée du contrat",
+      "{doc_names[0]}": "3 ans",
+      "{doc_names[1]}": "1 an",
+      {"".join([f'"{doc_names[i]}": "value",' for i in range(2, num_docs)])}
+      "importance": "high"
+    }}
+  ],
+  "best_document": {{
+    "name": "{doc_names[0]}",
+    "score": 8.5,
+    "reasons": [
+      "Durée raisonnable",
+      "Pas de clause abusive",
+      "Prix compétitif"
+    ]
+  }},
+  "differences_by_category": {{
+    "duree_et_resiliation": ["Différence 1", "Différence 2"],
+    "conditions_financieres": ["Différence 1"],
+    "obligations_parties": ["Différence 1"],
+    "clauses_specifiques": ["Différence 1"]
+  }},
+  "summary": "Résumé en 3-4 phrases de la comparaison"
+}}
+
+IMPORTANT : Compare TOUS les aspects clés (durée, prix, clauses, obligations, résiliation, garanties)."""
+
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=2000
+            )
+
+            # Parse JSON
+            cleaned_response = response.strip()
+            if cleaned_response.startswith("```"):
+                cleaned_response = re.sub(r'^```(?:json)?\s*\n', '', cleaned_response)
+                cleaned_response = re.sub(r'\n```\s*$', '', cleaned_response)
+
+            try:
+                result = json.loads(cleaned_response)
+
+                logger.info("multi_document_comparison_completed", best_doc=result.get("best_document", {}).get("name"))
+
+                return {
+                    "success": True,
+                    "comparison_table": result.get("comparison_table", []),
+                    "best_document": result.get("best_document", {}),
+                    "differences": result.get("differences_by_category", {}),
+                    "summary": result.get("summary", ""),
+                    "document_count": num_docs
+                }
+
+            except json.JSONDecodeError:
+                logger.error("multi_comparison_json_parse_failed", response_preview=cleaned_response[:200])
+                return {
+                    "success": False,
+                    "error": "Erreur de parsing JSON",
+                    "comparison_table": [],
+                    "best_document": None,
+                    "differences": {},
+                    "summary": cleaned_response[:500]
+                }
+
+        except Exception as e:
+            logger.error("multi_document_comparison_failed", error=str(e))
+            return {
+                "success": False,
+                "error": str(e),
+                "comparison_table": [],
+                "best_document": None,
+                "differences": {},
+                "summary": ""
+            }
+
     async def compare_legal_documents(
         self,
         doc1: str,
@@ -841,7 +1611,7 @@ Réponds de manière claire, précise et professionnelle. Si l'information n'est
         comparison_type: str = "general"
     ) -> Dict[str, Any]:
         """
-        Compare two legal documents
+        Compare two legal documents (legacy method - use compare_multiple_legal_documents for 3+).
 
         Args:
             doc1: First document text
@@ -1126,11 +1896,44 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
         try:
             logger.info("jurisprudence_search_started", question=legal_question[:100])
 
-            # Note: In production, this would connect to a real jurisprudence database
-            # (e.g., Légifrance API, Doctrine.fr API, or internal RAG with jurisprudence)
-            # For now, we'll use a combination of RAG + Web search
+            # Multi-source jurisprudence search:
+            # 1. Légifrance API (official French legal database)
+            # 2. RAG (if jurisprudence documents are indexed)
+            # 3. Web search (fallback/complement)
 
-            # Try RAG first (if jurisprudence documents are indexed)
+            # 1. Try Légifrance API first (if configured)
+            legifrance_cases = []
+            legifrance_service = get_legifrance_service()
+            if legifrance_service:
+                try:
+                    logger.info("querying_legifrance_api")
+                    legifrance_result = await legifrance_service.search_jurisprudence(
+                        query=legal_question,
+                        case_type=case_type,
+                        max_results=5
+                    )
+
+                    if legifrance_result.get("success") and legifrance_result.get("results"):
+                        legifrance_cases = [
+                            {
+                                "source": "Légifrance (Officiel)",
+                                "title": case.get("title", ""),
+                                "jurisdiction": case.get("jurisdiction", ""),
+                                "date": case.get("date", ""),
+                                "numero": case.get("numero", ""),
+                                "excerpt": case.get("summary", "")[:400],
+                                "url": case.get("url", ""),
+                                "relevance": 0.95  # High relevance for official sources
+                            }
+                            for case in legifrance_result["results"]
+                        ]
+                        logger.info("legifrance_cases_found", count=len(legifrance_cases))
+                except Exception as e:
+                    logger.warning("legifrance_search_failed", error=str(e))
+            else:
+                logger.info("legifrance_not_configured", message="Add LEGIFRANCE_CLIENT_ID and LEGIFRANCE_CLIENT_SECRET to use official API")
+
+            # 2. Try RAG (if jurisprudence documents are indexed)
             rag_cases = []
             try:
                 rag_results = await self.rag_service.search_similar_chunks(
@@ -1174,8 +1977,8 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
             except Exception as e:
                 logger.warning("web_search_failed_for_jurisprudence", error=str(e))
 
-            # Combine and format results
-            all_cases = rag_cases + web_cases
+            # Combine and format results (prioritize Légifrance)
+            all_cases = legifrance_cases + rag_cases + web_cases
 
             if not all_cases:
                 return {
@@ -1192,6 +1995,15 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
             for idx, case in enumerate(all_cases, 1):
                 summary_message += f"### {idx}. {case['title']}\n"
                 summary_message += f"**Source** : {case['source']}\n"
+
+                # Additional fields for Légifrance cases
+                if case.get("jurisdiction"):
+                    summary_message += f"**Juridiction** : {case['jurisdiction']}\n"
+                if case.get("date"):
+                    summary_message += f"**Date** : {case['date']}\n"
+                if case.get("numero"):
+                    summary_message += f"**Numéro** : {case['numero']}\n"
+
                 if case.get("url"):
                     summary_message += f"**Lien** : [{case['url']}]({case['url']})\n"
                 summary_message += f"**Pertinence** : {int(case['relevance']*100)}%\n"
