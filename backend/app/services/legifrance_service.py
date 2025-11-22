@@ -40,11 +40,17 @@ class LegifranceService:
         """
         self.client_id = client_id
         self.client_secret = client_secret
-        self.redis_client = get_redis_client()
 
-        # API endpoints
-        self.token_url = "https://oauth.aife.economie.gouv.fr/api/oauth/token"
-        self.api_base_url = "https://api.aife.economie.gouv.fr/dila/legifrance/lf-engine-app"
+        # Try to get Redis client (optional)
+        try:
+            self.redis_client = get_redis_client()
+        except Exception as e:
+            logger.warning("redis_client_init_failed", error=str(e))
+            self.redis_client = None
+
+        # API endpoints (PISTE Production)
+        self.token_url = "https://oauth.piste.gouv.fr/api/oauth/token"
+        self.api_base_url = "https://api.piste.gouv.fr/dila/legifrance/lf-engine-app"
 
         # Token cache key
         self.token_cache_key = "legifrance:access_token"
@@ -63,33 +69,36 @@ class LegifranceService:
         Returns:
             Valid access token
         """
-        try:
-            # Try to get cached token
-            if self.redis_client:
+        # Try to get cached token (only if Redis is available)
+        if self.redis_client:
+            try:
                 cached_token_data = await self.redis_client.get(self.token_cache_key)
                 if cached_token_data:
                     token_data = json.loads(cached_token_data)
                     logger.info("legifrance_token_cache_hit")
                     return token_data["access_token"]
+            except Exception as e:
+                logger.warning("legifrance_cache_read_error", error=str(e))
+                # Continue without cache
 
-            # Request new token
-            logger.info("legifrance_requesting_new_token")
-            token_data = await self._request_new_token()
+        # Request new token
+        logger.info("legifrance_requesting_new_token")
+        token_data = await self._request_new_token()
 
-            # Cache token for 55 minutes (5 min buffer)
-            if self.redis_client:
+        # Cache token for 55 minutes (only if Redis available)
+        if self.redis_client:
+            try:
                 await self.redis_client.setex(
                     self.token_cache_key,
                     3300,  # 55 minutes in seconds
                     json.dumps(token_data)
                 )
                 logger.info("legifrance_token_cached", expires_in=3300)
+            except Exception as e:
+                logger.warning("legifrance_cache_write_error", error=str(e))
+                # Continue without cache
 
-            return token_data["access_token"]
-
-        except Exception as e:
-            logger.error("legifrance_token_error", error=str(e))
-            raise
+        return token_data["access_token"]
 
     async def _request_new_token(self) -> Dict[str, Any]:
         """
@@ -105,7 +114,7 @@ class LegifranceService:
                     "grant_type": "client_credentials",
                     "client_id": self.client_id,
                     "client_secret": self.client_secret,
-                    "scope": "openid"
+                    "scope": "openid resource.READ"
                 },
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded"
@@ -159,7 +168,9 @@ class LegifranceService:
             # Build query with filters
             full_query = f"{query} {case_type}"
 
+            # Simplified payload based on working ACCO example
             payload = {
+                "fond": "JURI",  # JURI = Jurisprudence judiciaire
                 "recherche": {
                     "champs": [
                         {
@@ -167,22 +178,16 @@ class LegifranceService:
                             "criteres": [
                                 {
                                     "typeRecherche": "UN_DES_MOTS",
-                                    "valeur": full_query,
+                                    "valeur": query,  # Don't combine with case_type
                                     "operateur": "ET"
                                 }
-                            ]
+                            ],
+                            "operateur": "ET"
                         }
                     ],
-                    "filtres": [
-                        {
-                            "facette": "NATURE",
-                            "valeurs": ["ARRET", "DECISION"]  # Court decisions
-                        }
-                    ],
+                    "operateur": "ET",
                     "pageNumber": 1,
-                    "pageSize": max_results,
-                    "sort": "PERTINENCE",
-                    "typePagination": "DEFAULT"
+                    "pageSize": max_results
                 }
             }
 
@@ -201,13 +206,33 @@ class LegifranceService:
             # Parse results
             results = []
             for item in data.get("results", []):
+                # Extract title from titles array
+                title = ""
+                if item.get("titles") and len(item["titles"]) > 0:
+                    title = item["titles"][0].get("title", "")
+
+                # Extract summary from resumePrincipal or text
+                summary = ""
+                if item.get("resumePrincipal") and len(item["resumePrincipal"]) > 0:
+                    summary = item["resumePrincipal"][0].replace("<br/>", "")
+                elif item.get("text"):
+                    # Clean HTML tags from text
+                    import re
+                    text_clean = re.sub(r'<[^>]+>', '', item["text"])
+                    summary = text_clean[:300] + "..." if len(text_clean) > 300 else text_clean
+
+                # Get ID for URL construction
+                doc_id = ""
+                if item.get("titles") and len(item["titles"]) > 0:
+                    doc_id = item["titles"][0].get("id", "")
+
                 results.append({
-                    "title": item.get("title", ""),
-                    "summary": item.get("summary", ""),
-                    "date": item.get("dateDecision", ""),
-                    "jurisdiction": item.get("juridiction", ""),
-                    "numero": item.get("numero", ""),
-                    "url": item.get("url", "")
+                    "id": doc_id,
+                    "title": title,
+                    "summary": summary,
+                    "nature": item.get("nature", ""),
+                    "date": item.get("date", ""),
+                    "url": f"https://www.legifrance.gouv.fr/juri/id/{doc_id}" if doc_id else ""
                 })
 
             logger.info("legifrance_search_success",
