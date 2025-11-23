@@ -33,32 +33,42 @@ class EmailAgent:
         self,
         user_request: str,
         db: AsyncSession,
-        recipients: List[Dict[str, Any]] = None
+        recipients: List[Dict[str, Any]] = None,
+        conversation_history: List[Dict[str, Any]] = None,
+        workflow_context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
-        Generate email draft from user request
+        Generate email draft from user request with full conversational context
 
         Args:
             user_request: User's email request (ex: "Envoyer email pour dégât des eaux")
             db: Database session
             recipients: Optional list of recipients
+            conversation_history: Recent conversation messages for context
+            workflow_context: Workflow data (from WorkflowAgent) if available
 
         Returns:
             Dict with success, message, email draft data
         """
         try:
-            # Step 1: Extract email purpose and context
-            email_context = await self._extract_context(user_request)
+            # Step 1: Extract email purpose and context (with conversation history)
+            email_context = await self._extract_context(
+                user_request=user_request,
+                conversation_history=conversation_history,
+                workflow_context=workflow_context
+            )
 
             # Step 2: Get recipients if not provided
             if not recipients:
                 recipients = await self._get_recipients(user_request, email_context, db)
 
-            # Step 3: Generate email content
+            # Step 3: Generate email content (with enriched context)
             email_draft = await self._generate_content(
                 user_request=user_request,
                 context=email_context,
-                recipients=recipients
+                recipients=recipients,
+                conversation_history=conversation_history,
+                workflow_context=workflow_context
             )
 
             return {
@@ -80,20 +90,83 @@ class EmailAgent:
                 "message": f"Erreur lors de la génération de l'email: {str(e)}"
             }
 
-    async def _extract_context(self, user_request: str) -> Dict[str, Any]:
-        """Extract email purpose, tone, urgency from user request"""
-        prompt = f"""
-Analyse cette demande d'email et extrait les informations clés.
+    async def _extract_context(
+        self,
+        user_request: str,
+        conversation_history: List[Dict[str, Any]] = None,
+        workflow_context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Extract email purpose, tone, urgency from user request AND conversation history
 
-DEMANDE:
+        V2: Now captures full context from recent messages and workflow data
+        """
+        # Build conversation context string
+        conversation_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            # Take last 5 messages for context
+            recent_messages = conversation_history[-5:] if len(conversation_history) > 5 else conversation_history
+            conversation_context = "HISTORIQUE CONVERSATIONNEL RÉCENT:\n"
+            for msg in recent_messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                # Truncate long messages
+                if len(content) > 500:
+                    content = content[:500] + "..."
+                conversation_context += f"- {role.upper()}: {content}\n"
+            conversation_context += "\n"
+
+        # Build workflow context string
+        workflow_context_str = ""
+        if workflow_context:
+            workflow_context_str = "CONTEXTE DU WORKFLOW:\n"
+            if workflow_context.get("context_data"):
+                ctx_data = workflow_context["context_data"]
+                if ctx_data.get("building_name"):
+                    workflow_context_str += f"- Bâtiment: {ctx_data['building_name']}\n"
+                if ctx_data.get("building_address"):
+                    workflow_context_str += f"- Adresse: {ctx_data['building_address']}\n"
+                if ctx_data.get("apartment_number"):
+                    workflow_context_str += f"- Appartement: {ctx_data['apartment_number']}\n"
+                if ctx_data.get("floor"):
+                    workflow_context_str += f"- Étage: {ctx_data['floor']}\n"
+                if ctx_data.get("owner_name"):
+                    workflow_context_str += f"- Propriétaire: {ctx_data['owner_name']}\n"
+                if ctx_data.get("incident_type"):
+                    workflow_context_str += f"- Type d'incident: {ctx_data['incident_type']}\n"
+                if ctx_data.get("incident_description"):
+                    workflow_context_str += f"- Description: {ctx_data['incident_description']}\n"
+                if ctx_data.get("severity"):
+                    workflow_context_str += f"- Gravité: {ctx_data['severity']}\n"
+            workflow_context_str += "\n"
+
+        prompt = f"""
+Analyse cette demande d'email en prenant en compte TOUT le contexte disponible.
+
+{conversation_context}{workflow_context_str}DEMANDE ACTUELLE:
 {user_request}
+
+INSTRUCTIONS:
+1. Extrais TOUTES les informations pertinentes depuis l'historique ET le workflow
+2. Identifie le type d'email (urgence, information, relance, etc.)
+3. Détermine le ton et l'urgence appropriés
+4. Liste TOUS les points clés à inclure dans l'email
 
 Réponds en JSON avec:
 {{
-    "purpose": "Objectif de l'email (1 phrase)",
-    "tone": "professional" ou "urgent" ou "friendly",
-    "urgency": "high" ou "medium" ou "low",
-    "key_points": ["Point 1", "Point 2", ...]
+    "purpose": "Objectif précis de l'email",
+    "tone": "professional" | "urgent" | "friendly",
+    "urgency": "high" | "medium" | "low",
+    "key_points": ["Point 1", "Point 2", ...],
+    "context_summary": "Résumé du contexte en 1-2 phrases",
+    "extracted_data": {{
+        "building": "nom du bâtiment si disponible",
+        "address": "adresse si disponible",
+        "apartment": "numéro d'appartement si disponible",
+        "owner": "nom propriétaire si disponible",
+        "incident_type": "type d'incident si disponible",
+        "severity": "gravité si disponible"
+    }}
 }}
 
 JSON:
@@ -102,13 +175,19 @@ JSON:
         try:
             response = await self.llm_service.generate_response(
                 prompt=prompt,
-                max_tokens=300,
+                max_tokens=800,
                 temperature=0.3
             )
 
             # Parse JSON response
             import json
             context = json.loads(response.strip())
+
+            logger.info("context_extracted_with_history",
+                       purpose=context.get("purpose"),
+                       urgency=context.get("urgency"),
+                       has_conversation_history=bool(conversation_history),
+                       has_workflow_context=bool(workflow_context))
 
             return context
 
@@ -118,7 +197,9 @@ JSON:
                 "purpose": user_request,
                 "tone": "professional",
                 "urgency": "medium",
-                "key_points": []
+                "key_points": [],
+                "context_summary": "",
+                "extracted_data": {}
             }
 
     async def _get_recipients(
@@ -157,53 +238,130 @@ JSON:
         self,
         user_request: str,
         context: Dict[str, Any],
-        recipients: List[Dict[str, Any]]
+        recipients: List[Dict[str, Any]],
+        conversation_history: List[Dict[str, Any]] = None,
+        workflow_context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
-        """Generate email subject and body"""
+        """
+        Generate email subject and body with FULL contextual awareness
+
+        V2: Uses conversation history and workflow context for rich, detailed emails
+        """
         tone_instructions = {
             "professional": "Ton professionnel et formel",
-            "urgent": "Ton urgent mais poli, marquer clairement l'urgence",
+            "urgent": "Ton urgent mais poli, marquer clairement l'urgence avec emojis (🚨, ⚠️)",
             "friendly": "Ton amical et chaleureux"
         }
 
+        # Build detailed context section
+        context_section = ""
+        extracted_data = context.get("extracted_data", {})
+        if extracted_data:
+            context_section += "\nDÉTAILS DU CONTEXTE:\n"
+            if extracted_data.get("building"):
+                context_section += f"- Bâtiment: {extracted_data['building']}\n"
+            if extracted_data.get("address"):
+                context_section += f"- Adresse: {extracted_data['address']}\n"
+            if extracted_data.get("apartment"):
+                context_section += f"- Appartement: {extracted_data['apartment']}\n"
+            if extracted_data.get("owner"):
+                context_section += f"- Propriétaire: {extracted_data['owner']}\n"
+            if extracted_data.get("incident_type"):
+                context_section += f"- Type d'incident: {extracted_data['incident_type']}\n"
+            if extracted_data.get("severity"):
+                context_section += f"- Gravité: {extracted_data['severity']}\n"
+
+        # Add workflow context if available
+        if workflow_context and workflow_context.get("context_data"):
+            ctx_data = workflow_context["context_data"]
+            context_section += "\nCONTEXTE DU WORKFLOW:\n"
+            for key, value in ctx_data.items():
+                if value and key not in ["actions_taken", "affected_floors"]:
+                    context_section += f"- {key}: {value}\n"
+
+        # Build key points section
+        key_points_section = ""
+        if context.get("key_points"):
+            key_points_section = "\nPOINTS CLÉS À INCLURE:\n"
+            for point in context["key_points"]:
+                key_points_section += f"- {point}\n"
+
+        # Determine urgency markers
+        urgency_marker = ""
+        if context.get("urgency") == "high":
+            urgency_marker = "🚨 URGENT 🚨"
+        elif context.get("urgency") == "medium":
+            urgency_marker = "⚠️"
+
         prompt = f"""
-Génère un email professionnel pour un syndic de copropriété.
+Tu es un assistant intelligent pour un syndic de copropriété. Tu dois générer un EMAIL RICHE ET CONTEXTUEL.
 
-CONTEXTE:
-- Demande: {user_request}
-- Objectif: {context.get('purpose', 'Information')}
-- Ton: {tone_instructions.get(context.get('tone', 'professional'))}
-- Urgence: {context.get('urgency', 'medium')}
-- Points clés: {', '.join(context.get('key_points', []))}
-- Nombre de destinataires: {len(recipients)}
+DEMANDE UTILISATEUR:
+{user_request}
 
-RÈGLES CRITIQUES:
-⚠️ N'INVENTE AUCUNE INFORMATION qui n'est pas explicitement fournie ci-dessus
-⚠️ Si des détails manquent (ampleur des dégâts, cause, solutions, etc.), NE PAS les inventer
-⚠️ Utilise des formulations prudentes : "nous évaluons", "nous vous tiendrons informés", "des détails suivront"
-⚠️ Ne mentionne PAS d'actions déjà prises si elles ne sont pas explicitement mentionnées dans la demande
+OBJECTIF DE L'EMAIL:
+{context.get('purpose', 'Information')}
 
-Génère:
-1. Un SUJET court et clair (max 60 caractères)
-2. Un CORPS d'email structuré avec:
-   - Formule de politesse adaptée
-   - Corps du message clair et professionnel basé UNIQUEMENT sur les informations fournies
-   - Points clés bien organisés
-   - Signature "Le Syndic"
+TON: {tone_instructions.get(context.get('tone', 'professional'))}
+URGENCE: {context.get('urgency', 'medium')} {urgency_marker}
+{context_section}{key_points_section}
+CONTEXTE ADDITIONNEL:
+{context.get('context_summary', '')}
+
+NOMBRE DE DESTINATAIRES: {len(recipients)}
+
+RÈGLES CRITIQUES POUR UN EMAIL DE QUALITÉ:
+✅ UTILISE TOUTES les informations de contexte disponibles ci-dessus
+✅ Sois PRÉCIS et DÉTAILLÉ (adresses, noms, numéros d'appartement, etc.)
+✅ Pour les urgences: utilise des emojis 🚨 et marque clairement la gravité
+✅ Structure l'email de manière professionnelle mais complète
+✅ Inclus TOUS les détails pertinents (bâtiment, adresse, contact, nature du problème)
+✅ Si c'est une demande d'intervention: sois très clair sur ce qui est attendu
+✅ Si des coordonnées sont disponibles: inclus-les pour faciliter le contact
+⚠️ N'invente PAS d'informations qui ne sont pas dans le contexte
+⚠️ Si un détail manque, ne pas l'inventer mais rester factuel
+
+EXEMPLE DE STRUCTURE POUR UNE URGENCE:
+SUJET: 🚨 URGENT - [Type d'intervention] - [Bâtiment]
+
+CORPS:
+Madame, Monsieur,
+
+Nous faisons appel à vos services pour une intervention urgente concernant [incident précis].
+
+**Détails de l'incident:**
+- Bâtiment: [nom]
+- Adresse: [adresse complète]
+- Appartement: [numéro]
+- Propriétaire: [nom + coordonnées si disponibles]
+- Nature: [description détaillée]
+
+**Action requise:**
+[Description claire de ce qui est attendu]
+
+**Contact sur place:**
+[Coordonnées si disponibles]
+
+Merci de nous confirmer votre disponibilité dans les plus brefs délais.
+
+Cordialement,
+Le Syndic
+
+---
+
+GÉNÈRE MAINTENANT L'EMAIL COMPLET en suivant ces règles:
 
 Format de réponse:
 SUJET: [sujet ici]
 
 CORPS:
 [corps ici]
-
-Ne pas inclure les adresses emails dans le corps.
 """
 
         try:
             response = await self.llm_service.generate_response(
                 prompt=prompt,
-                max_tokens=800,
+                max_tokens=1500,  # Increased for richer emails
                 temperature=0.6
             )
 
@@ -223,8 +381,14 @@ Ne pas inclure les adresses emails dans le corps.
 
             body = "\n".join(body_lines).strip()
 
+            logger.info("email_content_generated",
+                       subject=subject,
+                       body_length=len(body),
+                       urgency=context.get("urgency"),
+                       has_context=bool(context_section))
+
             return {
-                "subject": subject or "Information Copropriété",
+                "subject": subject or f"{urgency_marker} Information Copropriété",
                 "body": body or response,
                 "tone": context.get("tone", "professional"),
                 "urgency": context.get("urgency", "medium")

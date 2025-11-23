@@ -480,7 +480,7 @@ class OrchestratorAgent:
 
             elif intent == IntentType.SEND_EMAIL:
                 return await self._handle_send_email_intelligent(
-                    user_input, db, context, thought_stream, state_manager
+                    user_input, db, context, thought_stream, state_manager, conversation_history
                 )
 
             elif intent == IntentType.REQUEST_QUOTES:
@@ -858,7 +858,8 @@ class OrchestratorAgent:
         db: AsyncSession,
         context: Dict[str, Any] = None,
         thought_stream = None,
-        state_manager = None
+        state_manager = None,
+        conversation_history: List[Dict[str, Any]] = None
     ) -> AgentResponse:
         """
         Intelligent email handling with entity extraction and query planning
@@ -1021,15 +1022,21 @@ class OrchestratorAgent:
                     context = {}
                 context["emails_available"] = recipients_found
 
-            # Step 4: Generate email draft
-            return await self._handle_send_email(user_input, db, context)
+            # Step 4: Generate email draft with conversation history
+            return await self._handle_send_email(user_input, db, context, conversation_history)
 
         except Exception as e:
             logger.error("intelligent_email_handling_failed", error=str(e), exc_info=True)
             # Fallback to standard email handling
-            return await self._handle_send_email(user_input, db, context)
+            return await self._handle_send_email(user_input, db, context, conversation_history)
 
-    async def _handle_send_email(self, user_input: str, db: AsyncSession, context: Dict[str, Any] = None) -> AgentResponse:
+    async def _handle_send_email(
+        self,
+        user_input: str,
+        db: AsyncSession,
+        context: Dict[str, Any] = None,
+        conversation_history: List[Dict[str, Any]] = None
+    ) -> AgentResponse:
         """
         Handle email generation with human-in-the-loop validation
 
@@ -1078,8 +1085,36 @@ class OrchestratorAgent:
                     recipient_strs.append(str(recipient))
             enriched_input += f"\n\nDestinataires suggérés: {', '.join(recipient_strs)}"
 
-        # Step 1: Generate email draft
-        email_draft = await email_agent.generate_email(enriched_input, db)
+        # Extract workflow_context if available
+        workflow_context = context.get("workflow_data") if context else None
+
+        # If no workflow_context in immediate context, try to extract from conversation history
+        # Look for recent workflow responses (WorkflowAgent V2)
+        if not workflow_context and conversation_history:
+            # Search backwards through last 5 messages
+            for msg in reversed(conversation_history[-5:]):
+                if msg.get("role") == "assistant":
+                    # Check if message contains workflow data (from state/metadata)
+                    msg_metadata = msg.get("metadata", {})
+                    if "workflow_data" in msg_metadata:
+                        workflow_context = msg_metadata["workflow_data"]
+                        logger.info("workflow_context_extracted_from_history")
+                        break
+                    # Also check response data field
+                    msg_data = msg.get("data", {})
+                    if "workflow_data" in msg_data:
+                        workflow_context = msg_data["workflow_data"]
+                        logger.info("workflow_context_extracted_from_message_data")
+                        break
+
+        # Step 1: Generate email draft with full context
+        email_draft = await email_agent.generate_email(
+            user_request=enriched_input,
+            db=db,
+            recipients=None,
+            conversation_history=conversation_history,
+            workflow_context=workflow_context
+        )
         agents_used.append("email_agent")
 
         # If draft doesn't have recipients but we have some from context, add them
@@ -1175,17 +1210,17 @@ class OrchestratorAgent:
         )
         agents_used.append("template_agent")
 
-        # Step 3: Trigger N8N workflow for bulk quote requests
-        workflow_result = await workflow_agent.trigger_bulk_quotes(
-            vendors=vendors_result.get("data", {}).get("vendors", []),
-            message=template_result["message"]
-        )
-        agents_used.append("workflow_agent")
+        # Step 3: Return prepared email drafts for user validation
+        # TODO: Implement N8N workflow trigger for bulk sending after user confirms
 
         return AgentResponse(
-            success=workflow_result["success"],
-            message=workflow_result["message"],
-            data=workflow_result.get("data"),
+            success=True,
+            message=template_result["message"],
+            data={
+                "vendors": vendors_result.get("data", {}).get("vendors", []),
+                "email_template": template_result.get("data", {}),
+                "next_action": "validate_and_send"
+            },
             agents_used=agents_used
         )
 
@@ -1402,46 +1437,52 @@ class OrchestratorAgent:
         conversation_history: List[Dict[str, str]] = None
     ) -> AgentResponse:
         """
-        Handle workflow automation triggers with intelligent classification
+        Handle workflow automation triggers with intelligent to-do list generation
 
-        Enhanced with:
-        - LLM-based workflow family classification
-        - Standardized payload generation
-        - ThoughtStream integration for real-time updates
-        - N8N webhook triggering with callback support
+        V2 Architecture (inspired by LegalAgent):
+        - WorkflowAgent V2 analyzes the problem
+        - Classifies workflow type (emergency, communication, maintenance, etc.)
+        - Extracts context entities
+        - Generates intelligent to-do list
+        - Returns enriched workflow for user validation
         """
         try:
-            from .workflow_agent import WorkflowAgent
+            from .workflow_agent_v2 import WorkflowAgentV2
 
-            workflow_agent = WorkflowAgent()
+            # Initialize WorkflowAgent V2
+            workflow_agent = WorkflowAgentV2()
 
-            # Extract conversation_id from context if available
-            conversation_id = context.get("conversation_id") if context else None
+            logger.info("workflow_agent_v2_processing", query=user_input[:100])
 
-            # Call enhanced WorkflowAgent with full context
+            # Call WorkflowAgent V2 with full context
             result = await workflow_agent.process_request(
                 user_input=user_input,
                 context=context,
-                thought_stream=thought_stream,
-                conversation_id=conversation_id,
-                tenant_id=context.get("tenant_id", "default") if context else "default",
-                user_id=context.get("user_id", "anonymous") if context else "anonymous"
+                db=db,
+                thought_stream=thought_stream
             )
 
+            # Return formatted response
             return AgentResponse(
                 success=result["success"],
                 message=result["message"],
-                data=result.get("data", {}),
-                agents_used=["workflow_agent"],
-                confidence=0.85
+                data={
+                    "workflow_type": result.get("workflow_type"),
+                    "subtype": result.get("subtype"),
+                    "confidence": result.get("confidence"),
+                    "context_data": result.get("context_data", {}),
+                    "todo_list": result.get("todo_list", {})
+                },
+                agents_used=["workflow_agent_v2"],
+                confidence=result.get("confidence", 0.85)
             )
 
         except Exception as e:
-            logger.error("workflow_trigger_failed", error=str(e), exc_info=True)
+            logger.error("workflow_agent_v2_failed", error=str(e), exc_info=True)
             return AgentResponse(
                 success=False,
-                message=f"Erreur lors du déclenchement du workflow: {str(e)}",
-                agents_used=["workflow_agent"]
+                message=f"Erreur lors de l'analyse du workflow: {str(e)}",
+                agents_used=["workflow_agent_v2"]
             )
 
     # ========== NEW PHASE 2 AGENT HANDLERS ==========
