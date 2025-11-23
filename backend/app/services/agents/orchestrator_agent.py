@@ -487,7 +487,9 @@ class OrchestratorAgent:
                 return await self._handle_request_quotes(user_input, db)
 
             elif intent == IntentType.TRIGGER_WORKFLOW:
-                return await self._handle_trigger_workflow(user_input, db)
+                return await self._handle_trigger_workflow(
+                    user_input, db, context, thought_stream, conversation_history
+                )
 
             # NEW Phase 2 agents
             elif intent == IntentType.WEB_SEARCH:
@@ -1391,18 +1393,56 @@ class OrchestratorAgent:
             ]
         )
 
-    async def _handle_trigger_workflow(self, user_input: str, db: AsyncSession) -> AgentResponse:
-        """Handle explicit workflow triggers"""
-        from .workflow_agent import WorkflowAgent
+    async def _handle_trigger_workflow(
+        self,
+        user_input: str,
+        db: AsyncSession,
+        context: Optional[Dict[str, Any]] = None,
+        thought_stream: Optional[ThoughtStream] = None,
+        conversation_history: List[Dict[str, str]] = None
+    ) -> AgentResponse:
+        """
+        Handle workflow automation triggers with intelligent classification
 
-        workflow_agent = WorkflowAgent()
-        result = await workflow_agent.trigger_generic(user_input, {})
+        Enhanced with:
+        - LLM-based workflow family classification
+        - Standardized payload generation
+        - ThoughtStream integration for real-time updates
+        - N8N webhook triggering with callback support
+        """
+        try:
+            from .workflow_agent import WorkflowAgent
 
-        return AgentResponse(
-            success=result["success"],
-            message=result["message"],
-            agents_used=["workflow_agent"]
-        )
+            workflow_agent = WorkflowAgent()
+
+            # Extract conversation_id from context if available
+            conversation_id = context.get("conversation_id") if context else None
+
+            # Call enhanced WorkflowAgent with full context
+            result = await workflow_agent.process_request(
+                user_input=user_input,
+                context=context,
+                thought_stream=thought_stream,
+                conversation_id=conversation_id,
+                tenant_id=context.get("tenant_id", "default") if context else "default",
+                user_id=context.get("user_id", "anonymous") if context else "anonymous"
+            )
+
+            return AgentResponse(
+                success=result["success"],
+                message=result["message"],
+                data=result.get("data", {}),
+                agents_used=["workflow_agent"],
+                confidence=0.85
+            )
+
+        except Exception as e:
+            logger.error("workflow_trigger_failed", error=str(e), exc_info=True)
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors du déclenchement du workflow: {str(e)}",
+                agents_used=["workflow_agent"]
+            )
 
     # ========== NEW PHASE 2 AGENT HANDLERS ==========
 

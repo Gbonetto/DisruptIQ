@@ -14,7 +14,7 @@ import structlog
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.monitoring import init_sentry, is_sentry_enabled
-from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, conversations  # removed export - file doesn't exist
+from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, conversations, n8n_callback  # removed export - file doesn't exist
 # from app.api.routes import invoices  # TODO: Create invoices route
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document, Conversation, Message
@@ -222,6 +222,7 @@ app.include_router(coproprietes.router, prefix="/api/coproprietes", tags=["Copro
 app.include_router(coproprietaires.router, prefix="/api/coproprietaires", tags=["Copropriétaires"])
 app.include_router(cache.router, prefix="/api/cache", tags=["Cache Management"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["N8N Webhooks"])
+app.include_router(n8n_callback.router, prefix="/api/n8n/callback", tags=["N8N Callbacks"])
 app.include_router(webhook_test.router, prefix="/api/webhook-test", tags=["Webhook Testing"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Administration"])
 app.include_router(sql_tables.router, prefix="/api/sql", tags=["SQL Table Management"])

@@ -11,6 +11,7 @@ services:
       POSTGRES_PASSWORD: disruptiq_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./n8n/init-db.sql:/docker-entrypoint-initdb.d/02-init-n8n.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
@@ -44,6 +45,57 @@ services:
     environment:
       QDRANT__SERVICE__GRPC_PORT: 6334
 
+  # N8N Workflow Automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: disruptiq_n8n
+    environment:
+      # Basic Configuration
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://n8n:5678/
+
+      # Database - Use PostgreSQL for persistence
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: disruptiq
+      DB_POSTGRESDB_PASSWORD: disruptiq_password
+
+      # Security
+      N8N_BASIC_AUTH_ACTIVE: ${N8N_BASIC_AUTH_ACTIVE:-true}
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:-disruptiq_n8n_2024}
+
+      # Execution
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: true
+
+      # Timezone (Paris)
+      GENERIC_TIMEZONE: Europe/Paris
+      TZ: Europe/Paris
+
+      # DisruptIQ Integration
+      DISRUPTIQ_API_URL: http://backend:8000
+      DISRUPTIQ_WEBHOOK_TOKEN: ${N8N_WEBHOOK_AUTH_TOKEN}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/home/node/.n8n/workflows
+    ports:
+      - "5678:5678"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
   # FastAPI Backend
   backend:
     build:
@@ -63,9 +115,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       # Anthropic (Deprecated)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      # N8N
-      N8N_WEBHOOK_BASE_URL: ${N8N_WEBHOOK_BASE_URL}
+      # N8N - Internal Docker network URL
+      N8N_WEBHOOK_BASE_URL: http://n8n:5678
       N8N_WEBHOOK_AUTH_TOKEN: ${N8N_WEBHOOK_AUTH_TOKEN}
+      N8N_TIMEOUT: ${N8N_TIMEOUT:-30}
+      N8N_MAX_RETRIES: ${N8N_MAX_RETRIES:-3}
       # Security
       SECRET_KEY: ${SECRET_KEY}
       # Gmail
@@ -126,6 +180,7 @@ volumes:
   postgres_data:
   redis_data:
   qdrant_data:
+  n8n_data:
 
 networks:
   default:
