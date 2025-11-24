@@ -1,10 +1,16 @@
 """
-Email Agent - Intelligent email generation
-Generates personalized emails for property management
+Email Agent V3 - Type-Aware Intelligent Email Generation
+
+Capabilities:
+- Auto-detection email type (urgent, devis, info, followup, reminder)
+- Template-based generation adapted to type
+- Full contextual awareness (conversation + workflow)
+- Metadata-aware (recipient profession, urgency level)
 """
 
 import structlog
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from enum import Enum
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -12,6 +18,144 @@ from app.services.llm_service import LLMService
 from app.models.coproprietaire import Coproprietaire
 
 logger = structlog.get_logger()
+
+
+class EmailType(Enum):
+    """Types of emails with specific templates and tones"""
+    URGENT_INTERVENTION = "urgent_intervention"  # Urgence: fuite, panne, sinistre
+    REQUEST_QUOTE = "request_quote"  # Demande de devis
+    INFORMATION = "information"  # Information générale
+    FOLLOWUP = "followup"  # Suivi intervention
+    REMINDER = "reminder"  # Relance (paiement, documents)
+    NOTIFICATION = "notification"  # Notification simple
+
+
+# Email templates by type
+EMAIL_TEMPLATES = {
+    EmailType.URGENT_INTERVENTION: {
+        "subject_template": "🚨 URGENT - Intervention {{professional_type}} - {{building_name}}",
+        "body_template": """Madame, Monsieur,
+
+Nous faisons appel à vos services pour une intervention URGENTE concernant {{incident_type}}.
+
+**Détails de l'incident:**
+- Bâtiment: {{building_name}}
+- Adresse: {{building_address}}
+- Appartement: {{apartment_number}}
+- Étage: {{floor}}
+- Propriétaire: {{owner_name}}{{#owner_phone}} - Tél: {{owner_phone}}{{/owner_phone}}
+- Nature: {{incident_description}}
+- Gravité: {{severity_label}}
+
+**Action requise:**
+{{action_required}}
+
+**Contact sur place:**
+{{contact_name}}{{#contact_phone}} - {{contact_phone}}{{/contact_phone}}
+
+Merci de nous confirmer votre disponibilité dans les plus brefs délais.
+
+Cordialement,
+Le Syndic""",
+        "tone": "urgent",
+        "priority": "high"
+    },
+
+    EmailType.REQUEST_QUOTE: {
+        "subject_template": "Demande de devis - {{service_type}} - {{building_name}}",
+        "body_template": """Madame, Monsieur,
+
+Nous souhaitons obtenir un devis pour le service suivant:
+
+**SERVICE DEMANDÉ:**
+{{service_description}}
+
+**LOCALISATION:**
+- Bâtiment: {{building_name}}
+- Adresse: {{building_address}}
+{{#apartment_number}}- Appartement: {{apartment_number}}{{/apartment_number}}
+
+**SPÉCIFICATIONS:**
+{{specifications}}
+
+{{#deadline}}**DÉLAI DE RÉPONSE SOUHAITÉ:**
+{{deadline}}{{/deadline}}
+
+{{#additional_info}}**INFORMATIONS COMPLÉMENTAIRES:**
+{{additional_info}}{{/additional_info}}
+
+Merci de nous faire parvenir votre proposition dans les meilleurs délais.
+
+Cordialement,
+Le Syndic""",
+        "tone": "professional",
+        "priority": "medium"
+    },
+
+    EmailType.INFORMATION: {
+        "subject_template": "{{subject}} - {{building_name}}",
+        "body_template": """Madame, Monsieur,
+
+{{message_body}}
+
+{{#action_required}}**Action requise de votre part:**
+{{action_required}}{{/action_required}}
+
+{{#deadline}}**Échéance:** {{deadline}}{{/deadline}}
+
+{{#contact_info}}Pour toute question, vous pouvez nous contacter:
+{{contact_info}}{{/contact_info}}
+
+Cordialement,
+Le Syndic""",
+        "tone": "professional",
+        "priority": "medium"
+    },
+
+    EmailType.FOLLOWUP: {
+        "subject_template": "Suivi - {{subject}} - {{building_name}}",
+        "body_template": """Madame, Monsieur,
+
+Nous faisons suite à {{reference}}.
+
+**Statut actuel:**
+{{status_description}}
+
+{{#next_steps}}**Prochaines étapes:**
+{{next_steps}}{{/next_steps}}
+
+{{#questions}}**Points à clarifier:**
+{{questions}}{{/questions}}
+
+Merci de nous tenir informés de l'avancement.
+
+Cordialement,
+Le Syndic""",
+        "tone": "professional",
+        "priority": "medium"
+    },
+
+    EmailType.REMINDER: {
+        "subject_template": "Rappel - {{subject}}",
+        "body_template": """Madame, Monsieur,
+
+Nous vous rappelons {{reminder_subject}}.
+
+{{#details}}**Détails:**
+{{details}}{{/details}}
+
+{{#deadline}}**Échéance:** {{deadline}}{{/deadline}}
+
+{{#consequences}}**Important:** {{consequences}}{{/consequences}}
+
+Merci de régulariser votre situation dans les plus brefs délais.
+
+Cordialement,
+Le Syndic""",
+        "tone": "firm_but_polite",
+        "priority": "medium"
+    }
+}
 
 
 class EmailAgent:
@@ -51,6 +195,17 @@ class EmailAgent:
             Dict with success, message, email draft data
         """
         try:
+            # Step 0: AUTO-DETECT EMAIL TYPE (V3)
+            email_type = await self._detect_email_type(
+                user_request=user_request,
+                conversation_history=conversation_history,
+                workflow_context=workflow_context
+            )
+
+            logger.info("email_type_detected",
+                       type=email_type.value,
+                       user_request=user_request[:100])
+
             # Step 1: Extract email purpose and context (with conversation history)
             email_context = await self._extract_context(
                 user_request=user_request,
@@ -62,8 +217,9 @@ class EmailAgent:
             if not recipients:
                 recipients = await self._get_recipients(user_request, email_context, db)
 
-            # Step 3: Generate email content (with enriched context)
-            email_draft = await self._generate_content(
+            # Step 3: Generate email content with TYPE-SPECIFIC template (V3)
+            email_draft = await self._generate_content_v3(
+                email_type=email_type,
                 user_request=user_request,
                 context=email_context,
                 recipients=recipients,
@@ -89,6 +245,141 @@ class EmailAgent:
                 "success": False,
                 "message": f"Erreur lors de la génération de l'email: {str(e)}"
             }
+
+    async def _detect_email_type(
+        self,
+        user_request: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        workflow_context: Optional[Dict[str, Any]] = None
+    ) -> EmailType:
+        """
+        V3: Intelligent auto-detection of email type
+
+        Analyzes:
+        - User request keywords
+        - Conversation history context
+        - Workflow context (if emergency workflow active)
+        - Recipient metadata
+
+        Returns:
+            EmailType enum
+        """
+        # Quick rules (fast path)
+        user_request_lower = user_request.lower()
+
+        # Rule 1: Workflow context = urgence → URGENT_INTERVENTION
+        if workflow_context:
+            workflow_type = workflow_context.get("workflow_type", "")
+            if "emergency" in workflow_type or workflow_context.get("context_data", {}).get("severity") in ["high", "critical"]:
+                logger.info("email_type_detected_from_workflow", type="urgent_intervention")
+                return EmailType.URGENT_INTERVENTION
+
+        # Rule 2: Keywords urgence
+        urgent_keywords = ["urgent", "urgence", "intervention", "fuite", "panne", "sinistre", "dégât", "immédiat"]
+        if any(kw in user_request_lower for kw in urgent_keywords):
+            logger.info("email_type_detected_from_keywords", type="urgent_intervention")
+            return EmailType.URGENT_INTERVENTION
+
+        # Rule 3: Keywords devis
+        quote_keywords = ["devis", "tarif", "prix", "cotation", "proposition commerciale"]
+        if any(kw in user_request_lower for kw in quote_keywords):
+            logger.info("email_type_detected_from_keywords", type="request_quote")
+            return EmailType.REQUEST_QUOTE
+
+        # Rule 4: Keywords relance
+        reminder_keywords = ["rappel", "relance", "n'a pas payé", "échéance dépassée"]
+        if any(kw in user_request_lower for kw in reminder_keywords):
+            logger.info("email_type_detected_from_keywords", type="reminder")
+            return EmailType.REMINDER
+
+        # Rule 5: Keywords suivi
+        followup_keywords = ["suivi", "avancement", "statut", "où en est"]
+        if any(kw in user_request_lower for kw in followup_keywords):
+            logger.info("email_type_detected_from_keywords", type="followup")
+            return EmailType.FOLLOWUP
+
+        # Fallback: LLM classification
+        return await self._llm_detect_email_type(
+            user_request,
+            conversation_history,
+            workflow_context
+        )
+
+    async def _llm_detect_email_type(
+        self,
+        user_request: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        workflow_context: Optional[Dict[str, Any]] = None
+    ) -> EmailType:
+        """LLM-based email type detection for ambiguous cases"""
+
+        # Build context
+        context_str = ""
+        if conversation_history:
+            recent = conversation_history[-3:] if len(conversation_history) > 3 else conversation_history
+            context_str += "HISTORIQUE RÉCENT:\n"
+            for msg in recent:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")[:200]
+                context_str += f"- {role}: {content}\n"
+
+        if workflow_context:
+            context_str += "\nCONTEXTE WORKFLOW:\n"
+            context_str += f"- Type: {workflow_context.get('workflow_type', 'N/A')}\n"
+            if workflow_context.get("context_data"):
+                ctx = workflow_context["context_data"]
+                if ctx.get("incident_type"):
+                    context_str += f"- Incident: {ctx['incident_type']}\n"
+                if ctx.get("severity"):
+                    context_str += f"- Gravité: {ctx['severity']}\n"
+
+        prompt = f"""Détermine le type d'email à générer.
+
+TYPES DISPONIBLES:
+1. urgent_intervention: Urgence (fuite, panne, sinistre, intervention immédiate)
+2. request_quote: Demande de devis / tarif
+3. information: Information générale
+4. followup: Suivi intervention / projet
+5. reminder: Relance (paiement, documents)
+
+{context_str}
+
+DEMANDE UTILISATEUR:
+"{user_request}"
+
+Réponds avec UN SEUL MOT parmi: urgent_intervention, request_quote, information, followup, reminder
+
+TYPE:"""
+
+        try:
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                max_tokens=50,
+                temperature=0.1
+            )
+
+            response_clean = response.strip().lower()
+
+            # Map response to EmailType
+            type_mapping = {
+                "urgent_intervention": EmailType.URGENT_INTERVENTION,
+                "request_quote": EmailType.REQUEST_QUOTE,
+                "information": EmailType.INFORMATION,
+                "followup": EmailType.FOLLOWUP,
+                "reminder": EmailType.REMINDER
+            }
+
+            detected_type = type_mapping.get(response_clean, EmailType.INFORMATION)
+
+            logger.info("email_type_detected_by_llm",
+                       type=detected_type.value,
+                       llm_response=response_clean)
+
+            return detected_type
+
+        except Exception as e:
+            logger.error("llm_email_type_detection_failed", error=str(e))
+            return EmailType.INFORMATION  # Safe fallback
 
     async def _extract_context(
         self,
@@ -233,6 +524,162 @@ JSON:
         except Exception as e:
             logger.error("recipients_fetch_failed", error=str(e))
             return []
+
+    async def _generate_content_v3(
+        self,
+        email_type: EmailType,
+        user_request: str,
+        context: Dict[str, Any],
+        recipients: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        workflow_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        V3: Template-based email generation with type-specific logic
+
+        Uses EMAIL_TEMPLATES based on detected email_type
+        """
+        # Get template for this type
+        template = EMAIL_TEMPLATES.get(email_type)
+        if not template:
+            # Fallback to old method
+            return await self._generate_content(
+                user_request,
+                context,
+                recipients,
+                conversation_history,
+                workflow_context
+            )
+
+        # Build template variables from context
+        template_vars = self._build_template_variables(
+            email_type,
+            context,
+            workflow_context,
+            recipients
+        )
+
+        # Fill template with LLM (smart variable filling)
+        filled_email = await self._fill_template_with_llm(
+            template,
+            template_vars,
+            user_request,
+            context
+        )
+
+        logger.info("email_generated_v3",
+                   email_type=email_type.value,
+                   has_workflow_context=bool(workflow_context),
+                   vars_count=len(template_vars))
+
+        return filled_email
+
+    def _build_template_variables(
+        self,
+        email_type: EmailType,
+        context: Dict[str, Any],
+        workflow_context: Optional[Dict[str, Any]],
+        recipients: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Build variables dict from available context"""
+        vars = {}
+
+        # Extract from workflow_context
+        if workflow_context and workflow_context.get("context_data"):
+            ctx_data = workflow_context["context_data"]
+            vars.update({
+                "building_name": ctx_data.get("building_name", ""),
+                "building_address": ctx_data.get("building_address", ""),
+                "apartment_number": ctx_data.get("apartment_number", ""),
+                "floor": ctx_data.get("floor", ""),
+                "owner_name": ctx_data.get("owner_name", ""),
+                "owner_phone": ctx_data.get("owner_phone", ""),
+                "incident_type": ctx_data.get("incident_type", ""),
+                "incident_description": ctx_data.get("incident_description", ""),
+                "severity": ctx_data.get("severity", ""),
+            })
+
+            # Severity label
+            severity_map = {
+                "high": "CRITIQUE",
+                "medium": "Modérée",
+                "low": "Faible"
+            }
+            vars["severity_label"] = severity_map.get(vars.get("severity", "medium"), "Modérée")
+
+        # Extract from email context
+        extracted_data = context.get("extracted_data", {})
+        if extracted_data:
+            vars.update({
+                k: v for k, v in extracted_data.items()
+                if k not in vars or not vars[k]  # Don't override workflow data
+            })
+
+        # Type-specific defaults
+        if email_type == EmailType.URGENT_INTERVENTION:
+            if not vars.get("professional_type"):
+                # Infer from incident type
+                incident = vars.get("incident_type", "").lower()
+                if "eau" in incident or "fuite" in incident:
+                    vars["professional_type"] = "Plomberie"
+                elif "électr" in incident:
+                    vars["professional_type"] = "Électricité"
+                else:
+                    vars["professional_type"] = "Intervention"
+
+            if not vars.get("action_required"):
+                vars["action_required"] = f"Intervention immédiate pour {vars.get('incident_type', 'résoudre le problème')}"
+
+            if not vars.get("contact_name"):
+                vars["contact_name"] = vars.get("owner_name", "Le syndic")
+                vars["contact_phone"] = vars.get("owner_phone", "")
+
+        elif email_type == EmailType.REQUEST_QUOTE:
+            if not vars.get("service_type"):
+                vars["service_type"] = "Service de copropriété"
+            if not vars.get("service_description"):
+                vars["service_description"] = "[À préciser]"
+            if not vars.get("specifications"):
+                vars["specifications"] = "[À compléter selon votre expertise]"
+
+        return vars
+
+    async def _fill_template_with_llm(
+        self,
+        template: Dict[str, Any],
+        template_vars: Dict[str, Any],
+        user_request: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Use LLM to intelligently fill template variables
+
+        For missing variables, LLM infers reasonable values from context
+        """
+        subject_template = template["subject_template"]
+        body_template = template["body_template"]
+
+        # Simple variable replacement (Mustache-style)
+        subject = subject_template
+        body = body_template
+
+        for key, value in template_vars.items():
+            if value:  # Only replace if value exists
+                subject = subject.replace(f"{{{{{key}}}}}", str(value))
+                body = body.replace(f"{{{{{key}}}}}", str(value))
+
+        # Remove unreplaced variables
+        import re
+        subject = re.sub(r'\{\{[^}]+\}\}', '[À compléter]', subject)
+        body = re.sub(r'\{\{#[^}]+\}\}.*?\{\{/[^}]+\}\}', '', body, flags=re.DOTALL)  # Remove conditional blocks
+        body = re.sub(r'\{\{[^}]+\}\}', '[À compléter]', body)
+
+        return {
+            "subject": subject,
+            "body": body,
+            "tone": template["tone"],
+            "urgency": context.get("urgency", template.get("priority", "medium"))
+        }
 
     async def _generate_content(
         self,

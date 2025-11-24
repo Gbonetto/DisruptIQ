@@ -14,7 +14,7 @@ import structlog
 from datetime import datetime
 
 from app.core.config import settings
-from app.services.agents.thought_stream import ThoughtStream, ThoughtType
+from app.services.agents.thought_stream import ThoughtStream, ThoughtType, get_thought_stream
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -104,7 +104,7 @@ async def receive_thought_update(
         )
 
         # Get ThoughtStream instance
-        thought_stream = ThoughtStream.get_instance(update.thought_stream_id)
+        thought_stream = get_thought_stream(update.thought_stream_id)
 
         if not thought_stream:
             logger.warning(
@@ -123,7 +123,7 @@ async def receive_thought_update(
             content=update.content,
             agent=update.agent,
             progress=update.progress,
-            metadata=update.metadata
+            data=update.metadata
         )
 
         logger.info(
@@ -198,7 +198,7 @@ async def receive_workflow_result(
         )
 
         # Get ThoughtStream instance
-        thought_stream = ThoughtStream.get_instance(result.thought_stream_id)
+        thought_stream = get_thought_stream(result.thought_stream_id)
 
         if not thought_stream:
             logger.warning(
@@ -230,7 +230,7 @@ async def receive_workflow_result(
             content=content,
             agent=f"N8N_{result.workflow_name}",
             progress=1.0,
-            metadata={
+            data={
                 **result.result,
                 "execution_time": result.execution_time
             }

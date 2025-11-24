@@ -12,6 +12,7 @@ from app.models.coproprietaire import Coproprietaire
 from app.models.professionnel_copropriete import ProfessionnelCopropriete
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.models.emergency_workflow import EmergencyWorkflow
 
 # Intent System (Centralized)
 from app.models.intent import (
@@ -37,6 +38,7 @@ __all__ = [
     "ProfessionnelCopropriete",
     "Conversation",
     "Message",
+    "EmergencyWorkflow",
     # Intent System
     "IntentType",
     "Domain",

@@ -3,6 +3,7 @@ Workflow Agent - Triggers N8N workflows with contextual data
 
 Enhanced with:
 - LLM-based workflow family classification
+- Emergency workflow to-do list management (V1)
 - Standardized payload generation
 - ThoughtStream integration for real-time updates
 """
@@ -12,10 +13,12 @@ from typing import Dict, Any, List, Optional
 from enum import Enum
 import httpx
 from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.services.llm_service import LLMService
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
+from app.services.emergency_workflow_service import EmergencyWorkflowService
 
 logger = structlog.get_logger()
 
@@ -91,11 +94,12 @@ class WorkflowAgent:
         "monthly_summary": WorkflowFamily.DIGEST
     }
 
-    def __init__(self):
+    def __init__(self, db: Optional[AsyncSession] = None):
         self.n8n_base_url = settings.N8N_WEBHOOK_BASE_URL
         self.auth_token = settings.N8N_WEBHOOK_AUTH_TOKEN
         self.timeout = settings.N8N_TIMEOUT
         self.llm_service = LLMService()
+        self.db = db  # V1: Required for emergency workflow service
         logger.info("workflow_agent_initialized", base_url=self.n8n_base_url)
 
     async def process_request(
@@ -150,7 +154,20 @@ class WorkflowAgent:
                     progress=0.3
                 )
 
-            # Step 2: Extract structured data from user input
+            # V1: Check if this is an URGENCE workflow with to-do list
+            if workflow_family == WorkflowFamily.URGENCE and self.db:
+                return await self._handle_emergency_with_checklist(
+                    workflow_action=workflow_action,
+                    user_input=user_input,
+                    context=context,
+                    thought_stream=thought_stream,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    urgency=urgency
+                )
+
+            # Step 2: Extract structured data from user input (non-emergency workflows)
             extracted_data = await self._extract_workflow_data(
                 user_input=user_input,
                 workflow_action=workflow_action,
@@ -177,7 +194,7 @@ class WorkflowAgent:
                 trace={
                     "conversation_id": conversation_id or "unknown",
                     "request_id": f"req_{datetime.now().timestamp()}",
-                    "thought_stream_id": thought_stream.stream_id if thought_stream else None
+                    "thought_stream_id": thought_stream.session_id if thought_stream else None
                 }
             )
 
@@ -491,6 +508,140 @@ Si un champ n'est pas disponible, ne l'inclus pas. Si rien n'est extrait, retour
             return {
                 "success": False,
                 "message": f"❌ Erreur inattendue: {str(e)}"
+            }
+
+    async def _handle_emergency_with_checklist(
+        self,
+        workflow_action: str,
+        user_input: str,
+        context: Optional[Dict[str, Any]],
+        thought_stream: Optional[ThoughtStream],
+        tenant_id: str,
+        user_id: str,
+        conversation_id: Optional[str],
+        urgency: str
+    ) -> Dict[str, Any]:
+        """
+        Handle emergency workflows with to-do list (V1)
+
+        Process:
+        1. Fetch emergency workflow template from DB
+        2. Enrich with context (LLM extraction)
+        3. Return enriched workflow for FRONTEND CONFIRMATION
+        4. N8N execution happens after user validates in UI
+
+        V1: Only supports 'water_leak'
+        """
+        try:
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.PROCESSING,
+                    title="Recherche de la procédure d'urgence",
+                    content=f"Vérification du template {workflow_action}...",
+                    agent="WorkflowAgent",
+                    progress=0.4
+                )
+
+            # Step 1: Get emergency workflow template
+            emergency_service = EmergencyWorkflowService(db=self.db)
+
+            # Map workflow_action to workflow_type
+            workflow_type_map = {
+                "emergency_water_leak": "water_leak",
+                "emergency_fire": "fire",
+                "emergency_lockdown": "lockdown"
+            }
+            workflow_type = workflow_type_map.get(workflow_action)
+
+            if not workflow_type:
+                logger.warning("unsupported_emergency_type", workflow_action=workflow_action)
+                return {
+                    "success": False,
+                    "message": f"❌ Type d'urgence '{workflow_action}' pas encore supporté (V1: water_leak uniquement)"
+                }
+
+            workflow_template = await emergency_service.get_workflow(
+                workflow_type=workflow_type,
+                tenant_id=tenant_id
+            )
+
+            if not workflow_template:
+                logger.warning("no_emergency_template_found", workflow_type=workflow_type)
+                return {
+                    "success": False,
+                    "message": f"❌ Aucune procédure préenregistrée pour '{workflow_type}'. Contactez l'administrateur."
+                }
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.PROCESSING,
+                    title=f"✅ Procédure trouvée: {workflow_template.get('workflow_name')}",
+                    content=f"{len(workflow_template.get('steps', []))} étapes à valider",
+                    agent="WorkflowAgent",
+                    progress=0.6
+                )
+
+            # Step 2: Enrich workflow with extracted data
+            enriched_workflow = await emergency_service.enrich_workflow_with_context(
+                workflow=workflow_template,
+                user_input=user_input,
+                context=context
+            )
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.COMPLETED,
+                    title="📋 Procédure prête pour validation",
+                    content="La checklist enrichie attend votre confirmation",
+                    agent="WorkflowAgent",
+                    progress=1.0
+                )
+
+            # Build steps summary for user confirmation
+            steps_summary = []
+            for i, step in enumerate(enriched_workflow.get("steps", []), 1):
+                step_text = f"{i}. {step.get('title', 'Étape sans titre')}"
+                if step.get("description"):
+                    step_text += f"\n   → {step['description']}"
+                steps_summary.append(step_text)
+
+            steps_text = "\n".join(steps_summary)
+
+            return {
+                "success": True,
+                "requires_confirmation": True,
+                "workflow_action": workflow_action,
+                "workflow_data": enriched_workflow,
+                "message": f"🚨 **Procédure d'urgence détectée: {enriched_workflow.get('workflow_name', 'Urgence')}**\n\n"
+                          f"**Contexte détecté:**\n"
+                          f"- Bâtiment: {enriched_workflow.get('context_data', {}).get('building_name', 'Non spécifié')}\n"
+                          f"- Appartement: {enriched_workflow.get('context_data', {}).get('apartment_number', 'Non spécifié')}\n"
+                          f"- Étage: {enriched_workflow.get('context_data', {}).get('floor', 'Non spécifié')}\n"
+                          f"- Gravité: {enriched_workflow.get('context_data', {}).get('severity', 'Non spécifié').upper()}\n\n"
+                          f"**{len(enriched_workflow.get('steps', []))} étapes à exécuter:**\n\n"
+                          f"{steps_text}\n\n"
+                          f"**Veuillez confirmer l'exécution de cette procédure.**",
+                "trace": {
+                    "conversation_id": conversation_id,
+                    "thought_stream_id": thought_stream.session_id if thought_stream else None,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id
+                }
+            }
+
+        except Exception as e:
+            logger.error("emergency_checklist_failed", error=str(e), exc_info=True)
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.ERROR,
+                    title="❌ Erreur lors de la préparation de la procédure",
+                    content=str(e),
+                    agent="WorkflowAgent",
+                    progress=1.0
+                )
+            return {
+                "success": False,
+                "message": f"Erreur lors de la préparation de la procédure: {str(e)}"
             }
 
     def list_workflows(self) -> List[Dict[str, Any]]:

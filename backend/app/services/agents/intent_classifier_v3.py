@@ -440,8 +440,13 @@ CATÉGORIES DISPONIBLES:
 5. request_quotes: Demander des devis (workflow automatique)
 6. analyze_document: Analyser un nouveau document uploadé
 7. generate_digest: Générer un digest d'emails
-8. trigger_workflow: Déclencher un workflow N8N
+8. trigger_workflow: URGENCES et WORKFLOWS (dégât des eaux, fuite, incendie, panne, sinistre, incident)
 9. general_question: Question générale / aide
+
+⚠️ RÈGLE CRITIQUE trigger_workflow:
+- Toute mention d'URGENCE, URGENT, incident, sinistre, panne, fuite, dégât → trigger_workflow
+- Contexte d'urgence (eau qui coule, feu, danger) → trigger_workflow
+- Besoin d'intervention rapide → trigger_workflow
 
 EXEMPLES DE CONVERSATIONS:
 
@@ -473,6 +478,18 @@ Exemple 5 (Question courte ambiguë):
 USER: c'est quoi?
 → Dépend du contexte. Si dernière réponse = liste de contacts → query_data
    Si dernière réponse = extrait de document → search_documents
+
+Exemple 6 (URGENCE → workflow):
+USER: URGENT: Dégât des eaux détecté dans l'appartement 12, résidence Les Tilleuls
+→ trigger_workflow (mot-clé URGENT + dégât = urgence)
+
+Exemple 7 (Incident → workflow):
+USER: fuite d'eau au plafond, situation critique
+→ trigger_workflow (fuite + critique = urgence)
+
+Exemple 8 (Panne → workflow):
+USER: panne d'électricité dans tout le bâtiment
+→ trigger_workflow (panne = urgence)
 
 CONTEXTE:
 {context_str}
