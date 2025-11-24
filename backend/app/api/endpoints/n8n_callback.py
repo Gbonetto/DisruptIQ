@@ -287,3 +287,128 @@ async def health():
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat()
     }
+
+
+@router.post("/", status_code=200)
+async def generic_callback(
+    payload: Dict[str, Any],
+    authenticated: bool = Depends(verify_n8n_token)
+):
+    """
+    Generic callback endpoint for N8N workflows
+
+    URL: http://backend:8000/api/n8n/callback
+
+    This endpoint receives any callback from N8N (email results, workflow updates, etc.)
+    and processes them accordingly.
+
+    Used by the email workflow to send back results.
+    """
+    try:
+        logger.info(
+            "n8n_generic_callback_received",
+            payload_keys=list(payload.keys()),
+            success=payload.get("success"),
+            message=payload.get("message")
+        )
+
+        # Check if this is an email workflow result
+        if "emails_sent" in payload:
+            return await _handle_email_callback(payload)
+
+        # Check if this is a thought update
+        if "thought_stream_id" in payload and "thought_type" in payload:
+            update = N8NThoughtUpdate(**payload)
+            return await receive_thought_update(update, authenticated)
+
+        # Generic success response
+        return {
+            "status": "success",
+            "message": "Callback received",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(
+            "n8n_generic_callback_failed",
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process callback: {str(e)}"
+        )
+
+
+async def _handle_email_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle email workflow callback"""
+    try:
+        thought_stream_id = payload.get("thought_stream_id")
+        success = payload.get("success", False)
+        emails_sent = payload.get("emails_sent", [])
+
+        if not thought_stream_id:
+            logger.warning("email_callback_no_stream_id", payload=payload)
+            return {
+                "status": "warning",
+                "message": "No thought_stream_id provided"
+            }
+
+        # Get ThoughtStream
+        thought_stream = get_thought_stream(thought_stream_id)
+
+        if not thought_stream:
+            logger.warning(
+                "thought_stream_not_found_for_email",
+                stream_id=thought_stream_id
+            )
+            return {
+                "status": "warning",
+                "message": f"ThoughtStream {thought_stream_id} not found"
+            }
+
+        # Add completion thought
+        if success:
+            recipients_count = len(emails_sent)
+            recipients_list = ", ".join([e.get("recipient", "unknown") for e in emails_sent[:3]])
+            if recipients_count > 3:
+                recipients_list += f" (+{recipients_count - 3} autres)"
+
+            await thought_stream.add_thought(
+                thought_type=ThoughtType.COMPLETED,
+                title=f"✅ Email envoyé avec succès",
+                content=f"Email envoyé à {recipients_count} destinataire(s): {recipients_list}",
+                agent="N8N_Email",
+                progress=1.0,
+                data={
+                    "emails_sent": emails_sent,
+                    "subject": payload.get("subject", "")
+                }
+            )
+        else:
+            error_msg = payload.get("error", payload.get("message", "Erreur inconnue"))
+            await thought_stream.add_thought(
+                thought_type=ThoughtType.ERROR,
+                title="❌ Échec de l'envoi d'email",
+                content=error_msg,
+                agent="N8N_Email",
+                progress=1.0,
+                data={"error": error_msg}
+            )
+
+        logger.info(
+            "email_callback_processed",
+            stream_id=thought_stream_id,
+            success=success,
+            recipients_count=len(emails_sent)
+        )
+
+        return {
+            "status": "success",
+            "message": "Email callback processed",
+            "stream_id": thought_stream_id
+        }
+
+    except Exception as e:
+        logger.error("email_callback_processing_failed", error=str(e), exc_info=True)
+        raise
