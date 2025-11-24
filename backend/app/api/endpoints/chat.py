@@ -87,7 +87,8 @@ async def ask_question(
                     context=None,
                     thought_stream=None,
                     state_manager=None,
-                    selected_sources=request.selected_sources  # User-controlled source selection
+                    selected_sources=request.selected_sources,  # User-controlled source selection
+                    session_id=request.session_id  # For context_store
                 ),
                 timeout=30.0
             )

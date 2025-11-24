@@ -69,6 +69,25 @@ class AlternativeIntent(BaseModel):
     reasoning: str
 
 
+class DualIntentResult(BaseModel):
+    """V4: Dual intent classification for multi-step actions"""
+    primary: IntentType
+    secondary: Optional[IntentType] = None
+    confidence_primary: float
+    confidence_secondary: float = 0.0
+    reasoning: str
+    should_execute_secondary: bool = False  # True if secondary confidence > 0.7
+
+
+# Allowed dual-intent combinations (primary → secondary)
+ALLOWED_COMBOS = {
+    IntentType.TRIGGER_WORKFLOW: [IntentType.SEND_EMAIL],  # Emergency → notify
+    IntentType.QUERY_DATA: [IntentType.SEND_EMAIL],  # Query results → send report
+    IntentType.SEARCH_DOCUMENTS: [IntentType.SEND_EMAIL],  # Find docs → share by email
+    IntentType.REQUEST_QUOTES: [IntentType.SEND_EMAIL],  # Generate quote requests → send them
+}
+
+
 class ClassificationResult(BaseModel):
     """Enhanced classification result"""
     intent: IntentType
@@ -628,3 +647,201 @@ Réponds UNIQUEMENT avec le JSON, rien d'autre."""
 
         else:
             return "Je ne suis pas sûr de bien comprendre votre demande. Pouvez-vous préciser ce que vous voulez faire ?"
+
+    async def classify_dual(
+        self,
+        user_input: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        state_manager = None,
+        context: Optional[Dict[str, Any]] = None
+    ) -> DualIntentResult:
+        """
+        Dual-intent classification for multi-step actions
+
+        Detects if user wants two actions in sequence:
+        Example: "Urgent water leak, notify the plumbers"
+          → Primary: TRIGGER_WORKFLOW
+          → Secondary: SEND_EMAIL
+
+        Args:
+            user_input: Current user message
+            conversation_history: Last N messages
+            state_manager: State manager for entity tracking
+            context: Additional context
+
+        Returns:
+            DualIntentResult with primary + optional secondary intent
+        """
+        start_time = datetime.now()
+
+        try:
+            # First, classify primary intent
+            primary_result = await self.classify(
+                user_input,
+                conversation_history,
+                state_manager,
+                context
+            )
+
+            # Check if primary intent allows secondary
+            if primary_result.intent not in ALLOWED_COMBOS:
+                # No secondary allowed for this primary
+                return DualIntentResult(
+                    primary=primary_result.intent,
+                    secondary=None,
+                    confidence_primary=primary_result.confidence,
+                    confidence_secondary=0.0,
+                    reasoning=f"Primary: {primary_result.reasoning}. No secondary action detected.",
+                    should_execute_secondary=False
+                )
+
+            # Detect secondary intent via LLM
+            allowed_secondaries = ALLOWED_COMBOS[primary_result.intent]
+            secondary_result = await self._detect_secondary_intent(
+                user_input,
+                primary_result.intent,
+                allowed_secondaries,
+                conversation_history
+            )
+
+            processing_time = (datetime.now() - start_time).total_seconds() * 1000
+
+            should_execute = secondary_result is not None and secondary_result["confidence"] > 0.7
+
+            logger.info("dual_intent_classification",
+                       primary=primary_result.intent.value,
+                       secondary=secondary_result["intent"].value if secondary_result else None,
+                       confidence_primary=primary_result.confidence,
+                       confidence_secondary=secondary_result["confidence"] if secondary_result else 0.0,
+                       should_execute_secondary=should_execute,
+                       time_ms=processing_time)
+
+            return DualIntentResult(
+                primary=primary_result.intent,
+                secondary=secondary_result["intent"] if secondary_result else None,
+                confidence_primary=primary_result.confidence,
+                confidence_secondary=secondary_result["confidence"] if secondary_result else 0.0,
+                reasoning=f"Primary: {primary_result.reasoning}. Secondary: {secondary_result['reasoning'] if secondary_result else 'None detected'}",
+                should_execute_secondary=should_execute
+            )
+
+        except Exception as e:
+            logger.error("dual_classification_failed", error=str(e), exc_info=True)
+            processing_time = (datetime.now() - start_time).total_seconds() * 1000
+
+            # Fallback: try single classification
+            fallback_result = await self.classify(user_input, conversation_history, state_manager, context)
+
+            return DualIntentResult(
+                primary=fallback_result.intent,
+                secondary=None,
+                confidence_primary=fallback_result.confidence,
+                confidence_secondary=0.0,
+                reasoning=f"Dual classification failed, fallback to single: {fallback_result.reasoning}",
+                should_execute_secondary=False
+            )
+
+    async def _detect_secondary_intent(
+        self,
+        user_input: str,
+        primary_intent: IntentType,
+        allowed_secondaries: List[IntentType],
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Detect secondary intent via LLM
+
+        Returns:
+            Dict with intent, confidence, reasoning OR None if no secondary
+        """
+        # Build context from conversation
+        context_str = ""
+        if conversation_history:
+            last_5 = conversation_history[-5:]
+            context_str = "\n".join([
+                f"{msg.get('role', 'user')}: {msg.get('content', '')}"
+                for msg in last_5
+            ])
+
+        allowed_list = ", ".join([intent.value for intent in allowed_secondaries])
+
+        prompt = f"""Analyse cette demande utilisateur pour détecter une DEUXIÈME ACTION (secondaire) après l'action primaire.
+
+ACTION PRIMAIRE DÉTECTÉE: {primary_intent.value}
+
+CONTEXTE CONVERSATION:
+{context_str if context_str else "Aucun contexte"}
+
+MESSAGE UTILISATEUR:
+{user_input}
+
+ACTIONS SECONDAIRES POSSIBLES: {allowed_list}
+
+QUESTION: Y a-t-il une demande explicite ou implicite d'une action secondaire ?
+
+Indices d'action secondaire:
+- Verbes d'action multiples ("notifie", "envoie", "préviens")
+- Conjonctions ("et", "puis", "ensuite")
+- Demande de communication après l'action primaire
+
+RÈGLES:
+1. Si l'utilisateur demande explicitement un email/notification → send_email (confidence 0.9+)
+2. Si urgence + mention implicite de communication → send_email (confidence 0.6-0.8)
+3. Si aucune action secondaire claire → None
+
+RÉPONSE (format JSON strict):
+{{
+  "has_secondary": true/false,
+  "intent": "nom_intent" ou null,
+  "confidence": 0.0 à 1.0,
+  "reasoning": "explication détaillée"
+}}
+
+Réponds UNIQUEMENT avec le JSON."""
+
+        try:
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=300
+            )
+
+            # Parse JSON
+            import json
+
+            # Extract JSON from response
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if not json_match:
+                logger.warning("no_json_in_secondary_detection", response=response[:200])
+                return None
+
+            data = json.loads(json_match.group(0))
+
+            if not data.get("has_secondary", False):
+                return None
+
+            intent_str = data.get("intent")
+            if not intent_str:
+                return None
+
+            # Validate intent is in allowed list
+            try:
+                intent_enum = IntentType(intent_str)
+                if intent_enum not in allowed_secondaries:
+                    logger.warning("secondary_intent_not_allowed",
+                                 detected=intent_str,
+                                 allowed=[i.value for i in allowed_secondaries])
+                    return None
+            except ValueError:
+                logger.warning("invalid_secondary_intent", intent=intent_str)
+                return None
+
+            return {
+                "intent": intent_enum,
+                "confidence": float(data.get("confidence", 0.5)),
+                "reasoning": data.get("reasoning", "Secondary intent detected")
+            }
+
+        except Exception as e:
+            logger.error("secondary_detection_failed", error=str(e), exc_info=True)
+            return None

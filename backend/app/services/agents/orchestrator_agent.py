@@ -12,6 +12,7 @@ from app.core.database import AsyncSession
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
 from app.services.agents.state_registry import StateManager
 from app.utils.sql_validation import validate_sql_query
+from app.services.context_store import context_store
 
 # Import centralized intent system
 from app.models.intent import (
@@ -130,7 +131,8 @@ class OrchestratorAgent:
         conversation_history: List[Dict[str, str]] = None,
         thought_stream: ThoughtStream = None,
         state_manager = None,
-        selected_sources: Optional[List[str]] = None  # ['sql', 'rag', 'web'] or None for auto
+        selected_sources: Optional[List[str]] = None,  # ['sql', 'rag', 'web'] or None for auto
+        session_id: Optional[str] = None  # For context_store
     ) -> AgentResponse:
         """
         Main orchestration method - routes to appropriate agents
@@ -480,7 +482,7 @@ class OrchestratorAgent:
 
             elif intent == IntentType.SEND_EMAIL:
                 return await self._handle_send_email_intelligent(
-                    user_input, db, context, thought_stream, state_manager, conversation_history
+                    user_input, db, context, thought_stream, state_manager, conversation_history, session_id
                 )
 
             elif intent == IntentType.REQUEST_QUOTES:
@@ -488,7 +490,7 @@ class OrchestratorAgent:
 
             elif intent == IntentType.TRIGGER_WORKFLOW:
                 return await self._handle_trigger_workflow(
-                    user_input, db, context, thought_stream, conversation_history
+                    user_input, db, context, thought_stream, conversation_history, session_id
                 )
 
             # NEW Phase 2 agents
@@ -859,7 +861,8 @@ class OrchestratorAgent:
         context: Dict[str, Any] = None,
         thought_stream = None,
         state_manager = None,
-        conversation_history: List[Dict[str, Any]] = None
+        conversation_history: List[Dict[str, Any]] = None,
+        session_id: Optional[str] = None
     ) -> AgentResponse:
         """
         Intelligent email handling with entity extraction and query planning
@@ -1023,19 +1026,20 @@ class OrchestratorAgent:
                 context["emails_available"] = recipients_found
 
             # Step 4: Generate email draft with conversation history
-            return await self._handle_send_email(user_input, db, context, conversation_history)
+            return await self._handle_send_email(user_input, db, context, conversation_history, session_id)
 
         except Exception as e:
             logger.error("intelligent_email_handling_failed", error=str(e), exc_info=True)
             # Fallback to standard email handling
-            return await self._handle_send_email(user_input, db, context, conversation_history)
+            return await self._handle_send_email(user_input, db, context, conversation_history, session_id)
 
     async def _handle_send_email(
         self,
         user_input: str,
         db: AsyncSession,
         context: Dict[str, Any] = None,
-        conversation_history: List[Dict[str, Any]] = None
+        conversation_history: List[Dict[str, Any]] = None,
+        session_id: Optional[str] = None
     ) -> AgentResponse:
         """
         Handle email generation with human-in-the-loop validation
@@ -1088,7 +1092,13 @@ class OrchestratorAgent:
         # Extract workflow_context if available
         workflow_context = context.get("workflow_data") if context else None
 
-        # If no workflow_context in immediate context, try to extract from conversation history
+        # PRIORITY 1: Try context_store first (most reliable)
+        if not workflow_context and session_id:
+            workflow_context = context_store.get_workflow(session_id)
+            if workflow_context:
+                logger.info("workflow_context_retrieved_from_store", session_id=session_id)
+
+        # PRIORITY 2: If no workflow_context, try to extract from conversation history
         # Look for recent workflow responses (WorkflowAgent V2)
         if not workflow_context and conversation_history:
             # Search backwards through last 5 messages
@@ -1434,7 +1444,8 @@ class OrchestratorAgent:
         db: AsyncSession,
         context: Optional[Dict[str, Any]] = None,
         thought_stream: Optional[ThoughtStream] = None,
-        conversation_history: List[Dict[str, str]] = None
+        conversation_history: List[Dict[str, str]] = None,
+        session_id: Optional[str] = None
     ) -> AgentResponse:
         """
         Handle workflow automation triggers with intelligent to-do list generation
@@ -1461,6 +1472,20 @@ class OrchestratorAgent:
                 db=db,
                 thought_stream=thought_stream
             )
+
+            # Store workflow context in context_store for other agents (e.g., EmailAgent)
+            if session_id and result["success"]:
+                workflow_data = {
+                    "workflow_type": result.get("workflow_type"),
+                    "subtype": result.get("subtype"),
+                    "confidence": result.get("confidence"),
+                    "context_data": result.get("context_data", {}),
+                    "todo_list": result.get("todo_list", {})
+                }
+                context_store.set_workflow(session_id, workflow_data)
+                logger.info("workflow_context_stored",
+                           session_id=session_id,
+                           workflow_type=result.get("workflow_type"))
 
             # Return formatted response
             return AgentResponse(
