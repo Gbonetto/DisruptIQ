@@ -213,6 +213,66 @@ class OrchestratorAgent:
             # CONTINUE NORMAL FLOW (with or without bypass)
             # ================================================================
 
+            # ================================================================
+            # FACT EXTRACTION - Extract structured facts from user input
+            # ================================================================
+            # Extract and store budgets, dates, contacts for better recall
+            if session_id:
+                await self._extract_and_store_facts(user_input, session_id)
+
+            # ================================================================
+            # MEMORY RECALL LAYER - Check conversation history first
+            # ================================================================
+            # If user is asking for recall ("c'était combien déjà?"), answer from
+            # conversation history instead of calling SQL/RAG agents
+            if conversation_history and len(conversation_history) > 0:
+                # Try context_store facts first (most reliable)
+                if session_id:
+                    fact_result = await self._recall_from_context_store(user_input, session_id)
+                    if fact_result:
+                        logger.info("context_store_recall_success", query=user_input[:50])
+                        return AgentResponse(
+                            success=True,
+                            message=fact_result,
+                            data={},
+                            agents_used=["context_store"],
+                            sources_used=[DataSource.CONVERSATION],
+                            confidence=0.98,
+                            suggestions=[],
+                            warnings=[]
+                        )
+
+                # Fallback to conversation history analysis
+                memory_result = await self._check_conversation_memory(
+                    user_input,
+                    conversation_history
+                )
+
+                if memory_result:
+                    logger.info("memory_recall_success",
+                               query=user_input[:50],
+                               latency="<2s")
+
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.SUCCESS,
+                            title="Rappel depuis la mémoire",
+                            content=f"J'ai retrouvé cette information dans notre conversation précédente.",
+                            agent="memory_recall",
+                            progress=1.0
+                        )
+
+                    return AgentResponse(
+                        success=True,
+                        message=memory_result,
+                        data={},
+                        agents_used=["memory_recall"],
+                        sources_used=[DataSource.CONVERSATION],
+                        confidence=0.95,
+                        suggestions=[],
+                        warnings=[]
+                    )
+
             # 0. Pre-populate EntityGraph if empty (first query of session)
             if state_manager:
                 entity_graph = state_manager.get_entity_graph()
@@ -513,6 +573,161 @@ class OrchestratorAgent:
                 message=f"Désolé, une erreur s'est produite : {str(e)}",
                 agents_used=["orchestrator"]
             )
+
+    # ================================================================
+    # MEMORY RECALL LAYER - Solution 1 from MEMORY_ENHANCEMENT_PLAN.md
+    # ================================================================
+
+    async def _check_conversation_memory(
+        self,
+        user_input: str,
+        conversation_history: List[Dict[str, str]]
+    ) -> Optional[str]:
+        """
+        Check if question can be answered from conversation history
+
+        This pre-checks memory BEFORE routing to agents, avoiding unnecessary
+        SQL/RAG calls for simple recall questions like "C'était combien déjà?"
+
+        Returns:
+            str: Answer from memory, or None if not found
+        """
+        import re
+
+        # 1. Detect recall patterns (French-optimized)
+        recall_patterns = [
+            r"c'est quoi (déjà|encore) (le|la|l'|les)",
+            r"c'était (combien|quoi|quand|où|qui|comment)",
+            r"rappel[le]?[-\s]moi",
+            r"quel était le",
+            r"quelle était la",
+            r"quels étaient les",
+            r"tu (m')?as dit",
+            r"on avait dit",
+            r"tu disais",
+            r"je t'ai donné",
+            r"je t'avais dit",
+            r"dans la conversation",
+            r"plus tôt",
+            r"tantôt",
+            r"tout à l'heure",
+        ]
+
+        is_recall_question = any(
+            re.search(pattern, user_input.lower(), re.IGNORECASE)
+            for pattern in recall_patterns
+        )
+
+        if not is_recall_question:
+            return None
+
+        # 2. Extract what user is asking about
+        keywords = self._extract_recall_keywords(user_input)
+
+        if not keywords:
+            logger.info("memory_recall_no_keywords", query=user_input[:50])
+            return None
+
+        # 3. Search in conversation history (reverse order, most recent first)
+        relevant_messages = []
+        for msg in reversed(conversation_history[-20:]):  # Last 20 messages
+            if msg.get("role") in ["assistant", "user"]:
+                content = msg.get("content", "").lower()
+                # Check if message contains keywords
+                if any(kw in content for kw in keywords):
+                    relevant_messages.append({
+                        "role": msg.get("role"),
+                        "content": msg.get("content", "")
+                    })
+
+        if not relevant_messages:
+            logger.info("memory_recall_no_matches",
+                       keywords=keywords[:3],
+                       history_size=len(conversation_history))
+            return None
+
+        # 4. Use LLM to extract specific answer
+        # Concatenate relevant messages (top 5 most relevant)
+        context_parts = []
+        for msg in relevant_messages[:5]:
+            role_label = "Utilisateur" if msg["role"] == "user" else "Assistant"
+            context_parts.append(f"{role_label}: {msg['content']}")
+
+        context_str = "\n\n".join(context_parts)
+
+        recall_prompt = f"""Tu es un assistant mémoire pour DisruptIQ.
+
+Question de l'utilisateur: "{user_input}"
+
+Contexte de conversation précédente:
+{context_str}
+
+Réponds UNIQUEMENT à la question en utilisant les informations ci-dessus.
+Si l'information n'est pas dans le contexte, réponds "Je n'ai pas cette information en mémoire."
+
+Réponse courte et directe (2-3 phrases maximum):"""
+
+        try:
+            answer = await self.llm_service.generate_response(
+                prompt=recall_prompt,
+                temperature=0.2,
+                max_tokens=200,
+                conversation_history=conversation_history
+            )
+
+            # Validate answer is not "je ne sais pas"
+            no_answer_phrases = [
+                "je n'ai pas",
+                "je ne sais pas",
+                "information manquante",
+                "pas en mémoire",
+                "pas trouvé",
+                "je ne trouve pas"
+            ]
+
+            answer_lower = answer.lower()
+            if any(phrase in answer_lower for phrase in no_answer_phrases):
+                logger.info("memory_recall_llm_uncertain", answer=answer[:50])
+                return None
+
+            logger.info("memory_recall_extracted",
+                       keywords=keywords[:3],
+                       answer_length=len(answer))
+
+            return answer.strip()
+
+        except Exception as e:
+            logger.error("memory_recall_failed", error=str(e))
+            return None
+
+    def _extract_recall_keywords(self, user_input: str) -> List[str]:
+        """
+        Extract keywords from recall question
+
+        Removes stopwords and extracts meaningful terms + numbers
+        """
+        # Remove question words and common French stopwords
+        stopwords = {
+            "c'est", "c'était", "quoi", "déjà", "encore", "le", "la", "l'", "les",
+            "combien", "rappelle", "moi", "qui", "quand", "où", "comment", "quel",
+            "quelle", "quels", "était", "étaient", "tu", "m'as", "dit", "on", "avait",
+            "dans", "plus", "tôt", "tout", "heure", "je", "t'ai", "donné", "t'avais",
+            "conversation", "tantôt", "pour", "avec", "sans", "sur", "sous", "par"
+        }
+
+        # Split and clean
+        words = user_input.lower().split()
+        keywords = [
+            w.strip("?!.,;:") for w in words
+            if len(w) > 3 and w.lower() not in stopwords
+        ]
+
+        # Also extract potential numbers (amounts, dates)
+        import re
+        numbers = re.findall(r'\d+', user_input)
+        keywords.extend(numbers)
+
+        return keywords
 
     async def _requires_recipient_lookup(self, user_input: str, context: Dict[str, Any] = None) -> bool:
         """
@@ -1487,6 +1702,33 @@ class OrchestratorAgent:
                            session_id=session_id,
                            workflow_type=result.get("workflow_type"))
 
+                # ===== NEW: Store structured facts for memory recall =====
+                context_data = result.get("context_data", {})
+
+                # Store budget as fact
+                if context_data.get("budget"):
+                    context_store.add_fact(session_id, "budget", {
+                        "amount": context_data["budget"],
+                        "for": context_data.get("description", "workflow"),
+                        "workflow_type": result.get("workflow_type")
+                    })
+
+                # Store date as fact
+                if context_data.get("date"):
+                    context_store.add_fact(session_id, "date", {
+                        "event": context_data.get("event_type", result.get("workflow_type")),
+                        "date": context_data["date"],
+                        "workflow_type": result.get("workflow_type")
+                    })
+
+                # Store description/context as fact
+                if context_data.get("description"):
+                    context_store.add_fact(session_id, "workflow_context", {
+                        "description": context_data["description"],
+                        "workflow_type": result.get("workflow_type"),
+                        "subtype": result.get("subtype")
+                    })
+
             # Return formatted response
             return AgentResponse(
                 success=result["success"],
@@ -1806,7 +2048,8 @@ Réponds de manière claire, professionnelle et utile. Si tu peux aider avec une
             response = await self.llm_service.generate_response(
                 prompt=prompt,
                 max_tokens=500,
-                temperature=0.7
+                temperature=0.7,
+                conversation_history=conversation_history
             )
 
             return AgentResponse(
@@ -2749,3 +2992,135 @@ Réponds uniquement avec le contenu, sans préambule."""
             logger.error("unified_fusion_failed", error=str(e))
             # Fallback: return concatenated parts
             return "\n\n".join(context_parts)
+
+    # ================================================================
+    # FACT EXTRACTION & STORAGE - Nice-to-Have Enhancement
+    # ================================================================
+
+    async def _extract_and_store_facts(
+        self,
+        user_input: str,
+        session_id: str
+    ):
+        """
+        Extract structured facts from user input and store in context_store
+
+        Extracts:
+        - Budgets (75000€, 50k, 120000 euros)
+        - Dates (25 février, 10 avril 2024, le 15/03)
+        - Contacts (M. Dupont, apt 45, marie@gmail.com)
+        - Counts (2 emails, 5 jardiniers, 8 copros)
+        """
+        import re
+
+        try:
+            # Extract budgets - improved regex for all formats
+            budget_patterns = [
+                (r'(\d+)\s?k€?', lambda m: int(m) * 1000),  # 75k, 50k€
+                (r'(\d+)\s+(?:mille|thousand)\s+(?:euros?|€)?', lambda m: int(m) * 1000),  # 75 mille euros
+                (r'(\d+(?:\s?\d+)*)\s?(?:€|euros?)', lambda m: int(m.replace(' ', '')))  # 75000€, 75 000€, 120000 euros
+            ]
+
+            for pattern, converter in budget_patterns:
+                matches = re.finditer(pattern, user_input, re.IGNORECASE)
+                for match_obj in matches:
+                    try:
+                        amount = converter(match_obj.group(1))
+                        context_store.add_fact(session_id, "budget", {
+                            "amount": amount,
+                            "original_text": match_obj.group(0),
+                            "extracted_from": user_input[:100]
+                        })
+                        logger.info("fact_extracted_budget", amount=amount, session=session_id)
+                    except:
+                        pass
+
+            # Extract dates - improved to capture full date strings
+            date_patterns = [
+                r'(\d{1,2}\s+(?:janvier|février|f[ée]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre)(?:\s+\d{4})?)',
+                r'le\s+(\d{1,2}[/\-]\d{1,2}(?:[/\-]\d{2,4})?)',
+                r'(\d{1,2}\s+(?:jan|f[ée]v|mar|avr|mai|jun|jul|ao[uû]|sep|oct|nov|d[ée]c)(?:\.|\s))',
+            ]
+            for pattern in date_patterns:
+                matches = re.findall(pattern, user_input, re.IGNORECASE)
+                for match in matches:
+                    date_clean = match.strip()
+                    context_store.add_fact(session_id, "date", {
+                        "date_text": date_clean,
+                        "extracted_from": user_input[:100]
+                    })
+                    logger.info("fact_extracted_date", date=date_clean, session=session_id)
+
+            # Extract counts
+            count_patterns = [
+                r'(\d+)\s+(?:emails?|mails?|messages?)',
+                r'(\d+)\s+(?:copropriétaires?|copros?|résidents?)',
+                r'(\d+)\s+(?:professionnels?|jardiniers?|plombiers?|couvreurs?|peintres?)',
+            ]
+            for pattern in count_patterns:
+                matches = re.findall(pattern, user_input, re.IGNORECASE)
+                for match in matches:
+                    context_store.add_fact(session_id, "count", {
+                        "count": int(match),
+                        "extracted_from": user_input[:100]
+                    })
+                    logger.info("fact_extracted_count", count=match, session=session_id)
+
+        except Exception as e:
+            logger.error("fact_extraction_failed", error=str(e))
+            # Don't fail the whole request if extraction fails
+            pass
+
+    async def _recall_from_context_store(
+        self,
+        user_input: str,
+        session_id: str
+    ) -> Optional[str]:
+        """
+        Recall structured facts from context_store
+
+        More reliable than LLM memory for structured data like budgets/dates
+        """
+        import re
+
+        try:
+            # Detect what user is asking for
+            user_lower = user_input.lower()
+
+            # Budget recall
+            if any(kw in user_lower for kw in ['budget', 'montant', 'combien', 'coût', 'prix', '€', 'euros']):
+                budget_facts = context_store.query_facts(session_id, "budget")
+                if budget_facts:
+                    # Get most recent budget
+                    latest = max(budget_facts, key=lambda f: f['timestamp'])
+                    amount = latest['data']['amount']
+
+                    # Format nicely
+                    if amount >= 1000:
+                        formatted = f"{amount:,}€".replace(',', ' ')
+                    else:
+                        formatted = f"{amount}€"
+
+                    return f"Le budget était de **{formatted}**."
+
+            # Date recall
+            if any(kw in user_lower for kw in ['date', 'quand', 'jour', 'février', 'mars', 'avril']):
+                date_facts = context_store.query_facts(session_id, "date")
+                if date_facts:
+                    latest = max(date_facts, key=lambda f: f['timestamp'])
+                    date_text = latest['data']['date_text']
+                    return f"La date était le **{date_text}**."
+
+            # Count recall
+            if any(kw in user_lower for kw in ['combien', 'nombre', 'total']) and any(kw in user_lower for kw in ['email', 'mail', 'copro', 'résident']):
+                count_facts = context_store.query_facts(session_id, "count")
+                if count_facts:
+                    # Sum all counts mentioned
+                    total = sum(f['data']['count'] for f in count_facts)
+                    return f"Il y avait **{total}** au total."
+
+            return None
+
+        except Exception as e:
+            logger.error("context_store_recall_failed", error=str(e))
+            return None

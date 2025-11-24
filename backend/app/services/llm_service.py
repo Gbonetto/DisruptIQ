@@ -8,7 +8,7 @@ import structlog
 from typing import List, Dict, Any, Optional
 from langchain_mistralai import ChatMistralAI, MistralAIEmbeddings
 from langchain.prompts import ChatPromptTemplate
-from langchain.schema import HumanMessage, SystemMessage
+from langchain.schema import HumanMessage, SystemMessage, AIMessage
 
 from app.core.config import settings
 
@@ -279,22 +279,42 @@ Réponse:"""
         self,
         prompt: str,
         max_tokens: int = 500,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """
-        Generic text generation method using Mistral AI
+        Generic text generation method using Mistral AI with conversation history support
 
         Args:
             prompt: The input prompt
             max_tokens: Maximum tokens in response
             temperature: Sampling temperature
+            conversation_history: Previous conversation messages for context
 
         Returns:
             Generated text response
         """
         try:
+            # Build message history for LLM context
+            messages = []
+
+            # Add conversation history (last 20 messages for better context preservation)
+            if conversation_history:
+                for msg in conversation_history[-20:]:
+                    if msg.get("role") == "user":
+                        messages.append(HumanMessage(content=msg.get("content", "")))
+                    elif msg.get("role") == "assistant":
+                        messages.append(AIMessage(content=msg.get("content", "")))
+
+            # Add current prompt
+            messages.append(HumanMessage(content=prompt))
+
+            logger.info("response_generated_with_history",
+                       provider="mistral",
+                       history_messages=len(messages) - 1)
+
             response = await self.chat_model.ainvoke(
-                [HumanMessage(content=prompt)],
+                messages,
                 max_tokens=max_tokens,
                 temperature=temperature
             )

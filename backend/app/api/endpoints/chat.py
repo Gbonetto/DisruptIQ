@@ -40,6 +40,7 @@ class ChatResponse(BaseModel):
     message: str
     sources: List[Dict]
     session_id: str
+    agents_used: Optional[List[str]] = []  # Agents utilisés pour générer la réponse
 
 
 @router.post("/ask", response_model=ChatResponse)
@@ -136,7 +137,8 @@ async def ask_question(
         return {
             "message": result["response"],
             "sources": sources,
-            "session_id": request.session_id or "default"
+            "session_id": request.session_id or "default",
+            "agents_used": result.get("agents_used", [])  # Include agents_used for UI-API parity
         }
 
     except Exception as e:

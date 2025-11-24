@@ -8,7 +8,7 @@ Permet aux agents de partager du contexte pendant une conversation:
 """
 
 import structlog
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
 logger = structlog.get_logger()
@@ -110,6 +110,81 @@ class SimpleContextStore:
         if conversation_id in self._store:
             del self._store[conversation_id]
             logger.info("context_cleared", conversation_id=conversation_id)
+
+    # ================================================================
+    # ENHANCED CONTEXT STORE - Solution 2 from MEMORY_ENHANCEMENT_PLAN.md
+    # ================================================================
+
+    def add_fact(self, session_id: str, fact_type: str, fact_data: Dict[str, Any]):
+        """
+        Store a structured fact for later recall
+
+        Examples:
+            add_fact(sid, "budget", {"amount": 50000, "for": "travaux toiture"})
+            add_fact(sid, "date", {"event": "AG", "date": "20 janvier"})
+            add_fact(sid, "contact", {"name": "M. Dupont", "apt": "45"})
+
+        Args:
+            session_id: Conversation/session ID
+            fact_type: Type of fact (budget, date, contact, workflow, query_result)
+            fact_data: Structured data for the fact
+        """
+        self._cleanup_expired()
+
+        if session_id not in self._store:
+            self._store[session_id] = {"_timestamp": datetime.now()}
+
+        if "facts" not in self._store[session_id]:
+            self._store[session_id]["facts"] = []
+
+        fact_entry = {
+            "type": fact_type,
+            "data": fact_data,
+            "timestamp": datetime.now()
+        }
+
+        self._store[session_id]["facts"].append(fact_entry)
+
+        logger.info("context_fact_added",
+                   session_id=session_id,
+                   fact_type=fact_type,
+                   fact_count=len(self._store[session_id]["facts"]))
+
+    def query_facts(
+        self,
+        session_id: str,
+        fact_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Query facts by type or get all facts
+
+        Args:
+            session_id: Conversation/session ID
+            fact_type: Optional type filter (budget, date, contact, etc.)
+
+        Returns:
+            List of matching facts
+        """
+        self._cleanup_expired()
+
+        if session_id not in self._store:
+            return []
+
+        facts = self._store[session_id].get("facts", [])
+
+        if fact_type:
+            filtered = [f for f in facts if f["type"] == fact_type]
+            logger.info("context_facts_queried",
+                       session_id=session_id,
+                       fact_type=fact_type,
+                       count=len(filtered))
+            return filtered
+
+        logger.info("context_facts_queried",
+                   session_id=session_id,
+                   fact_type="all",
+                   count=len(facts))
+        return facts
 
 
 # Global singleton
