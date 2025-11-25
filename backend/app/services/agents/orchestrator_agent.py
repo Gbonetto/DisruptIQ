@@ -430,6 +430,9 @@ class OrchestratorAgent:
                     elif source == 'web':
                         intent = IntentType.WEB_SEARCH
                         classification_result = None
+                    elif source == 'legal':
+                        intent = IntentType.LEGAL
+                        classification_result = None
                     else:
                         # Fallback to classifier for unknown sources
                         logger.warning("unknown_source", source=source)
@@ -2628,7 +2631,7 @@ Réponds uniquement avec le contenu, sans préambule."""
                         agents_used.append("websearch_agent")
 
             # Build response using unified fusion approach
-            response_data = {"sources": selected_sources}
+            response_data = {}
             all_sources = []
 
             # Case 1: No web - use ResponseFusionAgent (already works well for SQL+RAG)
@@ -2643,9 +2646,28 @@ Réponds uniquement avec le contenu, sans préambule."""
                         agent="orchestrator"
                     )
 
-                # Update response_data with SQL results if any
+                # Build structured sources for this case
+                if sql_rag_result.has_sql:
+                    all_sources.append({"type": "sql", "title": "Base de données DisruptIQ"})
+
+                if sql_rag_result.has_rag and sql_rag_result.rag_result.data:
+                    rag_data = sql_rag_result.rag_result.data
+                    chunks = rag_data.get("chunks", [])
+                    for i, chunk in enumerate(chunks[:5], 1):
+                        source_name = chunk.get("metadata", {}).get("title", "Document") or f"Document {chunk.get('document_id', i)}"
+                        all_sources.append({
+                            "type": "rag",
+                            "id": i,
+                            "title": source_name,
+                            "document": source_name,
+                            "confidence": chunk.get("score", chunk.get("cross_encoder_score", 0.5))
+                        })
+
+                # Update response_data with SQL results and sources
                 if sql_rag_result.has_sql and sql_rag_result.sql_result.data:
                     response_data.update(sql_rag_result.sql_result.data)
+
+                response_data["sources"] = all_sources
 
                 return AgentResponse(
                     success=fused.text != "",

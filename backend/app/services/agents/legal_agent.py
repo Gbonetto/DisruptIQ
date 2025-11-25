@@ -498,7 +498,22 @@ class LegalAgent:
             "contentieux"
         ]
 
-        # 1. Document analysis
+        # Advice keywords (questions about legal obligations, rights, procedures)
+        advice_keywords = [
+            "quelles sont mes obligations", "mes obligations", "obligations légales",
+            "quels sont mes droits", "mes droits", "droits du", "droits de",
+            "ai-je le droit", "puis-je", "peut-on", "dois-je", "suis-je obligé",
+            "comment faire pour", "comment procéder", "quelle procédure",
+            "que faire si", "que dois-je faire",
+            "conseille", "conseil", "recommandation",
+            "puis-je faire", "est-il possible de"
+        ]
+
+        # 1. Legal advice (check BEFORE document analysis to prioritize advisory questions)
+        if any(keyword in user_lower for keyword in advice_keywords):
+            return {"action": "advice", "confidence": 0.90}
+
+        # 2. Document analysis
         if any(keyword in user_lower for keyword in analyze_keywords):
             # Determine analysis mode
             mode = "full"  # Default
@@ -512,15 +527,15 @@ class LegalAgent:
 
             return {"action": "analyze", "mode": mode, "confidence": 0.95}
 
-        # 2. Document comparison
+        # 3. Document comparison
         if any(keyword in user_lower for keyword in compare_keywords):
             return {"action": "compare", "confidence": 0.90}
 
-        # 3. Jurisprudence search
+        # 4. Jurisprudence search
         if any(keyword in user_lower for keyword in jurisprudence_keywords):
             return {"action": "jurisprudence", "confidence": 0.95}
 
-        # 4. Legal advice (default for legal questions)
+        # 5. Legal advice (fallback for legal questions)
         # Questions typically start with: quoi, comment, pourquoi, quelles, quel, est-ce que
         question_indicators = ["quoi", "comment", "pourquoi", "quelles", "quel",
                                "est-ce que", "puis-je", "peut-on", "dois-je"]
