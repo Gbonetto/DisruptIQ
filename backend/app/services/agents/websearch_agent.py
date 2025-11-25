@@ -136,16 +136,23 @@ class WebSearchAgent:
     - Contextual memory for multi-turn conversations
     """
 
-    def __init__(self, use_tavily: bool = False, tavily_api_key: Optional[str] = None):
+    def __init__(self, use_tavily: bool = False, tavily_api_key: Optional[str] = None, brave_api_key: Optional[str] = None):
         """
         Initialize WebSearch Agent
 
         Args:
             use_tavily: Whether to use Tavily API (requires key)
             tavily_api_key: Tavily API key (optional)
+            brave_api_key: Brave Search API key (optional)
         """
-        self.use_tavily = use_tavily and tavily_api_key is not None
-        self.tavily_api_key = tavily_api_key
+        from app.core.config import settings
+
+        # Priority: Brave > Tavily > DuckDuckGo (free but rate-limited)
+        self.brave_api_key = brave_api_key or settings.BRAVE_SEARCH_API_KEY
+        self.use_brave = self.brave_api_key is not None and self.brave_api_key != ""
+
+        self.tavily_api_key = tavily_api_key or getattr(settings, "TAVILY_API_KEY", "")
+        self.use_tavily = (use_tavily or not self.use_brave) and self.tavily_api_key is not None and self.tavily_api_key != ""
 
         # Initialize cache service for Redis caching
         try:
@@ -157,9 +164,10 @@ class WebSearchAgent:
             logger.warning("cache_service_init_failed", error=str(e))
             self.cache_service = None
 
+        provider = "brave" if self.use_brave else ("tavily" if self.use_tavily else "duckduckgo")
         logger.info(
             "websearch_agent_initialized",
-            provider="tavily" if self.use_tavily else "duckduckgo",
+            provider=provider,
             caching_enabled=self.cache_service is not None
         )
 
@@ -235,7 +243,9 @@ class WebSearchAgent:
             # STEP 3: Perform search (cache miss)
             logger.info("websearch_cache_miss", query=enriched_query[:80])
 
-            if self.use_tavily:
+            if self.use_brave:
+                results = await self._search_brave(enriched_query, num_results, region)
+            elif self.use_tavily:
                 results = await self._search_tavily(enriched_query, num_results, search_depth)
             else:
                 results = await self._search_duckduckgo(enriched_query, num_results, region, time_range)
@@ -353,6 +363,114 @@ class WebSearchAgent:
             confidence=0.8 if results else 0.0  # Higher confidence with LLM synthesis
         )
 
+    async def _search_brave(
+        self,
+        query: str,
+        num_results: int,
+        region: str
+    ) -> SearchResults:
+        """
+        Search using Brave Search API (requires API key)
+
+        API Documentation: https://api.search.brave.com/app/documentation/web-search/get-started
+
+        Args:
+            query: Search query
+            num_results: Number of results to return
+            region: Region/country code (e.g., 'fr-fr')
+
+        Returns:
+            SearchResults with AI-generated synthesis
+        """
+        try:
+            # Brave API endpoint
+            api_url = "https://api.search.brave.com/res/v1/web/search"
+
+            # Extract country code from region (e.g., 'fr-fr' -> 'FR')
+            country_code = region.split('-')[0].upper() if region else "FR"
+
+            headers = {
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip",
+                "X-Subscription-Token": self.brave_api_key
+            }
+
+            params = {
+                "q": query,
+                "count": num_results,
+                "country": country_code,
+                "search_lang": "fr",
+                "ui_lang": "fr-FR",
+                "safesearch": "moderate",
+                "freshness": None  # Can be: "24h", "week", "month", "year"
+            }
+
+            logger.info(
+                "brave_search_request",
+                query=query[:80],
+                num_results=num_results,
+                country=country_code
+            )
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(api_url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+
+            # Parse results from Brave API response
+            results = []
+            web_results = data.get("web", {}).get("results", [])
+
+            logger.info("brave_api_response", total_results=len(web_results))
+
+            for idx, item in enumerate(web_results[:num_results]):
+                result = SearchResult(
+                    title=item.get("title", ""),
+                    url=item.get("url", ""),
+                    snippet=item.get("description", ""),
+                    source="brave",
+                    relevance_score=1.0 - (idx * 0.05)  # Decreasing score by position
+                )
+                results.append(result)
+
+            if not results:
+                logger.warning("brave_search_empty_results", query=query[:80])
+                return SearchResults(
+                    query=query,
+                    results=[],
+                    synthesized_answer="Aucun résultat trouvé",
+                    confidence=0.0
+                )
+
+            logger.info("brave_search_success", result_count=len(results))
+
+            # Generate LLM synthesis of search results
+            synthesized_answer = await self._synthesize_llm(query, results)
+
+            return SearchResults(
+                query=query,
+                results=results,
+                synthesized_answer=synthesized_answer,
+                confidence=0.9 if results else 0.0  # High confidence with Brave API
+            )
+
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "brave_api_http_error",
+                status_code=e.response.status_code,
+                error=str(e),
+                exc_info=True
+            )
+            # Fallback to DuckDuckGo on API errors
+            logger.warning("brave_api_failed_fallback_to_duckduckgo")
+            return await self._search_duckduckgo(query, num_results, region, None)
+
+        except Exception as e:
+            logger.error("brave_search_failed", error=str(e), exc_info=True)
+            # Fallback to DuckDuckGo
+            logger.warning("brave_search_exception_fallback_to_duckduckgo")
+            return await self._search_duckduckgo(query, num_results, region, None)
+
     async def _search_tavily(
         self,
         query: str,
@@ -383,15 +501,24 @@ class WebSearchAgent:
         Fallback: Search DuckDuckGo via HTML scraping when API is rate limited
         """
         try:
-            from urllib.parse import unquote, parse_qs, urlparse
+            from urllib.parse import unquote, parse_qs, urlparse, quote
             import html as html_module
 
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-            search_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
+            # URL encode the query properly
+            encoded_query = quote(query)
 
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "fr-FR,fr;q=0.9",
+                "Accept-Encoding": "gzip, deflate",
+                "DNT": "1",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
+            }
+            search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
+
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 response = await client.get(search_url, headers=headers)
                 response.raise_for_status()
 
@@ -405,6 +532,8 @@ class WebSearchAgent:
             links = re.findall(link_pattern, html)
             snippets = re.findall(snippet_pattern, html)
 
+            logger.info("duckduckgo_html_parsing", links_found=len(links), snippets_found=len(snippets))
+
             for i, (redirect_url, title) in enumerate(links[:num_results]):
                 # Extract real URL from DDG redirect
                 if 'uddg=' in redirect_url:
@@ -417,11 +546,13 @@ class WebSearchAgent:
                 # Get snippet if available
                 snippet = html_module.unescape(snippets[i]) if i < len(snippets) else ""
 
-                results.append({
-                    "href": real_url,
-                    "title": html_module.unescape(title.strip()),
-                    "body": snippet.strip()
-                })
+                # Only add if we have a valid URL
+                if real_url and real_url.startswith('http'):
+                    results.append({
+                        "href": real_url,
+                        "title": html_module.unescape(title.strip()),
+                        "body": snippet.strip()
+                    })
 
             logger.info("duckduckgo_html_fallback_success", result_count=len(results))
             return results

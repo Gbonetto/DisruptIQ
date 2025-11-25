@@ -78,7 +78,7 @@ async def ask_question(
         # Convert conversation history to proper format
         conv_history = [{"role": msg.role, "content": msg.content} for msg in request.conversation_history]
 
-        # Process with multi-agent orchestrator (30s timeout protection)
+        # Process with multi-agent orchestrator (60s timeout protection for agentic RAG)
         try:
             agent_response = await asyncio.wait_for(
                 orchestrator.process(
@@ -91,7 +91,7 @@ async def ask_question(
                     selected_sources=request.selected_sources,  # User-controlled source selection
                     session_id=request.session_id  # For context_store
                 ),
-                timeout=30.0
+                timeout=60.0
             )
         except asyncio.TimeoutError:
             logger.error("request_timeout", message=request.message[:100])
