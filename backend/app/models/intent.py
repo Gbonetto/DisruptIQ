@@ -35,6 +35,9 @@ class IntentType(str, Enum):
     LEGAL = "legal"                        # Legal analysis/advice (agent decides specific action)
     GENERAL_QUESTION = "general_question"  # General assistant questions (not domain-specific)
 
+    # Digest/Summary Intents
+    GENERATE_DIGEST = "generate_digest"    # Email digest, summaries (Gmail sync + display)
+
     # Legacy (DEPRECATED - for backward compatibility)
     HYBRID_QUERY = "hybrid_query"          # DEPRECATED: Use QUERY_DATA or SEARCH_DOCUMENTS
 
@@ -82,6 +85,10 @@ class IntentClassification(BaseModel):
     - suggested_sources: NOT obligations, just hints
     - Agents have full autonomy to decide data strategy
     - Orchestrator builds context, agent decides what to use
+
+    V6 Additions:
+    - is_hybrid_search: True when multiple UI sources selected
+    - selected_ui_sources: Sources from UI checkboxes (for orchestrator)
     """
     intent: IntentType = Field(..., description="Primary user intention")
     domain: Domain = Field(default=Domain.UNKNOWN, description="Semantic domain")
@@ -91,6 +98,16 @@ class IntentClassification(BaseModel):
     suggested_sources: List[DataSource] = Field(
         default_factory=list,
         description="Suggested data sources (agents decide final strategy)"
+    )
+
+    # V6: UI Source Selection Support
+    is_hybrid_search: bool = Field(
+        default=False,
+        description="True if multiple sources selected in UI → orchestrator aggregates results"
+    )
+    selected_ui_sources: List[str] = Field(
+        default_factory=list,
+        description="UI checkbox selections ['sql', 'rag', 'web'] for orchestrator"
     )
 
     # Metadata
@@ -103,6 +120,10 @@ class IntentClassification(BaseModel):
     possible_intents: List[IntentType] = Field(
         default_factory=list,
         description="Alternative intents if ambiguous"
+    )
+    clarification_options: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="UI-friendly clarification options [{label, intent, description}]"
     )
 
     class Config:
@@ -123,7 +144,7 @@ class AgentResponse(BaseModel):
     # Metadata
     agents_used: List[str] = Field(default_factory=list, description="Which agents were involved?")
     sources_used: List[DataSource] = Field(default_factory=list, description="Which data sources were accessed?")
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Response confidence")
+    confidence: float = Field(default=1.0, description="Response confidence (can be negative for reranker scores)")
 
     # User guidance
     suggestions: List[str] = Field(default_factory=list, description="Follow-up action suggestions")
@@ -161,15 +182,19 @@ class AgentPlan(BaseModel):
 
 # Intent → Agent Mapping (Reference, not enforced)
 # This is DOCUMENTATION, not rigid routing
+#
+# V6 IMPORTANT: REQUEST_QUOTES uses EmailAgent (same N8N integration)
+# REQUEST_QUOTES = specialized SEND_EMAIL with "demande de devis" context
 INTENT_AGENT_MAP = {
     IntentType.QUERY_DATA: "SQLAgent",
     IntentType.SEARCH_DOCUMENTS: "RAGAgent",
     IntentType.WEB_SEARCH: "WebSearchAgent",
     IntentType.SEND_EMAIL: "EmailAgent",
-    IntentType.REQUEST_QUOTES: "QuoteAgent",
+    IntentType.REQUEST_QUOTES: "EmailAgent",  # V6: Same agent as SEND_EMAIL, with devis context
     IntentType.TRIGGER_WORKFLOW: "WorkflowAgent",
     IntentType.LEGAL: "LegalAgent",  # Legal Agent decides: analysis, advice, jurisprudence
     IntentType.GENERAL_QUESTION: "OrchestratorAgent",  # Orchestrator handles directly
+    IntentType.GENERATE_DIGEST: "DigestAgent",  # Email digest generation
 }
 
 
@@ -183,4 +208,5 @@ INTENT_DEFAULT_SOURCES = {
     IntentType.REQUEST_QUOTES: [DataSource.SQL],
     IntentType.TRIGGER_WORKFLOW: [],
     IntentType.GENERAL_QUESTION: [DataSource.CONVERSATION],
+    IntentType.GENERATE_DIGEST: [DataSource.SQL],  # Reads from email table
 }

@@ -304,6 +304,12 @@ COPROPRIETES:
 Q: "copropriétaires des Mimosas"
 A: SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%mimosas%')) LIMIT 100
 
+Q: "liste tous les copropriétaires de Arc-en-Ciel avec leurs emails"
+A: SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot, c.etage FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%arc-en-ciel%')) OR unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%arc en ciel%')) LIMIT 100
+
+Q: "combien de copropriétaires dans la résidence Arc-en-Ciel"
+A: SELECT COUNT(*) as nombre_coproprietaires FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%arc-en-ciel%')) OR unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%arc en ciel%'))
+
 Q: "copropriétés construites avant 2000"
 A: SELECT * FROM coproprietes WHERE annee_construction < 2000 LIMIT 100
 
@@ -316,6 +322,16 @@ A: SELECT c.nom, c.prenom, c.email, co.nom as copropriete_nom FROM coproprietair
 
 Q: "syndic de la copropriété où vit Marie Dubois"
 A: SELECT DISTINCT co.syndic, co.contact_syndic FROM coproprietes co JOIN coproprietaires c ON c.copropriete_id = co.id WHERE unaccent(LOWER(c.prenom)) LIKE unaccent(LOWER('%marie%')) AND unaccent(LOWER(c.nom)) LIKE unaccent(LOWER('%dubois%')) LIMIT 100
+
+COLONNES CALCULÉES (tantièmes, pourcentages, totaux):
+Q: "liste des copropriétaires Arc-en-Ciel avec leurs tantièmes"
+A: SELECT c.nom, c.prenom, c.email, c.numero_lot, c.surface, ROUND(c.surface * 1000.0 / (SELECT SUM(c2.surface) FROM coproprietaires c2 WHERE c2.copropriete_id = c.copropriete_id), 2) as tantiemes FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%arc-en-ciel%')) ORDER BY tantiemes DESC LIMIT 100
+
+Q: "calcule le quorum pour l'AG de Arc-en-Ciel"
+A: SELECT COUNT(*) as nb_coproprietaires, SUM(c.surface) as surface_totale, ROUND(SUM(c.surface) / 2, 2) as quorum_surface_50pct, ROUND(COUNT(*) / 2.0, 0) as quorum_nb_50pct FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%arc-en-ciel%'))
+
+Q: "surface totale et moyenne par copropriétaire de Arc-en-Ciel"
+A: SELECT co.nom as copropriete, COUNT(c.id) as nb_coproprietaires, ROUND(SUM(c.surface), 2) as surface_totale_m2, ROUND(AVG(c.surface), 2) as surface_moyenne_m2 FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%arc-en-ciel%')) GROUP BY co.id, co.nom
 
 VÉRIFICATION DE PRÉSENCE:
 Q: "dans la table professionnels, y a t-il Gregori Bonetto ?"
@@ -502,6 +518,19 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
             return "Je n'ai trouvé aucun résultat pour votre question."
 
         count = len(results)
+        question_lower = original_question.lower()
+
+        # ================================================================
+        # SPECIAL CASE: Quorum calculation - add explanatory context
+        # ================================================================
+        if any(kw in question_lower for kw in ["quorum", "assemblée générale", "ag "]):
+            return await self._format_quorum_response(original_question, results)
+
+        # ================================================================
+        # SPECIAL CASE: Tantièmes calculation - add explanatory context
+        # ================================================================
+        if any(kw in question_lower for kw in ["tantième", "tantiemes", "millième"]):
+            return await self._format_tantiemes_response(original_question, results)
 
         # Generate human-readable response from SQL results
         response_parts = [f"✅ J'ai trouvé **{count}** résultat{'s' if count > 1 else ''} dans la base de données.\n"]
@@ -577,3 +606,107 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
         # Filter to only allowed tables and return as sorted list
         valid_tables = [t for t in found_tables if t in ALLOWED_TABLES]
         return sorted(valid_tables)
+
+    async def _format_quorum_response(
+        self,
+        original_question: str,
+        results: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Format quorum calculation with explanatory context
+
+        Args:
+            original_question: User's original question
+            results: Query results with quorum data
+
+        Returns:
+            Formatted message with legal context
+        """
+        if not results:
+            return "Je n'ai pas trouvé de données pour calculer le quorum."
+
+        row = results[0]
+
+        # Extract values from results
+        nb_copros = row.get('nb_coproprietaires', row.get('count', 0))
+        surface_totale = row.get('surface_totale', 0)
+        quorum_surface = row.get('quorum_surface_50pct', surface_totale / 2 if surface_totale else 0)
+        quorum_nb = row.get('quorum_nb_50pct', nb_copros / 2 if nb_copros else 0)
+
+        response = f"""## 📊 Calcul du Quorum - Assemblée Générale
+
+### Données de la copropriété
+- **Nombre de copropriétaires:** {nb_copros}
+- **Surface totale:** {surface_totale:.2f} m² (tantièmes totaux: 1000)
+
+### Quorum requis (Article 25 loi du 10 juillet 1965)
+
+**Pour une AG valide en première convocation:**
+- ✅ **Minimum {int(quorum_nb)} copropriétaires** présents ou représentés
+- ✅ **Minimum {quorum_surface:.2f} m²** de tantièmes représentés (50% de {surface_totale:.2f})
+
+### 📋 Règles de majorité
+| Type de décision | Majorité requise |
+|-----------------|------------------|
+| Décisions courantes (art. 24) | Majorité des voix présentes |
+| Travaux importants (art. 25) | Majorité de tous les copropriétaires |
+| Modifications règlement (art. 26) | Double majorité (2/3 des voix) |
+
+💡 *Si le quorum n'est pas atteint, une 2ème AG peut être convoquée sans condition de quorum.*
+"""
+        return response
+
+    async def _format_tantiemes_response(
+        self,
+        original_question: str,
+        results: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Format tantièmes calculation with explanatory context
+
+        Args:
+            original_question: User's original question
+            results: Query results with tantièmes data
+
+        Returns:
+            Formatted message with explanation
+        """
+        if not results:
+            return "Je n'ai pas trouvé de données pour calculer les tantièmes."
+
+        count = len(results)
+        total_tantiemes = sum(float(r.get('tantiemes', 0)) for r in results if r.get('tantiemes'))
+
+        response_parts = [
+            f"""## 📊 Répartition des Tantièmes
+
+**{count} copropriétaire{'s' if count > 1 else ''}** | Total tantièmes: **{total_tantiemes:.0f}/1000**
+
+### Calcul des tantièmes
+Les tantièmes sont calculés selon la formule:
+`Tantièmes = (Surface du lot / Surface totale copropriété) × 1000`
+
+### Top 5 des propriétaires par tantièmes
+"""
+        ]
+
+        # Show top 5 by tantiemes
+        sorted_results = sorted(results, key=lambda x: float(x.get('tantiemes', 0)), reverse=True)
+        for i, row in enumerate(sorted_results[:5], 1):
+            name = f"{row.get('prenom', '')} {row.get('nom', '')}".strip()
+            lot = row.get('numero_lot', 'N/A')
+            surface = row.get('surface', 0)
+            tantiemes = row.get('tantiemes', 0)
+            response_parts.append(f"| {i}. **{name}** | Lot {lot} | {surface}m² | **{tantiemes} tantièmes** |")
+
+        if count > 5:
+            response_parts.append(f"\n*... et {count - 5} autre(s) dans le tableau ci-dessous.*")
+
+        response_parts.append("""
+### 💡 Utilisation des tantièmes
+- **Répartition des charges** communes
+- **Droit de vote** en AG (1 tantième = 1 voix)
+- **Quote-part** dans les parties communes
+""")
+
+        return "\n".join(response_parts)

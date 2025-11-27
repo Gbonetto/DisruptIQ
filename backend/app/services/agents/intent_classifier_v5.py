@@ -1,15 +1,22 @@
 """
-Intent Classifier V5 (V6 improvements) - World-Class SMA Routing
-Phase 3 Refactoring - Context-Aware Classification
+Intent Classifier V6 - World-Class SMA Routing with UI Source Selection
+Phase 3 Refactoring - Context-Aware Classification + UI Sources
 
-✅ CURRENT VERSION - Production Ready
+✅ CURRENT VERSION - Production Ready V6
 
-Key Improvements:
+Key Improvements V6:
+- UI Source Selection: SQL/RAG/Internet checkboxes drive routing
+- Hybrid Search: Multi-source queries aggregate results
+- REQUEST_QUOTES merged into SEND_EMAIL (same N8N agent)
+- WEB_SEARCH only when Internet checked OR explicit request
 - Context-aware email detection (distingue "envoie email" vs "envoie-moi")
 - SQL keywords checked BEFORE email verbs (priority order fix)
 - Clarification automatique sous 0.70 confiance
-- Unified context model preparation
-- Better conversation history utilization
+
+Source Selection Logic:
+1. Single source checked → Route directly (SQL/RAG/WEB)
+2. Multiple sources checked → Hybrid search (orchestrator aggregates)
+3. No source checked → Auto-detect from vocabulary/context
 
 Phase 3 World-Class SMA Architecture:
 - Compatible with BaseAgent interface via wrapped_agents.py
@@ -73,15 +80,19 @@ class IntentClassifierV5:
         **kwargs  # Accept extra args for backward compatibility
     ) -> IntentClassification:
         """
-        Classify user intent
+        Classify user intent with UI source selection support
 
         Args:
             user_input: User's message
-            context: Optional context (uploaded files, etc.)
+            context: Optional context including:
+                - has_uploaded_documents: bool
+                - selected_sources: List[str] - UI checkboxes ["sql", "rag", "web"]
             conversation_history: Previous messages
 
         Returns:
             IntentClassification with intent, domain, confidence, suggested_sources
+            - is_hybrid_search: True if multiple sources selected
+            - selected_sources: Sources from UI (for orchestrator)
         """
         start_time = datetime.now()
         query_lower = user_input.lower()
@@ -95,7 +106,44 @@ class IntentClassifierV5:
         has_documents = context.get("has_uploaded_documents", False) or \
                        context.get("has_active_documents", False)
 
+        # ================================================================
+        # PHASE 0: UI SOURCE SELECTION - Priority routing based on checkboxes
+        # ================================================================
+        selected_sources = context.get("selected_sources", [])  # ["sql", "rag", "web"]
+
+        # Normalize source names
+        selected_sources = [s.lower() for s in selected_sources] if selected_sources else []
+
+        logger.info("sources_from_ui", sources=selected_sources)
+
+        # CASE 1: Single source checked → Direct routing (no ambiguity)
+        if len(selected_sources) == 1:
+            source = selected_sources[0]
+            result = self._route_single_source(source, query_lower, user_input)
+            if result:
+                processing_time = (datetime.now() - start_time).total_seconds() * 1000
+                logger.info("single_source_routing",
+                           source=source,
+                           intent=result.intent.value,
+                           time_ms=processing_time)
+                return result
+
+        # CASE 2: Multiple sources checked → Hybrid search
+        elif len(selected_sources) > 1:
+            result = await self._route_hybrid_search(selected_sources, query_lower, user_input, context, conversation_history)
+            processing_time = (datetime.now() - start_time).total_seconds() * 1000
+            logger.info("hybrid_search_routing",
+                       sources=selected_sources,
+                       intent=result.intent.value,
+                       time_ms=processing_time)
+            return result
+
+        # CASE 3: No source checked → Auto-detect (existing logic)
+        # Continue to quick rules and LLM classification
+
+        # ================================================================
         # PHASE 1: Quick Rules (70% of queries) - Now with conversation context
+        # ================================================================
         quick_result = await self._quick_rules_classification(
             query_lower,
             has_documents,
@@ -122,6 +170,148 @@ class IntentClassifierV5:
 
         return llm_result
 
+    def _route_single_source(self, source: str, query_lower: str, user_input: str) -> Optional[IntentClassification]:
+        """
+        Route directly when user selected a single source in UI
+
+        Args:
+            source: "sql", "rag", or "web"
+            query_lower: Lowercase query
+            user_input: Original user input
+
+        Returns:
+            IntentClassification for the single source
+        """
+        if source == "sql":
+            return IntentClassification(
+                intent=IntentType.QUERY_DATA,
+                domain=Domain.PROPERTY_MGMT,
+                confidence=0.98,  # High confidence - user explicitly chose
+                suggested_sources=[DataSource.SQL],
+                reasoning="User selected SQL source in UI",
+                keywords_matched=["ui_source_sql"],
+                is_hybrid_search=False
+            )
+        elif source in ["rag", "documents"]:
+            return IntentClassification(
+                intent=IntentType.SEARCH_DOCUMENTS,
+                domain=Domain.PROPERTY_MGMT,
+                confidence=0.98,
+                suggested_sources=[DataSource.RAG, DataSource.UPLOADED_DOCS],
+                reasoning="User selected Documents/RAG source in UI",
+                keywords_matched=["ui_source_rag"],
+                is_hybrid_search=False
+            )
+        elif source in ["web", "internet"]:
+            return IntentClassification(
+                intent=IntentType.WEB_SEARCH,
+                domain=Domain.GENERAL,
+                confidence=0.98,
+                suggested_sources=[DataSource.WEB],
+                reasoning="User selected Internet source in UI",
+                keywords_matched=["ui_source_web"],
+                is_hybrid_search=False
+            )
+        return None
+
+    async def _route_hybrid_search(
+        self,
+        sources: List[str],
+        query_lower: str,
+        user_input: str,
+        context: Dict[str, Any],
+        conversation_history: Optional[List[Dict[str, str]]]
+    ) -> IntentClassification:
+        """
+        Route to hybrid search when multiple sources are selected
+
+        The orchestrator will:
+        1. Query all selected sources
+        2. Aggregate results
+        3. Generate cross-source synthesis
+
+        Args:
+            sources: List of selected sources ["sql", "rag", "web"]
+            query_lower: Lowercase query
+            user_input: Original user input
+            context: Full context
+            conversation_history: Previous messages
+
+        Returns:
+            IntentClassification with is_hybrid_search=True
+        """
+        # Map sources to DataSource enum
+        source_map = {
+            "sql": DataSource.SQL,
+            "rag": DataSource.RAG,
+            "documents": DataSource.RAG,
+            "web": DataSource.WEB,
+            "internet": DataSource.WEB,
+        }
+
+        suggested_sources = []
+        for s in sources:
+            if s in source_map:
+                suggested_sources.append(source_map[s])
+
+        # Determine primary intent based on vocabulary (for hybrid, still need a "main" intent)
+        # This helps the orchestrator know which agent to prioritize
+        primary_intent = await self._detect_primary_intent_for_hybrid(query_lower, user_input, context)
+
+        return IntentClassification(
+            intent=primary_intent,
+            domain=Domain.PROPERTY_MGMT,
+            confidence=0.95,
+            suggested_sources=suggested_sources,
+            reasoning=f"Hybrid search across {', '.join(sources)} - UI multi-source selection",
+            keywords_matched=["ui_hybrid_search"],
+            is_hybrid_search=True,
+            selected_ui_sources=sources  # Pass to orchestrator for execution
+        )
+
+    async def _detect_primary_intent_for_hybrid(
+        self,
+        query_lower: str,
+        user_input: str,
+        context: Dict[str, Any]
+    ) -> IntentType:
+        """
+        Detect primary intent for hybrid searches
+
+        Even with hybrid search, we need a "main" intent to help orchestrator
+        prioritize and structure the response.
+
+        Priority:
+        1. Document content words → SEARCH_DOCUMENTS
+        2. Database entity words → QUERY_DATA
+        3. Default → SEARCH_DOCUMENTS (safer for hybrid)
+        """
+        # Document content indicators
+        doc_indicators = [
+            "facture", "contrat", "devis", "pv ", "procès-verbal",
+            "document", "analyse", "résume", "que dit", "selon"
+        ]
+
+        # Database entity indicators
+        db_indicators = [
+            "copropriétaire", "copropriété", "professionnel",
+            "liste", "combien", "nombre", "tous les", "toutes les"
+        ]
+
+        has_doc_indicator = any(ind in query_lower for ind in doc_indicators)
+        has_db_indicator = any(ind in query_lower for ind in db_indicators)
+
+        if has_doc_indicator and not has_db_indicator:
+            return IntentType.SEARCH_DOCUMENTS
+        elif has_db_indicator and not has_doc_indicator:
+            return IntentType.QUERY_DATA
+        elif has_doc_indicator and has_db_indicator:
+            # Both present - default to documents for richer context
+            return IntentType.SEARCH_DOCUMENTS
+        else:
+            # Neither - use SEARCH_DOCUMENTS as safer default for hybrid
+            return IntentType.SEARCH_DOCUMENTS
+
     def _is_info_request(self, query_lower: str) -> bool:
         """
         Detect if query is an info request (not an action)
@@ -144,14 +334,23 @@ class IntentClassifierV5:
             "message à", "message aux",
             "contacte ", "contacter ",
             "écris à", "écrire à",
-            "préviens", "prévenir", "alerter", "alerte ",
+            # Verbes de communication (sans mot "email") → détection destinataire
+            "préviens", "prévenir", "previens", "prevenir",
+            "informe", "informer",  # AJOUTÉ
+            "notifie", "notifier",  # AJOUTÉ
+            "avertis", "avertir",   # AJOUTÉ
+            "alerter", "alerte ",
+            # Types de destinataires
             "copropriétaires", "copropriétaire",
             "professionnel", "professionnels",
-            "prestataire",  # ADDED: Important target for vendor emails
+            "prestataire",  # Important target for vendor emails
             "chauffagiste", "plombier", "électricien",
-            "plomberie", "électricité",  # ADDED: Company type names
-            "fournisseur", "artisan", "entreprise",  # ADDED: Vendor types
-            "voisin", "voisins", "syndic"
+            "plomberie", "électricité",  # Company type names
+            "fournisseur", "artisan", "entreprise",  # Vendor types
+            "voisin", "voisins", "syndic",
+            "conseil syndical",  # AJOUTÉ: AG context
+            "propriétaire", "propriétaires",  # AJOUTÉ
+            "locataire", "locataires",  # AJOUTÉ
         ]
         return any(pattern in query_lower for pattern in email_target_patterns)
 
@@ -350,17 +549,36 @@ class IntentClassifierV5:
         # ================================================================
         if not is_info_request:
             # CRITICAL: Explicit email phrases that MUST be classified as SEND_EMAIL
+            # Priority check BEFORE SQL to prevent "tous les copropriétaires" → QUERY_DATA
             email_explicit_phrases = [
+                # Email keywords
                 "envoie un email", "envoie un mail", "envoyer un email",
                 "envoie email", "envoie mail",
                 "génère un email", "génère email", "genere un email", "genere email",
                 "écris un email", "ecris un email",
                 "rédige un email", "redige un email",
+                # CRITICAL: Convocation/communication patterns (often to "tous les copropriétaires")
+                "envoie la convocation", "envoie une convocation", "envoie les convocations",
+                "envoyer la convocation", "envoyer une convocation", "envoyer les convocations",
+                "envoi la convocation", "envoi une convocation", "envoi les convocations",
+                "envoie l'invitation", "envoie une invitation", "envoie les invitations",
+                "envoie la notification", "envoie une notification",
+                "envoie l'alerte", "envoie une alerte",
+                "envoie le message", "envoie un message",
+                "envoie l'information", "envoie une information", "envoie les informations",
             ]
 
             has_explicit_email_phrase = any(phrase in query_lower for phrase in email_explicit_phrases)
 
-            if has_explicit_email_phrase:
+            # ALSO check: "envoie" + email recipient target without explicit "email" word
+            simple_send_verbs = ["envoie ", "envoyer ", "envoi "]
+            has_send_verb = any(verb in query_lower for verb in simple_send_verbs)
+            has_recipient_target = self._has_explicit_email_target(query_lower)
+
+            # "Envoie aux copropriétaires" = SEND_EMAIL (not SQL)
+            is_send_to_recipient = has_send_verb and has_recipient_target
+
+            if has_explicit_email_phrase or is_send_to_recipient:
                 # This is definitely an email action, not a SQL query
                 logger.info("explicit_email_phrase_detected", query=query_lower[:50])
                 return IntentClassification(
@@ -420,6 +638,8 @@ class IntentClassifierV5:
         # ================================================================
         if not is_info_request:
             # Explicit email action verbs WITH recipient context
+            # CLARIFICATION FINALE: "préviens/informe/notifie" + destinataire = SEND_EMAIL
+            # Même sans le mot "email" explicite
             email_action_verbs = [
                 "envoie un email", "envoie un mail", "envoyer un email",
                 "écris un email", "écris un message", "ecris un email", "ecris un message",
@@ -428,7 +648,12 @@ class IntentClassifierV5:
                 "génère la convocation", "génère convocation",
                 "crée la convocation", "crée convocation",
                 "prépare la convocation", "prépare convocation",
-                "contacte", "contacter", "préviens", "prévenir",
+                # Verbes de communication → SEND_EMAIL (même sans "email")
+                "contacte", "contacter",
+                "préviens", "prévenir", "previens", "prevenir",  # Avec et sans accent
+                "informe", "informer",  # AJOUTÉ
+                "notifie", "notifier",  # AJOUTÉ
+                "avertis", "avertir",   # AJOUTÉ
                 "alerte", "alerter"
             ]
 
@@ -514,17 +739,36 @@ class IntentClassifierV5:
                     keywords_matched=[keyword]
                 )
 
-        # 4. WEB SEARCH - Explicit internet requests
-        web_keywords = ["sur internet", "recherche internet", "google", "cherche sur le web"]
+        # ================================================================
+        # 4. WEB SEARCH - ONLY when explicitly requested
+        # V6 RULE: WEB_SEARCH triggers ONLY if:
+        #   - User selected "Internet" checkbox (handled in PHASE 0)
+        #   - OR user explicitly asks with these patterns
+        # ================================================================
+        web_explicit_keywords = [
+            # Explicit internet request patterns
+            "sur internet", "sur le net",
+            "recherche internet", "recherche sur internet",
+            "cherche sur internet", "cherche sur le web", "cherche sur le net",
+            "trouve sur internet", "trouve sur le web", "trouve sur le net",
+            "google", "cherche sur google", "recherche google",
+            "duckduckgo", "bing",
+            # French explicit phrases
+            "en ligne", "sur le web",
+        ]
 
-        if any(kw in query_lower for kw in web_keywords):
+        has_explicit_web_request = any(kw in query_lower for kw in web_explicit_keywords)
+
+        if has_explicit_web_request:
+            logger.info("explicit_web_search_requested", query=query_lower[:50])
             return IntentClassification(
                 intent=IntentType.WEB_SEARCH,
                 domain=Domain.GENERAL,
-                confidence=0.90,
+                confidence=0.92,
                 suggested_sources=[DataSource.WEB],
-                reasoning="Explicit web search request",
-                keywords_matched=["internet"]
+                reasoning="Explicit web search request - user asked for internet search",
+                keywords_matched=["internet", "explicit_request"],
+                is_hybrid_search=False
             )
 
         # 5. DOCUMENT SEARCH - When documents are uploaded
@@ -561,35 +805,80 @@ class IntentClassifierV5:
         ]
         is_explicit_email_request = any(ind in query_lower for ind in email_action_indicators)
 
-        workflow_keywords = {
-            "urgent": 0.90,
-            "urgence": 0.90,
-            "fuite": 0.85,
-            "dégât": 0.85,
-            "dégât des eaux": 0.90,
-            "incendie": 0.95,
-            "panne": 0.80,
-            "convoquer": 0.85,
-            "convocation": 0.85,
-            "assemblée générale": 0.85,
-            "travaux": 0.75,
-        }
+        # ================================================================
+        # WORKFLOW D'URGENCE - Déclenché quand:
+        # 1. Contexte d'urgence (urgent, fuite, incendie, panne...)
+        # 2. ET demande d'aide/actions (que faire, to-do, liste d'actions...)
+        #
+        # BUT: Aider l'utilisateur stressé avec une liste d'actions concrètes
+        # ================================================================
 
-        for keyword, confidence in workflow_keywords.items():
-            if keyword in query_lower and not is_explicit_email_request:
-                # Determine domain based on keyword
-                domain = Domain.PROPERTY_MGMT
-                if keyword in ["fuite", "dégât", "dégât des eaux", "incendie", "panne"]:
-                    domain = Domain.PLUMBING
+        # Mots indiquant une situation urgente
+        emergency_context_words = [
+            "urgent", "urgence", "urgente",
+            "fuite", "fuite d'eau", "fuite de gaz",
+            "dégât des eaux", "dégât", "dégâts",
+            "incendie", "feu", "fumée",
+            "inondation", "innondation",
+            "panne", "panne ascenseur", "panne électrique", "coupure",
+            "effondrement", "éboulement",
+            "cambriolage", "intrusion",
+            "accident", "blessé",
+        ]
 
-                return IntentClassification(
-                    intent=IntentType.TRIGGER_WORKFLOW,
-                    domain=domain,
-                    confidence=confidence,
-                    suggested_sources=[DataSource.SQL],
-                    reasoning=f"Workflow trigger detected: '{keyword}'",
-                    keywords_matched=[keyword]
-                )
+        # Mots indiquant une demande d'aide/actions
+        action_request_words = [
+            "que faire", "quoi faire", "comment faire",
+            "liste d'actions", "liste des actions", "actions à faire",
+            "to do", "to-do", "todo", "checklist",
+            "étapes", "etapes", "procédure", "procedure",
+            "que dois-je", "que doit-on", "que devons-nous",
+            "aide", "aidez", "help",
+            "urgence que", "urgent que",
+            "comment réagir", "comment gérer",
+            "marche à suivre", "protocole",
+        ]
+
+        has_emergency_context = any(word in query_lower for word in emergency_context_words)
+        has_action_request = any(word in query_lower for word in action_request_words)
+
+        # Patterns that EXCLUDE workflow triggering (normal business requests)
+        workflow_exclusions = [
+            "génère", "genere", "générer", "generer",
+            "modèle", "modele", "template",
+            "prépare", "prepare", "préparer", "preparer",
+            "tableau des", "récapitulatif",
+            "procès-verbal", "proces-verbal", "pv ",
+            "délai", "delai", "loi de", "article",
+            "convocation", "convoquer",  # Terms métier normaux
+            "assemblée générale", "ag ",
+        ]
+        is_normal_request = any(excl in query_lower for excl in workflow_exclusions)
+
+        # WORKFLOW se déclenche si: urgence + demande d'aide + pas une requête normale
+        if has_emergency_context and has_action_request and not is_normal_request and not is_explicit_email_request:
+            # Determine domain and matched keyword
+            domain = Domain.PROPERTY_MGMT
+            matched_emergency = next((w for w in emergency_context_words if w in query_lower), "urgence")
+
+            # Specific domains for certain emergencies
+            plumbing_keywords = ["fuite", "dégât", "dégât des eaux", "inondation"]
+            if any(kw in query_lower for kw in plumbing_keywords):
+                domain = Domain.PLUMBING
+
+            logger.info("workflow_triggered",
+                       emergency=matched_emergency,
+                       has_action_request=True,
+                       query=query_lower[:50])
+
+            return IntentClassification(
+                intent=IntentType.TRIGGER_WORKFLOW,
+                domain=domain,
+                confidence=0.92,
+                suggested_sources=[DataSource.SQL, DataSource.WEB],
+                reasoning=f"Urgence '{matched_emergency}' + demande d'aide détectée",
+                keywords_matched=[matched_emergency, "action_request"]
+            )
 
         # 7. QUOTES - Vendor requests (lower priority than workflows)
         # CRITICAL: Skip if this is an EMAIL request with "devis" in it
@@ -717,20 +1006,23 @@ Requête: "{user_input}"
 Contexte:
 {context_str if context_str else "Aucun contexte spécifique"}
 
-RÈGLES IMPORTANTES:
+RÈGLES IMPORTANTES V6:
 1. Si l'utilisateur dit "envoie-moi", "donne-moi", "montre-moi" = c'est une demande d'INFO (query_data), PAS un email
-2. "Envoie un email à X" ou "contacte X" = c'est un vrai email (send_email)
-3. Si tu n'es pas sûr à 70%+, mets une confiance basse pour déclencher une clarification
+2. "Envoie un email à X" ou "contacte X" ou "préviens/informe X" = c'est un vrai email (send_email)
+3. "Demande de devis" = request_quotes (c'est un cas spécialisé de send_email - même agent)
+4. web_search = UNIQUEMENT si demande explicite ("cherche sur internet", "google", "sur le web")
+   - NE PAS utiliser web_search par défaut pour des questions générales
+5. Si tu n'es pas sûr à 70%+, mets une confiance basse pour déclencher une clarification
 
 Intents disponibles:
-1. query_data - Requêtes de données (nombres, listes, statistiques)
-2. search_documents - Recherche sémantique dans documents
-3. web_search - Recherche internet
-4. send_email - Générer et envoyer des emails (UNIQUEMENT si destinataire explicite)
-5. request_quotes - Demander des devis
-6. trigger_workflow - Déclencher un workflow (urgences, incidents)
-7. legal - Analyse juridique, jurisprudence
-8. general_question - Questions générales
+1. query_data - Requêtes de données SQL (listes, statistiques, copropriétaires, professionnels)
+2. search_documents - Recherche RAG dans documents (factures, contrats, PV, PDFs)
+3. web_search - UNIQUEMENT si demande explicite "sur internet/google/web"
+4. send_email - Générer emails (si destinataire explicite ou verbe communication: préviens, informe, contacte)
+5. request_quotes - Demande de devis (utilise le même agent que send_email)
+6. trigger_workflow - Urgences UNIQUEMENT (fuite + que faire = workflow)
+7. legal - Analyse juridique, loi, jurisprudence, conformité
+8. general_question - Questions générales sans action spécifique
 
 Réponds en JSON:
 {{
