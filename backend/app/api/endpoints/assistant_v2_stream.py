@@ -109,7 +109,11 @@ async def assistant_chat_stream(
                        selected_sources=parsed_selected_sources,
                        ui_context=parsed_ui_context)
 
-            # Initialize thought stream
+            # IMPORTANT: Clean up any stale thought stream from previous requests
+            # This prevents old thoughts from contaminating new requests
+            cleanup_stream(session_id)
+
+            # Initialize fresh thought stream for this request
             thought_stream = get_thought_stream(session_id)
 
             # Start streaming thoughts in background
@@ -233,32 +237,41 @@ async def assistant_chat_stream(
 
             # Stream thoughts as they come
             try:
+                # Send initial connection confirmation (helps with buffering)
+                yield ": connected\n\n"
+                await asyncio.sleep(0)  # Force flush
+
                 # Send existing thoughts first
                 for thought in thought_stream.thoughts:
                     yield thought_stream._format_sse(thought)
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0)  # Force immediate yield/flush
 
                 # Stream new thoughts as they come
                 should_continue = True
                 while should_continue:
                     try:
-                        # Wait for new thought with timeout
-                        event = await asyncio.wait_for(queue.get(), timeout=60.0)
+                        # Wait for new thought with SHORT timeout to keep connection alive
+                        event = await asyncio.wait_for(queue.get(), timeout=30.0)
 
                         # Handle both ThoughtEvent objects and raw SSE strings
                         if isinstance(event, str):
                             # Raw SSE string (e.g., final response event)
                             yield event
+                            await asyncio.sleep(0)  # Force flush
                             # If it's a response event, we can stop after sending it
                             if "event: response" in event:
                                 should_continue = False
                         else:
                             # Standard thought event
-                            yield thought_stream._format_sse(event)
+                            sse_data = thought_stream._format_sse(event)
+                            logger.info("streaming_thought_to_client", event_id=event.id, type=event.type.value)
+                            yield sse_data
+                            await asyncio.sleep(0)  # Force immediate yield/flush
 
                     except asyncio.TimeoutError:
                         # Send keep-alive ping
-                        yield f": keep-alive\n\n"
+                        yield ": keep-alive\n\n"
+                        await asyncio.sleep(0)  # Force flush
 
             finally:
                 thought_stream.unsubscribe(queue)

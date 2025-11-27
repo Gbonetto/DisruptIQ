@@ -255,6 +255,16 @@ class OrchestratorAgent:
                            method=template_result.get('method'),
                            category=template_result.get('category'))
 
+                # Emit thought even for bypass so CoT shows something
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title="Réponse rapide",
+                        content=f"Catégorie détectée : {template_result.get('category', 'greeting')}",
+                        agent="template_filter",
+                        progress=1.0
+                    )
+
                 return AgentResponse(
                     success=True,
                     message=template_result['response'],
@@ -364,6 +374,17 @@ class OrchestratorAgent:
                     fact_result = await self._recall_from_context_store(user_input, session_id)
                     if fact_result:
                         logger.info("context_store_recall_success", query=user_input[:50])
+
+                        # Emit thought for context recall
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.COMPLETED,
+                                title="Rappel depuis le contexte",
+                                content="Information retrouvée dans le contexte de la conversation.",
+                                agent="context_store",
+                                progress=1.0
+                            )
+
                         return AgentResponse(
                             success=True,
                             message=fact_result,
@@ -388,7 +409,7 @@ class OrchestratorAgent:
 
                     if thought_stream:
                         await thought_stream.add_thought(
-                            ThoughtType.SUCCESS,
+                            ThoughtType.COMPLETED,
                             title="Rappel depuis la mémoire",
                             content=f"J'ai retrouvé cette information dans notre conversation précédente.",
                             agent="memory_recall",
@@ -694,11 +715,28 @@ class OrchestratorAgent:
                 )
 
             if thought_stream:
+                # Map intent to French label
+                intent_labels_fr = {
+                    "QUERY_DATA": "Requête base de données",
+                    "SEARCH_DOCUMENTS": "Recherche documentaire",
+                    "WEB_SEARCH": "Recherche web",
+                    "SEND_EMAIL": "Envoi d'email",
+                    "LEGAL": "Analyse juridique",
+                    "GENERAL_QUESTION": "Question générale",
+                    "GENERATE_DIGEST": "Génération de digest",
+                    "TRIGGER_WORKFLOW": "Déclenchement workflow"
+                }
+                intent_label = intent_labels_fr.get(intent.value, intent.value)
+
                 await thought_stream.add_thought(
-                    ThoughtType.CLASSIFYING,
-                    title=f"Intention détectée : {intent.value}",
-                    content=f"Classification terminée. Type d'intention identifiée : {intent.value}. Je vais maintenant déterminer quel(s) agent(s) spécialisé(s) activer pour traiter cette demande.",
+                    ThoughtType.INTENT_DETECTED,
+                    title=f"Intention : {intent_label}",
+                    content=f"Classification terminée avec succès",
                     agent="intent_classifier",
+                    data={
+                        "intent": intent.value,
+                        "confidence": classification_result.confidence if classification_result else 0.9
+                    },
                     progress=0.25
                 )
 
@@ -731,6 +769,7 @@ class OrchestratorAgent:
                     IntentType.GENERAL_QUESTION: "LLM Direct (Mistral/GPT-4o)",
                     IntentType.WEB_SEARCH: "Web Search Agent (Tavily API)",
                     IntentType.LEGAL: "Legal Agent (analyse juridique)",
+                    IntentType.GENERATE_DIGEST: "Digest Agent (classification et résumé des emails)",
                 }
                 agent_desc = intent_descriptions.get(intent, 'agents appropriés')
                 await thought_stream.add_thought(
@@ -776,6 +815,17 @@ class OrchestratorAgent:
 
             elif intent == IntentType.LEGAL:
                 return await self._handle_legal(user_input, context, db, thought_stream)
+
+            elif intent == IntentType.GENERATE_DIGEST:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.DIGEST_FETCHING,
+                        title="Récupération des emails",
+                        content="Interrogation de la base de données...",
+                        agent="digest_agent",
+                        progress=0.3
+                    )
+                return await self._handle_generate_digest(user_input, db, thought_stream)
 
             else:  # GENERAL_QUESTION
                 logger.info("handling_general_question",
@@ -1070,33 +1120,38 @@ Réponse courte et directe (2-3 phrases maximum):"""
 
         if thought_stream:
             await thought_stream.add_thought(
-                ThoughtType.EXECUTING,
+                ThoughtType.SQL_GENERATING,
                 title="Génération de la requête SQL",
-                content=f"Le SQL Agent analyse la demande et génère une requête SQL optimisée pour interroger la base de données PostgreSQL. Requête à traiter : « {enriched_input} »",
+                content=f"Analyse de la demande et génération d'une requête SQL optimisée...",
                 agent="sql_agent",
-                progress=0.6
+                progress=0.5
             )
 
         sql_agent = SQLAgent()
-        result = await sql_agent.process(enriched_input, db)
+        result = await sql_agent.process(enriched_input, db, thought_stream=thought_stream)
 
         if thought_stream:
             if result.get("success"):
                 row_count = len(result.get("data", {}).get("results", []))
+                tables_used = result.get("data", {}).get("tables", [])
                 await thought_stream.add_thought(
-                    ThoughtType.PROCESSING,
-                    title="Requête SQL exécutée avec succès",
-                    content=f"✓ La requête a été exécutée. J'ai récupéré {row_count} résultat(s) de la base de données. Je vais maintenant formater et présenter ces données.",
+                    ThoughtType.SQL_RESULTS,
+                    title=f"{row_count} résultat(s) trouvé(s)",
+                    content=f"Requête exécutée avec succès sur la base de données.",
                     agent="sql_agent",
-                    progress=0.75
+                    data={
+                        "rowCount": row_count,
+                        "tables": tables_used
+                    },
+                    progress=0.8
                 )
             else:
                 await thought_stream.add_thought(
                     ThoughtType.ERROR,
-                    title="Erreur lors de l'exécution SQL",
-                    content=f"✗ Une erreur s'est produite lors de l'exécution de la requête : {result.get('message', 'Erreur inconnue')}",
+                    title="Erreur SQL",
+                    content=f"Erreur lors de l'exécution : {result.get('message', 'Erreur inconnue')}",
                     agent="sql_agent",
-                    progress=0.75
+                    progress=0.8
                 )
 
         # Store SQL results in response data for context persistence
@@ -1249,9 +1304,51 @@ Réponse courte et directe (2-3 phrases maximum):"""
     async def _handle_search_documents(self, user_input: str, db: AsyncSession, state_manager = None, conversation_history: List[Dict] = None, thought_stream: ThoughtStream = None, context: Dict = None) -> AgentResponse:
         """
         Handle document search via RAG - Uses HybridExecutor for consistent enriched CoT
+        Also handles conversation synthesis requests
         """
         try:
             logger.info("handling_search_documents", query=user_input[:50])
+
+            # Check if this is a conversation synthesis request
+            synthesis_keywords = ["synthèse", "synthese", "résumé complet", "résume notre conversation",
+                                  "récapitule", "récapitulatif", "ce qui a été fait", "les faits",
+                                  "résume le dossier", "résumé du dossier", "fais une synthèse", "fais un résumé",
+                                  "dossier plomberie", "synthèse dossier", "récap dossier", "recap dossier",
+                                  "synthese complete", "synthèse complète"]
+            is_synthesis_request = any(kw in user_input.lower() for kw in synthesis_keywords)
+
+            # Generate synthesis if request detected AND we have conversation history (min 1 message)
+            if is_synthesis_request and conversation_history and len(conversation_history) > 0:
+                # Generate synthesis from conversation history, not RAG
+                logger.info("generating_conversation_synthesis", history_length=len(conversation_history))
+
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.PROCESSING,
+                        title="Génération de la synthèse",
+                        content="Je vais analyser l'historique de notre conversation pour générer une synthèse complète.",
+                        agent="synthesis_agent",
+                        progress=0.5
+                    )
+
+                synthesis = await self._generate_conversation_synthesis(user_input, conversation_history)
+
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title="Synthèse générée",
+                        content="J'ai compilé les informations clés de notre échange.",
+                        agent="synthesis_agent",
+                        progress=1.0
+                    )
+
+                return AgentResponse(
+                    success=True,
+                    message=synthesis,
+                    agents_used=["synthesis_agent"],
+                    confidence=0.85,
+                    data={"type": "conversation_synthesis"}
+                )
 
             # Update state_manager with active_document_ids from context (if provided)
             if context and "active_document_ids" in context and state_manager:
@@ -1361,8 +1458,36 @@ Réponse courte et directe (2-3 phrases maximum):"""
         from .entity_extractor import EntityExtractor
         from .query_planner import QueryPlanner
         from sqlalchemy import text
+        import re
 
         try:
+            # CRITICAL: Early detection for PRESTATAIRE emails
+            # If user is emailing a prestataire/vendor, bypass intelligent flow
+            # and let EmailAgent handle it directly (it knows how to find prestataire)
+            user_input_lower = user_input.lower()
+            prestataire_keywords = ["prestataire", "plomberie", "électricité", "plombier",
+                                    "électricien", "entreprise", "fournisseur", "artisan"]
+            copro_keywords = ["copropriétaires", "coproprietaires", "résidents", "habitants"]
+
+            is_for_prestataire = any(kw in user_input_lower for kw in prestataire_keywords)
+            is_for_copros = any(kw in user_input_lower for kw in copro_keywords)
+
+            # If targeting prestataire AND NOT copros, go directly to EmailAgent
+            if is_for_prestataire and not is_for_copros:
+                logger.info("email_to_prestataire_detected_bypassing_intelligent_flow")
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.ANALYZING,
+                        title="Email au prestataire détecté",
+                        content="Je recherche le prestataire dans la base de données...",
+                        agent="orchestrator",
+                        progress=0.2
+                    )
+                # Go directly to EmailAgent which has proper prestataire detection
+                return await self._handle_send_email(
+                    user_input, db, context, conversation_history, session_id,
+                    state_manager=state_manager, thought_stream=thought_stream
+                )
             # Step 1: Extract entities (with state_manager for contextual reference resolution)
             extractor = EntityExtractor(state_manager=state_manager)
             entities = extractor.extract(user_input)
@@ -1529,12 +1654,19 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 context["emails_available"] = recipients_found
 
             # Step 4: Generate email draft with conversation history
-            return await self._handle_send_email(user_input, db, context, conversation_history, session_id)
+            # CRITICAL: Pass state_manager and thought_stream for draft persistence
+            return await self._handle_send_email(
+                user_input, db, context, conversation_history, session_id,
+                state_manager=state_manager, thought_stream=thought_stream
+            )
 
         except Exception as e:
             logger.error("intelligent_email_handling_failed", error=str(e), exc_info=True)
-            # Fallback to standard email handling
-            return await self._handle_send_email(user_input, db, context, conversation_history, session_id)
+            # Fallback to standard email handling (with state persistence)
+            return await self._handle_send_email(
+                user_input, db, context, conversation_history, session_id,
+                state_manager=state_manager, thought_stream=thought_stream
+            )
 
     async def _handle_send_email(
         self,
@@ -1542,13 +1674,17 @@ Réponse courte et directe (2-3 phrases maximum):"""
         db: AsyncSession,
         context: Dict[str, Any] = None,
         conversation_history: List[Dict[str, Any]] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        state_manager = None,
+        thought_stream = None
     ) -> AgentResponse:
         """
         Handle email generation with human-in-the-loop validation
 
         Shows draft first, then asks for validation before sending
         Uses emails from previous SQL query if available
+
+        CRITICAL: Stores draft in state_manager for confirmation workflow
         """
         from .email_agent import EmailAgent
 
@@ -1640,6 +1776,15 @@ Réponse courte et directe (2-3 phrases maximum):"""
                         break
 
         # Step 1: Generate email draft with full context
+        if thought_stream:
+            await thought_stream.add_thought(
+                ThoughtType.EMAIL_DRAFTING,
+                title="Rédaction du brouillon",
+                content="Génération de l'email en cours...",
+                agent="email_agent",
+                progress=0.5
+            )
+
         email_draft = await email_agent.generate_email(
             user_request=enriched_input,
             db=db,
@@ -1658,6 +1803,14 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 logger.info("recipients_auto_populated", count=len(recipients_from_context))
 
         if not email_draft["success"]:
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.ERROR,
+                    title="Échec de la rédaction",
+                    content=f"Erreur : {email_draft.get('message', 'Erreur inconnue')[:100]}",
+                    agent="email_agent",
+                    progress=0.6
+                )
             return AgentResponse(
                 success=False,
                 message=email_draft["message"],
@@ -1666,6 +1819,20 @@ Réponse courte et directe (2-3 phrases maximum):"""
 
         # Extract draft details
         draft_data = email_draft.get("data", {})
+
+        if thought_stream:
+            recipients_count = len(draft_data.get("recipients", []))
+            await thought_stream.add_thought(
+                ThoughtType.COMPLETED,
+                title=f"Brouillon prêt ({recipients_count} dest.)",
+                content="En attente de confirmation pour envoi",
+                agent="email_agent",
+                data={
+                    "recipients_count": recipients_count,
+                    "subject": draft_data.get("subject", "")[:50]
+                },
+                progress=0.7
+            )
         recipients = draft_data.get("recipients", [])
         subject = draft_data.get("subject", "Sans objet")
         body = draft_data.get("body", "")
@@ -1692,6 +1859,35 @@ Réponse courte et directe (2-3 phrases maximum):"""
             "\n- ✏️ \"Modifier le sujet\" ou \"Modifier le message\"",
             "\n- ❌ \"Annuler\""
         ]
+
+        # ================================================================
+        # CRITICAL: Store draft in state_manager for confirmation workflow
+        # Without this, the "ok"/"envoyer" confirmation won't find the draft
+        # ================================================================
+        if state_manager:
+            from .conversation_state import ActionType
+            # Store the complete draft data
+            state_manager.state.email_draft = draft_data
+            state_manager.state.set_pending_action(
+                ActionType.AWAITING_EMAIL_CONFIRMATION,
+                {"draft": draft_data, "session_id": session_id}
+            )
+            logger.info("email_draft_stored_in_state",
+                       has_recipients=bool(draft_data.get("recipients")),
+                       subject=subject[:50] if subject else "N/A")
+
+            # Emit thought about awaiting confirmation
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.WAITING,
+                    title="En attente de confirmation",
+                    content=f"Brouillon prêt avec {len(recipient_display)} destinataire(s). En attente de votre validation.",
+                    agent="orchestrator",
+                    progress=0.9
+                )
+        else:
+            logger.warning("email_draft_not_stored_no_state_manager",
+                          note="Draft generated but state_manager not available for persistence")
 
         return AgentResponse(
             success=True,
@@ -1797,7 +1993,7 @@ Réponse courte et directe (2-3 phrases maximum):"""
             ]
         )
 
-    async def _handle_generate_digest(self, user_input: str, db: AsyncSession) -> AgentResponse:
+    async def _handle_generate_digest(self, user_input: str, db: AsyncSession, thought_stream=None) -> AgentResponse:
         """Handle email digest generation and queries - reads from database"""
         try:
             # Import digest service
@@ -1835,6 +2031,22 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 urgent_emails = digest_result.get('urgent', {}).get('emails', [])
                 important_emails = digest_result.get('important', {}).get('emails', [])
                 routine_emails = digest_result.get('routine', {}).get('emails', [])
+
+                # Emit thought for classification
+                if thought_stream:
+                    total_emails = len(urgent_emails) + len(important_emails) + len(routine_emails)
+                    await thought_stream.add_thought(
+                        ThoughtType.DIGEST_CLASSIFYING,
+                        title=f"Classification de {total_emails} email(s)",
+                        content=f"🔴 {len(urgent_emails)} urgent(s), 🟡 {len(important_emails)} important(s), 🟢 {len(routine_emails)} routine",
+                        agent="digest_agent",
+                        data={
+                            "urgent_count": len(urgent_emails),
+                            "important_count": len(important_emails),
+                            "routine_count": len(routine_emails)
+                        },
+                        progress=0.7
+                    )
 
                 urgent_count = len(urgent_emails)
                 important_count = len(important_emails)
@@ -2068,13 +2280,13 @@ Réponse courte et directe (2-3 phrases maximum):"""
 
             web_agent = WebSearchAgent()
 
-            # Thought 1: Starting search - DeepSeek narrative style
+            # Thought 1: Starting search
             if thought_stream:
                 await thought_stream.add_thought(
-                    ThoughtType.EXECUTING,
-                    title="Ok, je lance une recherche sur internet. J'utilise DuckDuckGo pour trouver les informations les plus récentes et pertinentes.",
-                    content="",  # Empty for DeepSeek style
-                    agent="websearch",
+                    ThoughtType.WEB_SEARCHING,
+                    title="Recherche sur internet",
+                    content="Interrogation de DuckDuckGo en cours...",
+                    agent="web_agent",
                     progress=0.4
                 )
 
@@ -2087,46 +2299,45 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 conversation_history=conversation_history
             )
 
-            # Thought 2: Results found - DeepSeek narrative style WITH METADATA (like RAG)
+            # Thought 2: Results found with structured data
             if thought_stream:
                 if search_results.results:
-                    # Calculate metadata for rich CoT (similar to RAG)
-                    top_scores = [r.relevance_score for r in search_results.results[:3]]
-                    scores_display = [f'{int(s*100)}%' for s in top_scores if s > 0]
-                    avg_score = sum(top_scores) / len(top_scores) if top_scores else 0
-
-                    # Extract domains for context
+                    # Extract domains for display
                     domains = []
-                    for r in search_results.results[:3]:
+                    for r in search_results.results[:5]:
                         if r.url:
                             try:
                                 domain = r.url.split("/")[2]
                                 domains.append(domain)
                             except:
                                 pass
-                    domains_str = ", ".join(set(domains[:3])) if domains else "sources web variées"
+                    unique_domains = list(set(domains))[:5]
 
-                    # Quality assessment based on scores (like RAG)
-                    if avg_score >= 0.8:
-                        quality_assessment = f"Excellent ! Les sources semblent très fiables ({', '.join(scores_display[:3])}). Sources principales : {domains_str}."
-                    elif avg_score >= 0.6:
-                        quality_assessment = f"Scores corrects ({', '.join(scores_display[:3])}). Les informations sont utiles. Sources : {domains_str}."
-                    else:
-                        quality_assessment = f"Scores moyens ({', '.join(scores_display[:3])}). Les sources web ne sont peut-être pas totalement pertinentes. Sources : {domains_str}."
+                    # Calculate average score
+                    top_scores = [r.relevance_score for r in search_results.results[:3]]
+                    avg_score = sum(top_scores) / len(top_scores) if top_scores else 0
 
                     await thought_stream.add_thought(
-                        ThoughtType.COMPLETED,
-                        title=f"Trouvé {len(search_results.results)} sources web. Meilleurs scores : {', '.join(scores_display[:3])}. {quality_assessment}",
-                        content="",  # Empty for DeepSeek style
-                        agent="websearch",
+                        ThoughtType.WEB_RESULTS,
+                        title=f"{len(search_results.results)} résultat(s) trouvé(s)",
+                        content=f"Sources : {', '.join(unique_domains[:3])}",
+                        agent="web_agent",
+                        data={
+                            "domains": unique_domains,
+                            "confidence": avg_score
+                        },
                         progress=0.7
                     )
                 else:
                     await thought_stream.add_thought(
-                        ThoughtType.COMPLETED,
-                        title="Hmm, aucun résultat pertinent trouvé sur le web. Soit l'information n'est pas publiquement disponible, soit il faudrait reformuler la question différemment.",
-                        content="",  # Empty for DeepSeek style
-                        agent="websearch",
+                        ThoughtType.WEB_RESULTS,
+                        title="Aucun résultat pertinent trouvé",
+                        content="La recherche n'a pas retourné de résultats",
+                        agent="web_agent",
+                        data={
+                            "domains": [],
+                            "confidence": 0
+                        },
                         progress=0.7
                     )
 
@@ -2254,9 +2465,9 @@ Réponse courte et directe (2-3 phrases maximum):"""
             # Add initial thought
             if thought_stream:
                 await thought_stream.add_thought(
-                    ThoughtType.ANALYZING,
-                    title="Traitement de la demande juridique",
-                    content="Analyse de votre demande juridique...",
+                    ThoughtType.LEGAL_ANALYZING,
+                    title="Analyse juridique",
+                    content="Traitement de votre demande juridique...",
                     agent="legal_agent",
                     progress=0.3
                 )
@@ -2279,12 +2490,17 @@ Réponse courte et directe (2-3 phrases maximum):"""
                     "jurisprudence": "Recherche de jurisprudence"
                 }
                 action_label = action_labels.get(result.get("action", "unknown"), "Traitement juridique")
+                sources_count = len(result.get("result", {}).get("sources", []))
 
                 await thought_stream.add_thought(
-                    ThoughtType.COMPLETED,
+                    ThoughtType.LEGAL_RESULTS,
                     title=f"{action_label} terminée",
-                    content="",
+                    content=f"{sources_count} source(s) juridique(s)" if sources_count else "",
                     agent="legal_agent",
+                    data={
+                        "action": result.get("action", "unknown"),
+                        "sources_count": sources_count
+                    },
                     progress=0.9
                 )
 
@@ -2316,6 +2532,86 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 message=f"Erreur lors du traitement de la demande juridique: {str(e)}",
                 agents_used=["legal_agent"]
             )
+
+    async def _generate_conversation_synthesis(
+        self,
+        user_input: str,
+        conversation_history: List[Dict[str, str]]
+    ) -> str:
+        """
+        Generate a synthesis of the conversation history.
+
+        This is used when the user asks for a summary/recap of the conversation
+        rather than searching documents.
+        """
+        try:
+            # Handle empty or missing conversation history
+            if not conversation_history or len(conversation_history) == 0:
+                return """## 📋 Synthèse du dossier
+
+Je n'ai pas encore suffisamment d'informations dans notre conversation pour générer une synthèse complète.
+
+Pour obtenir une synthèse pertinente, veuillez d'abord:
+1. Rechercher les informations nécessaires (factures, contrats, etc.)
+2. Consulter les données des copropriétaires concernés
+3. Effectuer les actions requises (emails, devis, etc.)
+
+Ensuite, redemandez-moi une synthèse et je compilerai toutes les informations de notre échange."""
+
+            # Format conversation history (increased limit for synthesis)
+            formatted_history = ""
+            for i, msg in enumerate(conversation_history):
+                role = "Utilisateur" if msg.get("role") == "user" else "Assistant"
+                content = msg.get("content", "")[:800]  # Increased limit for more context
+                formatted_history += f"\n{i+1}. [{role}]: {content}\n"
+
+            prompt = f"""Tu es un expert en synthèse pour un syndic de copropriété.
+
+DEMANDE DE L'UTILISATEUR:
+{user_input}
+
+HISTORIQUE DE LA CONVERSATION:
+{formatted_history}
+
+GÉNÈRE UNE SYNTHÈSE STRUCTURÉE avec:
+
+## 📋 Résumé de la conversation
+
+### 1. Les faits établis
+- (liste des informations factuelles découvertes: montants, dates, noms, etc.)
+
+### 2. Les actions effectuées
+- (liste des actions réalisées: emails générés/envoyés, recherches effectuées, etc.)
+
+### 3. Le cadre juridique (si applicable)
+- (articles de loi mentionnés, obligations légales, etc.)
+
+### 4. Prochaines étapes recommandées
+- (actions à entreprendre)
+
+IMPORTANT:
+- Sois précis avec les chiffres et dates mentionnés dans la conversation
+- Si des montants ont été trouvés (ex: 587,40€), inclus-les
+- Si des articles de loi ont été cités (ex: article 18), mentionne-les
+- Si des emails ont été générés/envoyés, indique-le
+
+SYNTHÈSE:"""
+
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                max_tokens=1000,
+                temperature=0.3
+            )
+
+            logger.info("conversation_synthesis_generated",
+                       history_length=len(conversation_history),
+                       response_length=len(response))
+
+            return response
+
+        except Exception as e:
+            logger.error("conversation_synthesis_failed", error=str(e))
+            return "Je n'ai pas pu générer la synthèse de notre conversation. Veuillez réessayer."
 
     async def _handle_general_question(
         self,
@@ -2555,6 +2851,7 @@ Réponds de manière claire, professionnelle et utile. Si tu peux aider avec une
             IntentType.WEB_SEARCH: self._handle_web_search,
             IntentType.LEGAL: self._handle_legal,  # Single LEGAL intent (agent decides action internally)
             IntentType.GENERAL_QUESTION: self._handle_general_question,
+            IntentType.GENERATE_DIGEST: self._handle_generate_digest,  # Email digest generation
             # Legacy (backward compatibility)
             IntentType.HYBRID_QUERY: self._handle_query_data,  # DEPRECATED: Route to QUERY_DATA
         }
@@ -3475,16 +3772,23 @@ Réponds uniquement avec le contenu, sans préambule."""
 
             if thought_stream:
                 await thought_stream.add_thought(
-                    ThoughtType.EXECUTING,
-                    title="Envoi via N8N",
-                    content=f"Envoi de l'email à {len(recipients)} destinataire(s) via le workflow N8N...",
-                    agent="webhook_service",
+                    ThoughtType.WORKFLOW_SENDING,
+                    title="Envoi vers N8N",
+                    content=f"Transmission de l'email à {len(recipients)} destinataire(s)...",
+                    agent="workflow_agent",
+                    data={
+                        "recipients_count": len(recipients),
+                        "subject": subject[:50]
+                    },
                     progress=0.7
                 )
 
             # Send via N8N webhook
             webhook_service = WebhookService()
             result = None
+
+            # Extract thought_stream_id if available
+            ts_id = thought_stream.session_id if thought_stream else None
 
             try:
                 result = await webhook_service.send_email(
@@ -3496,7 +3800,7 @@ Réponds uniquement avec le contenu, sans préambule."""
                     urgency=urgency,
                     tone=tone,
                     request_id=f"email_{session_id}" if session_id else None,
-                    thought_stream_id=None,  # TODO: Extract from thought_stream
+                    thought_stream_id=ts_id,
                     conversation_id=session_id
                 )
 
@@ -3505,24 +3809,39 @@ Réponds uniquement avec le contenu, sans préambule."""
 
             # Check result (AFTER try/finally to avoid exception catching the return)
             if result:
-                # N8N peut retourner soit {"success": true} soit {"status": "warning"/"success"}
-                # Le warning "No thought_stream_id" n'est pas bloquant
-                is_success = (
-                    result.get("success") == True or
-                    result.get("status") in ["success", "warning"]
-                )
+                # Déterminer le statut de l'envoi
+                # N8N peut retourner plusieurs formats selon la config du workflow:
+                # 1. Réponse d'email correcte: {"success": true, "emails_sent": [...]}
+                # 2. Réponse callback (bug workflow): {"status": "warning/success", "message": "..."}
+                # 3. Erreur: {"success": false, "error": "..."}
+
+                has_explicit_success = result.get("success") == True
+                has_emails_sent = "emails_sent" in result  # Marqueur de vraie réponse d'email
+                has_status_success = result.get("status") == "success"
+                has_status_warning = result.get("status") == "warning"
+
+                # Si on a emails_sent, c'est la bonne réponse
+                # Si on a status warning/success mais pas emails_sent, c'est la réponse du callback
+                # Dans ce cas, on considère que l'email a été envoyé (le callback n'est qu'une notification)
+                is_success = has_explicit_success or has_emails_sent or has_status_success or has_status_warning
+                has_warning = has_status_warning and not has_emails_sent  # Warning seulement si pas de vraie réponse
 
                 if is_success:
                     logger.info("email_sent_successfully",
                                recipients_count=len(recipients),
+                               has_warning=has_warning,
                                n8n_response=result)
 
                     if thought_stream:
                         await thought_stream.add_thought(
-                            ThoughtType.SUCCESS,
-                            title="Email envoyé",
-                            content=f"✅ Email envoyé avec succès à {len(recipients)} destinataire(s) !",
-                            agent="webhook_service",
+                            ThoughtType.WORKFLOW_SUCCESS,
+                            title=f"Email envoyé ({len(recipients)} dest.)",
+                            content="Workflow N8N exécuté avec succès",
+                            agent="workflow_agent",
+                            data={
+                                "recipients_count": len(recipients),
+                                "status": "sent"
+                            },
                             progress=1.0
                         )
 
@@ -3543,6 +3862,13 @@ Réponds uniquement avec le contenu, sans préambule."""
                     message += f"**Objet:** {subject}\n\n"
                     message += "L'email a été envoyé via N8N et devrait arriver dans quelques instants."
 
+                    # Ajouter un avertissement si le callback N8N a échoué (non-bloquant)
+                    warnings_list = []
+                    if has_warning:
+                        warning_msg = result.get("message", "")
+                        if warning_msg:
+                            warnings_list.append(f"Note: {warning_msg}")
+
                     return AgentResponse(
                         success=True,
                         message=message,
@@ -3555,7 +3881,7 @@ Réponds uniquement avec le contenu, sans préambule."""
                         sources_used=[],
                         confidence=1.0,
                         suggestions=[],
-                        warnings=[]
+                        warnings=warnings_list
                     )
                 else:
                     # N8N error
@@ -3566,10 +3892,14 @@ Réponds uniquement avec le contenu, sans préambule."""
 
                     if thought_stream:
                         await thought_stream.add_thought(
-                            ThoughtType.ERROR,
-                            title="Erreur d'envoi",
-                            content=f"❌ Erreur lors de l'envoi : {error_msg}",
-                            agent="webhook_service",
+                            ThoughtType.WORKFLOW_ERROR,
+                            title="Échec de l'envoi N8N",
+                            content=f"Erreur : {error_msg[:100]}",
+                            agent="workflow_agent",
+                            data={
+                                "error": error_msg,
+                                "status": "failed"
+                            },
                             progress=1.0
                         )
 

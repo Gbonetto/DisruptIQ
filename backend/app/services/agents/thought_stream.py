@@ -16,16 +16,146 @@ logger = structlog.get_logger()
 
 class ThoughtType(str, Enum):
     """Types of thoughts in the reasoning chain"""
-    ANALYZING = "analyzing"  # Analyzing user request
-    CLASSIFYING = "classifying"  # Classifying intention
-    PLANNING = "planning"  # Planning which agents to call
-    EXECUTING = "executing"  # Executing agent action
-    WAITING = "waiting"  # Waiting for agent response
-    PROCESSING = "processing"  # Processing agent results
-    SYNTHESIZING = "synthesizing"  # Synthesizing final response
-    SEARCHING = "searching"  # Searching web/documents
-    COMPLETED = "completed"  # Task completed
-    ERROR = "error"  # Error occurred
+    # === Phases générales ===
+    ANALYZING = "analyzing"  # Analyse de la requête
+    CLASSIFYING = "classifying"  # Classification de l'intention
+    PLANNING = "planning"  # Planification des agents à appeler
+    EXECUTING = "executing"  # Exécution d'une action (générique)
+    WAITING = "waiting"  # En attente de réponse
+    PROCESSING = "processing"  # Traitement des résultats
+    SYNTHESIZING = "synthesizing"  # Synthèse de la réponse finale
+    COMPLETED = "completed"  # Terminé
+    ERROR = "error"  # Erreur
+    WARNING = "warning"  # Avertissement
+
+    # === Actions spécifiques par agent ===
+    # SQL Agent
+    SQL_GENERATING = "sql_generating"  # Génération de la requête SQL
+    SQL_EXECUTING = "sql_executing"  # Exécution de la requête SQL
+    SQL_RESULTS = "sql_results"  # Résultats SQL reçus
+
+    # RAG Agent (Documents)
+    RAG_SEARCHING = "rag_searching"  # Recherche dans les documents
+    RAG_RETRIEVING = "rag_retrieving"  # Récupération des passages
+    RAG_RERANKING = "rag_reranking"  # Reclassement des résultats
+    RAG_RESULTS = "rag_results"  # Documents trouvés
+
+    # Web Agent
+    WEB_SEARCHING = "web_searching"  # Recherche sur le web
+    WEB_FETCHING = "web_fetching"  # Consultation d'un site
+    WEB_RESULTS = "web_results"  # Résultats web reçus
+
+    # Legal Agent
+    LEGAL_SEARCHING = "legal_searching"  # Recherche juridique
+    LEGAL_ANALYZING = "legal_analyzing"  # Analyse juridique
+
+    # Email Agent
+    EMAIL_DRAFTING = "email_drafting"  # Rédaction d'email
+    EMAIL_SENDING = "email_sending"  # Envoi d'email
+    EMAIL_SENT = "email_sent"  # Email envoyé avec succès
+
+    # Workflow Agent (N8N)
+    WORKFLOW_TRIGGERING = "workflow_triggering"  # Déclenchement du workflow
+    WORKFLOW_SENDING = "workflow_sending"  # Envoi vers N8N
+    WORKFLOW_SUCCESS = "workflow_success"  # Workflow exécuté avec succès
+    WORKFLOW_ERROR = "workflow_error"  # Erreur workflow
+
+    # Digest Agent
+    DIGEST_FETCHING = "digest_fetching"  # Récupération des emails
+    DIGEST_CLASSIFYING = "digest_classifying"  # Classification par urgence
+    DIGEST_GENERATING = "digest_generating"  # Génération du résumé
+
+    # Table Generation Agent
+    TABLE_GENERATING = "table_generating"  # Génération du tableau
+    TABLE_EXPORTING = "table_exporting"  # Export du tableau
+
+    # Legal Agent (compléments)
+    LEGAL_RESULTS = "legal_results"  # Résultats juridiques trouvés
+
+    # OCR Agent
+    OCR_PROCESSING = "ocr_processing"  # Traitement OCR en cours
+    OCR_EXTRACTING = "ocr_extracting"  # Extraction du texte
+
+    # Intent Classification
+    INTENT_DETECTED = "intent_detected"  # Intention détectée
+
+    # Fusion multi-sources
+    FUSION_COMBINING = "fusion_combining"  # Combinaison des sources
+
+    # Alias legacy
+    SEARCHING = "searching"  # Déprécié: utiliser les types spécifiques
+
+
+# === Labels français pour l'affichage frontend ===
+THOUGHT_LABELS_FR = {
+    # Phases générales
+    ThoughtType.ANALYZING: "Analyse de la requête",
+    ThoughtType.CLASSIFYING: "Classification de l'intention",
+    ThoughtType.PLANNING: "Planification",
+    ThoughtType.EXECUTING: "Exécution",
+    ThoughtType.WAITING: "En attente",
+    ThoughtType.PROCESSING: "Traitement",
+    ThoughtType.SYNTHESIZING: "Synthèse",
+    ThoughtType.COMPLETED: "Terminé",
+    ThoughtType.ERROR: "Erreur",
+    ThoughtType.WARNING: "Avertissement",
+
+    # SQL
+    ThoughtType.SQL_GENERATING: "Génération de la requête SQL",
+    ThoughtType.SQL_EXECUTING: "Exécution de la requête SQL",
+    ThoughtType.SQL_RESULTS: "Résultats de la base de données",
+
+    # RAG
+    ThoughtType.RAG_SEARCHING: "Recherche dans les documents",
+    ThoughtType.RAG_RETRIEVING: "Récupération des passages",
+    ThoughtType.RAG_RERANKING: "Reclassement par pertinence",
+    ThoughtType.RAG_RESULTS: "Documents consultés",
+
+    # Web
+    ThoughtType.WEB_SEARCHING: "Recherche sur internet",
+    ThoughtType.WEB_FETCHING: "Consultation du site",
+    ThoughtType.WEB_RESULTS: "Résultats web",
+
+    # Legal
+    ThoughtType.LEGAL_SEARCHING: "Recherche juridique",
+    ThoughtType.LEGAL_ANALYZING: "Analyse juridique",
+
+    # Email
+    ThoughtType.EMAIL_DRAFTING: "Rédaction de l'email",
+    ThoughtType.EMAIL_SENDING: "Envoi de l'email",
+    ThoughtType.EMAIL_SENT: "Email envoyé",
+
+    # Workflow (N8N)
+    ThoughtType.WORKFLOW_TRIGGERING: "Déclenchement du workflow",
+    ThoughtType.WORKFLOW_SENDING: "Envoi vers N8N",
+    ThoughtType.WORKFLOW_SUCCESS: "Workflow exécuté avec succès",
+    ThoughtType.WORKFLOW_ERROR: "Erreur workflow",
+
+    # Digest
+    ThoughtType.DIGEST_FETCHING: "Récupération des emails",
+    ThoughtType.DIGEST_CLASSIFYING: "Classification par urgence",
+    ThoughtType.DIGEST_GENERATING: "Génération du résumé",
+
+    # Table Generation
+    ThoughtType.TABLE_GENERATING: "Génération du tableau",
+    ThoughtType.TABLE_EXPORTING: "Export du tableau",
+
+    # Legal (compléments)
+    ThoughtType.LEGAL_RESULTS: "Résultats juridiques",
+
+    # OCR
+    ThoughtType.OCR_PROCESSING: "Traitement OCR",
+    ThoughtType.OCR_EXTRACTING: "Extraction du texte",
+
+    # Intent
+    ThoughtType.INTENT_DETECTED: "Intention détectée",
+
+    # Fusion
+    ThoughtType.FUSION_COMBINING: "Combinaison des sources",
+
+    # Legacy
+    ThoughtType.SEARCHING: "Recherche",
+}
 
 
 class ThoughtEvent(BaseModel):
@@ -114,12 +244,13 @@ class ThoughtStream:
         # Broadcast to all subscribers
         await self._broadcast(event)
 
-        logger.debug(
+        logger.info(
             "thought_added",
             session_id=self.session_id,
             type=thought_type.value,
             agent=agent,
-            title=title
+            title=title,
+            subscribers_count=len(self.subscribers)
         )
 
         return event
@@ -194,7 +325,9 @@ class ThoughtStream:
 
         """
         event_data = event.model_dump()
-        return f"event: thought\ndata: {json.dumps(event_data, default=str)}\n\n"
+        sse_str = f"event: thought\ndata: {json.dumps(event_data, default=str)}\n\n"
+        logger.debug("sse_event_formatted", event_id=event.id, type=event.type.value, sse_preview=sse_str[:100])
+        return sse_str
 
     def get_summary(self) -> Dict[str, Any]:
         """Get summary of all thoughts"""

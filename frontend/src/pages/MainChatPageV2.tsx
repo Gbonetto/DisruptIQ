@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Database, FileText, Search, TrendingUp, ArrowDown } from 'lucide-react';
 import { MainLayout } from '@/components/v2/Layout/MainLayout';
 import { SmartCardsGrid } from '@/components/v2/Core/SmartCard';
-import { CollapsibleCoT } from '@/components/v2/Core/CollapsibleCoT';
+import { ChainOfThought, type ThoughtStep } from '@/components/v2/Core/ChainOfThought';
 import { SourceCitationFooter } from '@/components/v2/Core/SourceCitation';
 import { DataTable } from '@/components/v2/Core/DataTable';
 import { RichMarkdown } from '@/components/v2/Core/RichMarkdown';
@@ -35,6 +35,9 @@ export const MainChatPageV2: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [currentThoughts, setCurrentThoughts] = useState<Thought[]>([]);
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
+
+  // Ref to track current thoughts for use in callbacks (avoids stale closure)
+  const thoughtsRef = useRef<Thought[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -194,6 +197,7 @@ export const MainChatPageV2: React.FC = () => {
     setInputValue('');
     setIsLoading(true);
     setCurrentThoughts([]);
+    thoughtsRef.current = []; // Reset ref too
 
     try {
       // Create conversation if none exists
@@ -224,25 +228,39 @@ export const MainChatPageV2: React.FC = () => {
       const uiContext = buildContext();
 
       // Start SSE streaming with active document IDs, selected sources, and UI context
-      console.log('[MainChatPageV2] Sending message with:');
-      console.log('  - Active docs:', activeDocumentIds);
-      console.log('  - Selected sources:', selectedSources);
-      console.log('  - UI Context:', uiContext);
+      console.log('[MainChatPageV2] About to create EventSource...');
+      console.log('[MainChatPageV2] Params:', { userMessage: userMessage.substring(0, 50), historyLen: history.length, conversationId, activeDocumentIds, selectedSources, uiContext });
 
-      const eventSource = assistantV2Api.streamChat(
-        userMessage,
-        history,
-        conversationId.toString(),
-        activeDocumentIds,
-        selectedSources,
-        uiContext  // ← NEW: Pass UI context for bypass
-      );
+      let eventSource: EventSource;
+      try {
+        eventSource = assistantV2Api.streamChat(
+          userMessage,
+          history,
+          conversationId.toString(),
+          activeDocumentIds,
+          selectedSources,
+          uiContext  // ← NEW: Pass UI context for bypass
+        );
+        console.log('[MainChatPageV2] EventSource created successfully');
+      } catch (err) {
+        console.error('[MainChatPageV2] EventSource creation FAILED:', err);
+        throw err;
+      }
       eventSourceRef.current = eventSource;
+
+      console.log('[MainChatPageV2] EventSource URL:', eventSource.url);
+      console.log('[MainChatPageV2] EventSource readyState:', eventSource.readyState);
 
       // Setup event listeners
       setupStreamListeners(eventSource, {
         onThought: (thought) => {
-          setCurrentThoughts(prev => [...prev, thought]);
+          console.log('[MainChatPageV2] Received thought:', thought);
+          setCurrentThoughts(prev => {
+            const newThoughts = [...prev, thought];
+            thoughtsRef.current = newThoughts; // Keep ref in sync
+            console.log('[MainChatPageV2] Updating thoughts, count:', newThoughts.length);
+            return newThoughts;
+          });
         },
 
         onResponse: async (response) => {
@@ -279,11 +297,15 @@ export const MainChatPageV2: React.FC = () => {
               };
             }) || [];
 
+            // Use ref to get current thoughts (avoids stale closure issue)
+            const thoughtsToSave = thoughtsRef.current;
+            console.log('[MainChatPageV2] Saving message with thoughts:', thoughtsToSave.length);
+
             const assistantMsg = await conversationsApi.addMessage(
               conversationId!,
               'assistant',
               response.message,
-              currentThoughts,
+              thoughtsToSave,
               formattedSources,
               response.suggestions,
               response.data
@@ -295,6 +317,7 @@ export const MainChatPageV2: React.FC = () => {
 
           // Clear temporary state - thoughts are now saved in the message
           setCurrentThoughts([]);
+          thoughtsRef.current = []; // Reset ref too
           setIsLoading(false);
           eventSource.close();
 
@@ -316,6 +339,7 @@ export const MainChatPageV2: React.FC = () => {
 
           setIsLoading(false);
           setCurrentThoughts([]);
+          thoughtsRef.current = [];
           eventSource.close();
         },
 
@@ -336,6 +360,7 @@ export const MainChatPageV2: React.FC = () => {
       eventSourceRef.current.close();
       setIsLoading(false);
       setCurrentThoughts([]);
+      thoughtsRef.current = [];
       toast.info('Traitement arrêté');
     }
   };
@@ -420,16 +445,17 @@ export const MainChatPageV2: React.FC = () => {
                       <div className="w-full space-y-4 break-words overflow-hidden">
                         {/* Chain of Thought */}
                         {message.thoughts && message.thoughts.length > 0 && (
-                          <CollapsibleCoT
+                          <ChainOfThought
                             steps={message.thoughts.map(t => ({
                               id: t.id,
+                              type: t.type as ThoughtStep['type'],
                               title: t.title,
                               content: t.content,
-                              status: t.type === 'completed' ? 'completed' :
-                                     t.type === 'executing' || t.type === 'processing' ? 'active' :
-                                     'pending',
-                              timestamp: new Date(t.timestamp).toLocaleTimeString('fr-FR'),
+                              agent: t.agent,
+                              timestamp: t.timestamp,
+                              data: t.data,
                             }))}
+                            isStreaming={false}
                           />
                         )}
 
@@ -480,17 +506,18 @@ export const MainChatPageV2: React.FC = () => {
               {isLoading && currentThoughts.length > 0 && (
                 <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                   <div className="space-y-4">
-                    <CollapsibleCoT
+                    <ChainOfThought
                       steps={currentThoughts.map(t => ({
                         id: t.id,
+                        type: t.type as ThoughtStep['type'],
                         title: t.title,
                         content: t.content,
-                        status: t.type === 'completed' ? 'completed' :
-                               t.type === 'executing' || t.type === 'processing' ? 'active' :
-                               'pending',
-                        timestamp: new Date(t.timestamp).toLocaleTimeString('fr-FR'),
+                        agent: t.agent,
+                        timestamp: t.timestamp,
+                        data: t.data,
                       }))}
-                      autoCollapse={false} // Don't auto-collapse during streaming
+                      isStreaming={true}
+                      startTime={currentThoughts[0]?.timestamp ? new Date(currentThoughts[0].timestamp).getTime() : Date.now()}
                     />
                     <MessageLoadingSkeleton />
                   </div>
