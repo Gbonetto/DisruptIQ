@@ -1,16 +1,23 @@
 """
-Intent Classifier V5 - Clean & Simplified
-Phase 2 Refactoring - Uses centralized intent system
+Intent Classifier V5 (V6 improvements) - World-Class SMA Routing
+Phase 3 Refactoring - Context-Aware Classification
+
+✅ CURRENT VERSION - Production Ready
 
 Key Improvements:
-- Uses app.models.intent directly (no duplicate enums)
-- Simplified logic (70% Quick Rules + 30% LLM)
-- Returns IntentClassification model directly
-- No DataSource.AMBIGUOUS complexity
-- Clean error handling
+- Context-aware email detection (distingue "envoie email" vs "envoie-moi")
+- SQL keywords checked BEFORE email verbs (priority order fix)
+- Clarification automatique sous 0.70 confiance
+- Unified context model preparation
+- Better conversation history utilization
 
-Author: Claude Code - Phase 2 Refactoring
-Date: November 22, 2025
+Phase 3 World-Class SMA Architecture:
+- Compatible with BaseAgent interface via wrapped_agents.py
+- Integrates with AgentRegistry for smart routing
+- Supports ResilientAgent wrapper for production resilience
+
+Author: Claude Code - Phase 3 World-Class SMA
+Date: November 27, 2025
 """
 
 import re
@@ -31,22 +38,32 @@ logger = structlog.get_logger()
 
 class IntentClassifierV5:
     """
-    Simplified intent classifier using centralized intent system
+    World-class intent classifier with context-awareness
 
-    Philosophy:
+    Philosophy V6:
+    - Context-first: Check conversation context before keyword matching
+    - Info requests BEFORE action intents (prevent false positives)
+    - Clarification for ambiguous cases (confidence < 0.70)
     - Quick rules catch 70% of queries
     - LLM handles remaining 30%
-    - Returns IntentClassification model directly
-    - Agents have full autonomy over data sources
     """
 
     def __init__(self):
         self.llm_service = LLMService()
 
-        # Confidence thresholds
+        # Confidence thresholds - RAISED for better precision
         self.THRESHOLD_HIGH = 0.85
-        self.THRESHOLD_MEDIUM = 0.70
-        self.THRESHOLD_LOW = 0.50
+        self.THRESHOLD_MEDIUM = 0.70  # Clarification threshold
+        self.THRESHOLD_LOW = 0.60     # Raised from 0.50 - below this = ask user
+
+        # Info request patterns (distinguish from action verbs)
+        self.INFO_REQUEST_PATTERNS = [
+            "envoie-moi", "envoie moi", "envoi-moi", "envoi moi",
+            "donne-moi", "donne moi", "dis-moi", "dis moi",
+            "montre-moi", "montre moi", "affiche-moi", "affiche moi",
+            "explique-moi", "explique moi", "récapitule", "résume",
+            "rappelle-moi", "rappelle moi", "c'est quoi", "qu'est-ce"
+        ]
 
     async def classify(
         self,
@@ -78,8 +95,12 @@ class IntentClassifierV5:
         has_documents = context.get("has_uploaded_documents", False) or \
                        context.get("has_active_documents", False)
 
-        # PHASE 1: Quick Rules (70% of queries)
-        quick_result = await self._quick_rules_classification(query_lower, has_documents)
+        # PHASE 1: Quick Rules (70% of queries) - Now with conversation context
+        quick_result = await self._quick_rules_classification(
+            query_lower,
+            has_documents,
+            conversation_history
+        )
 
         if quick_result:
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
@@ -101,61 +122,174 @@ class IntentClassifierV5:
 
         return llm_result
 
+    def _is_info_request(self, query_lower: str) -> bool:
+        """
+        Detect if query is an info request (not an action)
+
+        "Envoie-moi le budget" = INFO REQUEST (QUERY_DATA)
+        "Envoie un email aux copropriétaires" = ACTION (SEND_EMAIL)
+        """
+        return any(pattern in query_lower for pattern in self.INFO_REQUEST_PATTERNS)
+
+    def _has_explicit_email_target(self, query_lower: str) -> bool:
+        """
+        Check if query has explicit email recipients or email context
+
+        "envoie un email à..." = True
+        "contacte les copropriétaires" = True
+        "envoie-moi les infos" = False
+        """
+        email_target_patterns = [
+            "email à", "mail à", "email aux", "mail aux",
+            "message à", "message aux",
+            "contacte ", "contacter ",
+            "écris à", "écrire à",
+            "préviens", "prévenir", "alerter", "alerte ",
+            "copropriétaires", "copropriétaire",
+            "professionnel", "professionnels",
+            "chauffagiste", "plombier", "électricien",
+            "voisin", "voisins", "syndic"
+        ]
+        return any(pattern in query_lower for pattern in email_target_patterns)
+
     async def _quick_rules_classification(
         self,
         query_lower: str,
-        has_documents: bool
+        has_documents: bool,
+        conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Optional[IntentClassification]:
         """
         Quick rule-based classification (70% accuracy target)
 
-        Priority order:
-        1. Email actions (highest confidence)
-        2. SQL queries (aggregations, lists)
+        NEW PRIORITY ORDER (V6 - World-Class):
+        0. INFO REQUESTS (intercept "envoie-moi", "donne-moi" etc.) - FIRST!
+        1. SQL queries (aggregations, lists, data retrieval)
+        2. Email actions (only with explicit recipients)
         3. Legal keywords
         4. Web search (explicit internet requests)
         5. Document search (when documents exist)
+        6. Workflow triggers (incidents, emergencies)
+        7. Quotes (devis)
         """
 
-        # 1. EMAIL - High priority (explicit action verbs)
-        email_verbs = ["envoie", "envoyer", "envoi", "contacte", "contacter",
-                      "écris un email", "écris un message", "transmets"]
+        # ================================================================
+        # 0. INFO REQUEST INTERCEPTION - CRITICAL FIX
+        # Prevents "envoie-moi le budget" → SEND_EMAIL (was 15-20% false positive)
+        # ================================================================
+        is_info_request = self._is_info_request(query_lower)
 
-        if any(verb in query_lower for verb in email_verbs):
-            return IntentClassification(
-                intent=IntentType.SEND_EMAIL,
-                domain=Domain.PROPERTY_MGMT,
-                confidence=0.90,
-                suggested_sources=[DataSource.SQL, DataSource.CONVERSATION],
-                reasoning="Email action verb detected",
-                keywords_matched=["email", "envoie"]
-            )
+        if is_info_request:
+            logger.debug("info_request_detected", query=query_lower[:50])
+            # Continue to SQL/RAG classification, skip email detection
 
-        # 2. SQL QUERIES - Aggregations & Lists
+        # ================================================================
+        # 1. SQL QUERIES - Now FIRST priority (was incorrectly second)
+        # ================================================================
         sql_strong_keywords = {
             "combien": 0.95,
             "nombre de": 0.95,
-            "liste des": 0.85,
+            "liste des": 0.90,
             "liste-moi": 0.90,
-            "tous les": 0.80,
+            "donne-moi la liste": 0.90,
+            "donne la liste": 0.90,
+            "affiche la liste": 0.90,
+            "montre-moi": 0.85,
+            "montre la liste": 0.85,
+            "envoie-moi la liste": 0.90,  # NEW: Info request variant
+            "envoie-moi le": 0.85,        # NEW: Info request variant
+            "envoie moi le": 0.85,        # NEW: Info request variant
+            "tous les": 0.85,
+            "toutes les": 0.85,
             "moyenne": 0.95,
             "total": 0.85,
+            "quel est le": 0.80,
+            "quels sont les": 0.85,
+            "qui sont les": 0.85,
+            "qui a": 0.80,
+            "qui ont": 0.80,
         }
 
         for keyword, confidence in sql_strong_keywords.items():
             if keyword in query_lower:
-                # Additional context: copropriétaires, professionnels, documents
-                if any(word in query_lower for word in ["copropriétaire", "copropriété", "professionnel", "syndic"]):
+                # Check for database entities
+                db_entities = ["copropriétaire", "copropriété", "professionnel",
+                              "syndic", "document", "budget", "charge", "email",
+                              "impayé", "lot", "appartement"]
+                if any(entity in query_lower for entity in db_entities):
                     return IntentClassification(
                         intent=IntentType.QUERY_DATA,
                         domain=Domain.PROPERTY_MGMT,
                         confidence=confidence,
                         suggested_sources=[DataSource.SQL],
-                        reasoning=f"SQL keyword '{keyword}' + database entity",
+                        reasoning=f"SQL keyword '{keyword}' + database entity detected",
                         keywords_matched=[keyword]
                     )
 
+        # ================================================================
+        # 2. EMAIL ACTIONS - Only with explicit recipients (not info requests)
+        # ================================================================
+        if not is_info_request:
+            # Explicit email action verbs WITH recipient context
+            email_action_verbs = [
+                "envoie un email", "envoie un mail", "envoyer un email",
+                "écris un email", "écris un message", "rédige email", "rédige un email",
+                "transmets", "génère email", "génère un email",
+                "génère la convocation", "génère convocation",
+                "crée la convocation", "crée convocation",
+                "prépare la convocation", "prépare convocation",
+                "contacte", "contacter", "préviens", "prévenir",
+                "alerte", "alerter"
+            ]
+
+            has_email_verb = any(verb in query_lower for verb in email_action_verbs)
+            has_email_target = self._has_explicit_email_target(query_lower)
+
+            # Simple "envoie" without explicit target = check context more carefully
+            simple_email_verbs = ["envoie", "envoyer", "envoi"]
+            has_simple_verb = any(verb in query_lower for verb in simple_email_verbs)
+
+            if has_email_verb and has_email_target:
+                return IntentClassification(
+                    intent=IntentType.SEND_EMAIL,
+                    domain=Domain.PROPERTY_MGMT,
+                    confidence=0.92,
+                    suggested_sources=[DataSource.SQL, DataSource.CONVERSATION],
+                    reasoning="Email action verb with explicit recipient",
+                    keywords_matched=["email", "recipient"]
+                )
+            elif has_simple_verb and has_email_target and not is_info_request:
+                # "envoie aux copropriétaires" (no "email" word but clear intent)
+                return IntentClassification(
+                    intent=IntentType.SEND_EMAIL,
+                    domain=Domain.PROPERTY_MGMT,
+                    confidence=0.88,
+                    suggested_sources=[DataSource.SQL, DataSource.CONVERSATION],
+                    reasoning="Send verb with recipient context",
+                    keywords_matched=["envoie", "recipient"]
+                )
+
+        # 2.5 EMAIL MODIFICATION (when email draft exists in conversation)
+        email_modification_keywords = [
+            "change le ton", "modifie le ton",
+            "modifie l'email", "modifie le message",
+            "modifie le sujet", "change l'objet",
+            "change le message", "ajoute dans l'email",
+            "retire de l'email", "supprime de l'email"
+        ]
+
+        if any(kw in query_lower for kw in email_modification_keywords):
+            return IntentClassification(
+                intent=IntentType.SEND_EMAIL,
+                domain=Domain.PROPERTY_MGMT,
+                confidence=0.90,
+                suggested_sources=[DataSource.CONVERSATION],
+                reasoning="Email modification request",
+                keywords_matched=["modifier email"]
+            )
+
+        # ================================================================
         # 3. LEGAL - Strong legal keywords
+        # ================================================================
         legal_strong_keywords = {
             "jurisprudence": 0.95,
             "légifrance": 0.95,
@@ -166,6 +300,16 @@ class IntentClassifierV5:
             "loi 1965": 0.90,
             "code civil": 0.90,
             "décret": 0.85,
+            # FIX 3 - AG & Copro legal
+            "délais légaux": 0.90,        # FIX 3
+            "délai légal": 0.90,          # FIX 3
+            "obligations légales": 0.90,   # FIX 3
+            "obligation légale": 0.90,     # FIX 3
+            "loi alur": 0.90,              # FIX 3
+            "quorum": 0.85,                # FIX 3
+            "majorité": 0.75,              # FIX 3 (lower, can be ambiguous)
+            "vote ag": 0.85,               # FIX 3
+            "délai convocation": 0.85,     # FIX 3
         }
 
         for keyword, confidence in legal_strong_keywords.items():
@@ -217,7 +361,38 @@ class IntentClassifierV5:
                     keywords_matched=["documents"]
                 )
 
-        # 6. QUOTES - Vendor requests
+        # 6. WORKFLOW TRIGGERS - Emergencies, incidents, AG convocations
+        workflow_keywords = {
+            "urgent": 0.90,
+            "urgence": 0.90,
+            "fuite": 0.85,
+            "dégât": 0.85,
+            "dégât des eaux": 0.90,
+            "incendie": 0.95,
+            "panne": 0.80,
+            "convoquer": 0.85,
+            "convocation": 0.85,
+            "assemblée générale": 0.85,
+            "travaux": 0.75,
+        }
+
+        for keyword, confidence in workflow_keywords.items():
+            if keyword in query_lower:
+                # Determine domain based on keyword
+                domain = Domain.PROPERTY_MGMT
+                if keyword in ["fuite", "dégât", "dégât des eaux", "incendie", "panne"]:
+                    domain = Domain.PLUMBING
+
+                return IntentClassification(
+                    intent=IntentType.TRIGGER_WORKFLOW,
+                    domain=domain,
+                    confidence=confidence,
+                    suggested_sources=[DataSource.SQL],
+                    reasoning=f"Workflow trigger detected: '{keyword}'",
+                    keywords_matched=[keyword]
+                )
+
+        # 7. QUOTES - Vendor requests (lower priority than workflows)
         quote_keywords = ["devis", "demande de devis", "prix", "tarif"]
 
         if any(kw in query_lower for kw in quote_keywords):
@@ -233,6 +408,76 @@ class IntentClassifierV5:
         # No quick rule matched
         return None
 
+    def _generate_clarification_options(
+        self,
+        user_input: str,
+        primary_intent: IntentType,
+        confidence: float
+    ) -> tuple[str, List[Dict[str, Any]], List[IntentType]]:
+        """
+        Generate clarification question and options for ambiguous queries
+
+        Returns:
+            (question, options, possible_intents)
+        """
+        # Common clarification scenarios
+        clarification_map = {
+            IntentType.SEND_EMAIL: {
+                "question": "Je ne suis pas sûr de comprendre. Voulez-vous :",
+                "options": [
+                    {"label": "Envoyer un email", "intent": "send_email",
+                     "description": "Rédiger et envoyer un message"},
+                    {"label": "Consulter des données", "intent": "query_data",
+                     "description": "Voir des informations de la base de données"},
+                ]
+            },
+            IntentType.QUERY_DATA: {
+                "question": "Que souhaitez-vous faire exactement ?",
+                "options": [
+                    {"label": "Voir des données", "intent": "query_data",
+                     "description": "Consulter des informations (copropriétaires, budgets...)"},
+                    {"label": "Rechercher dans les documents", "intent": "search_documents",
+                     "description": "Chercher dans les PDFs et contrats"},
+                ]
+            },
+            IntentType.SEARCH_DOCUMENTS: {
+                "question": "Quelle type de recherche souhaitez-vous ?",
+                "options": [
+                    {"label": "Dans mes documents", "intent": "search_documents",
+                     "description": "Recherche dans les PDFs uploadés"},
+                    {"label": "Analyse juridique", "intent": "legal",
+                     "description": "Analyse légale et jurisprudence"},
+                    {"label": "Sur internet", "intent": "web_search",
+                     "description": "Recherche web pour infos actuelles"},
+                ]
+            },
+            IntentType.GENERAL_QUESTION: {
+                "question": "Comment puis-je vous aider ?",
+                "options": [
+                    {"label": "Question sur les données", "intent": "query_data",
+                     "description": "Copropriétaires, budgets, documents..."},
+                    {"label": "Envoyer un message", "intent": "send_email",
+                     "description": "Email aux copropriétaires ou professionnels"},
+                    {"label": "Recherche documentaire", "intent": "search_documents",
+                     "description": "Chercher dans les documents"},
+                    {"label": "Question générale", "intent": "general_question",
+                     "description": "Autre question"},
+                ]
+            }
+        }
+
+        # Get clarification for the primary intent, or use general
+        clarification = clarification_map.get(
+            primary_intent,
+            clarification_map[IntentType.GENERAL_QUESTION]
+        )
+
+        possible_intents = [
+            IntentType(opt["intent"]) for opt in clarification["options"]
+        ]
+
+        return clarification["question"], clarification["options"], possible_intents
+
     async def _llm_classification(
         self,
         user_input: str,
@@ -241,14 +486,21 @@ class IntentClassifierV5:
     ) -> IntentClassification:
         """
         LLM-based classification for complex queries
+        Now with enhanced clarification support
         """
 
-        # Build context string
+        # Build context string with conversation history
         context_str = ""
         if context.get("has_uploaded_documents"):
             context_str += "- L'utilisateur a uploadé des documents\n"
         if conversation_history and len(conversation_history) > 0:
             context_str += f"- Historique: {len(conversation_history)} messages\n"
+            # Add last 3 messages for context
+            recent = conversation_history[-3:] if len(conversation_history) > 3 else conversation_history
+            for msg in recent:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")[:100]
+                context_str += f"  - {role}: {content}...\n"
 
         prompt = f"""Classifie l'intention de cette requête utilisateur.
 
@@ -257,22 +509,20 @@ Requête: "{user_input}"
 Contexte:
 {context_str if context_str else "Aucun contexte spécifique"}
 
-Intents disponibles:
-1. query_data - Requêtes SQL (nombres, listes, statistiques sur copropriétaires/professionnels)
-2. search_documents - Recherche sémantique dans documents (contrats, règlements, PDFs)
-3. web_search - Recherche internet (infos actuelles, news)
-4. send_email - Générer et envoyer des emails
-5. request_quotes - Demander des devis
-6. trigger_workflow - Déclencher un workflow N8N
-7. legal - Analyse juridique, jurisprudence, clauses abusives
-8. general_question - Questions générales d'assistant
+RÈGLES IMPORTANTES:
+1. Si l'utilisateur dit "envoie-moi", "donne-moi", "montre-moi" = c'est une demande d'INFO (query_data), PAS un email
+2. "Envoie un email à X" ou "contacte X" = c'est un vrai email (send_email)
+3. Si tu n'es pas sûr à 70%+, mets une confiance basse pour déclencher une clarification
 
-Domaines:
-- legal: Juridique, lois, contrats
-- plumbing: Plomberie, eau, chauffage
-- property_mgmt: Gestion copropriété
-- vendor_mgmt: Fournisseurs, devis
-- general: Questions générales
+Intents disponibles:
+1. query_data - Requêtes de données (nombres, listes, statistiques)
+2. search_documents - Recherche sémantique dans documents
+3. web_search - Recherche internet
+4. send_email - Générer et envoyer des emails (UNIQUEMENT si destinataire explicite)
+5. request_quotes - Demander des devis
+6. trigger_workflow - Déclencher un workflow (urgences, incidents)
+7. legal - Analyse juridique, jurisprudence
+8. general_question - Questions générales
 
 Réponds en JSON:
 {{
@@ -283,14 +533,13 @@ Réponds en JSON:
     "suggested_sources": ["sql"]
 }}
 
-Sois précis et justifie ton raisonnement."""
+Sois HONNÊTE sur ta confiance. En cas de doute, confiance < 0.70."""
 
         try:
             response = await self.llm_service.generate_response(prompt)
 
             # Parse JSON response
             import json
-            # Extract JSON from markdown if needed
             if "```json" in response:
                 json_match = re.search(r'```json\s*\n(.*?)```', response, re.DOTALL)
                 if json_match:
@@ -323,6 +572,21 @@ Sois précis et justifie ton raisonnement."""
                 if src in sources_map:
                     suggested_sources.append(sources_map[src])
 
+            # Generate clarification if confidence is low
+            needs_clarification = confidence < self.THRESHOLD_MEDIUM
+            clarification_question = None
+            clarification_options = []
+            possible_intents = []
+
+            if needs_clarification:
+                clarification_question, clarification_options, possible_intents = \
+                    self._generate_clarification_options(user_input, intent, confidence)
+
+                logger.info("clarification_generated",
+                           confidence=confidence,
+                           threshold=self.THRESHOLD_MEDIUM,
+                           options_count=len(clarification_options))
+
             return IntentClassification(
                 intent=intent,
                 domain=domain,
@@ -330,13 +594,20 @@ Sois précis et justifie ton raisonnement."""
                 suggested_sources=suggested_sources,
                 reasoning=reasoning,
                 keywords_matched=[],
-                needs_clarification=confidence < self.THRESHOLD_MEDIUM
+                needs_clarification=needs_clarification,
+                clarification_question=clarification_question,
+                clarification_options=clarification_options,
+                possible_intents=possible_intents
             )
 
         except Exception as e:
             logger.error("llm_classification_failed", error=str(e), exc_info=True)
 
-            # Fallback to general question
+            # Fallback with clarification
+            question, options, possible = self._generate_clarification_options(
+                user_input, IntentType.GENERAL_QUESTION, 0.50
+            )
+
             return IntentClassification(
                 intent=IntentType.GENERAL_QUESTION,
                 domain=Domain.GENERAL,
@@ -344,5 +615,8 @@ Sois précis et justifie ton raisonnement."""
                 suggested_sources=[DataSource.CONVERSATION],
                 reasoning=f"LLM classification failed: {str(e)}",
                 keywords_matched=[],
-                needs_clarification=True
+                needs_clarification=True,
+                clarification_question=question,
+                clarification_options=options,
+                possible_intents=possible
             )

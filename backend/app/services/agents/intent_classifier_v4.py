@@ -1,6 +1,14 @@
 """
 Enhanced Intent Classifier v4.0 - World-Class Intent Understanding
 
+⚠️ NOTE: V5 is the latest version (intent_classifier_v5.py).
+   V4 is kept for reference and backwards compatibility.
+
+   For Phase 3 World-Class SMA architecture, use:
+   - IntentClassifierV5 from intent_classifier_v5.py
+   - AgentRegistry for agent discovery and routing
+   - See: base_agent.py, wrapped_agents.py
+
 This classifier implements industry-leading techniques for accurate intent detection:
 
 Key Features:

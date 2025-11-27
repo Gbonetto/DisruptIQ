@@ -28,6 +28,9 @@ class EmailType(Enum):
     FOLLOWUP = "followup"  # Suivi intervention
     REMINDER = "reminder"  # Relance (paiement, documents)
     NOTIFICATION = "notification"  # Notification simple
+    AG_CONVOCATION = "ag_convocation"  # Convocation Assemblée Générale (Phase 3.5)
+    AG_PV = "ag_pv"  # PV d'Assemblée Générale
+    AG_REMINDER = "ag_reminder"  # Rappel AG
 
 
 # Email templates by type
@@ -153,6 +156,182 @@ Merci de régulariser votre situation dans les plus brefs délais.
 Cordialement,
 Le Syndic""",
         "tone": "firm_but_polite",
+        "priority": "medium"
+    },
+
+    # ================================================================
+    # TEMPLATES AG (ASSEMBLÉE GÉNÉRALE) - Phase 3.5 World-Class SMA
+    # ================================================================
+
+    EmailType.AG_CONVOCATION: {
+        "subject_template": "CONVOCATION - Assemblée Générale {{ag_type}} - {{building_name}} - {{ag_date}}",
+        "body_template": """Madame, Monsieur,
+
+Conformément aux articles 9 et suivants du décret n°67-223 du 17 mars 1967, nous avons l'honneur de vous convoquer à l'ASSEMBLÉE GÉNÉRALE {{ag_type}} de la copropriété.
+
+═══════════════════════════════════════════════════════════════
+                    INFORMATIONS PRATIQUES
+═══════════════════════════════════════════════════════════════
+
+📅 **DATE:** {{ag_date}}
+🕐 **HEURE:** {{ag_time}}
+📍 **LIEU:** {{ag_location}}
+   {{ag_address}}
+
+{{#virtual_option}}
+💻 **PARTICIPATION À DISTANCE:**
+   Lien visioconférence: {{virtual_link}}
+   Code d'accès: {{virtual_code}}
+{{/virtual_option}}
+
+═══════════════════════════════════════════════════════════════
+                      ORDRE DU JOUR
+═══════════════════════════════════════════════════════════════
+
+{{order_du_jour}}
+
+═══════════════════════════════════════════════════════════════
+                   DOCUMENTS JOINTS
+═══════════════════════════════════════════════════════════════
+
+Les documents suivants sont joints à la présente convocation:
+{{documents_list}}
+
+{{#documents_online}}
+📎 L'ensemble des documents est également disponible sur l'espace copropriétaire:
+   {{documents_url}}
+{{/documents_online}}
+
+═══════════════════════════════════════════════════════════════
+                   MODALITÉS DE VOTE
+═══════════════════════════════════════════════════════════════
+
+**Participation personnelle:**
+Vous pouvez participer personnellement à l'assemblée. Merci de vous munir d'une pièce d'identité.
+
+**Vote par pouvoir:**
+Si vous ne pouvez pas assister à l'assemblée, vous pouvez vous faire représenter par un mandataire de votre choix (copropriétaire ou non).
+Le formulaire de pouvoir est joint à la présente convocation.
+
+{{#vote_correspondance}}
+**Vote par correspondance:**
+Conformément à l'article 17-1 A de la loi du 10 juillet 1965, vous pouvez voter par correspondance.
+Le formulaire de vote par correspondance est joint à la présente.
+Date limite de réception: {{vote_deadline}}
+{{/vote_correspondance}}
+
+═══════════════════════════════════════════════════════════════
+                       RAPPELS
+═══════════════════════════════════════════════════════════════
+
+• Délai de convocation: 21 jours minimum avant l'AG (art. 9 décret 1967)
+• Quorum 1ère convocation: {{quorum_1}}
+{{#second_convocation}}• En cas de défaut de quorum, une seconde AG sera convoquée{{/second_convocation}}
+• Vos tantièmes: {{tantiemes}} / {{total_tantiemes}}
+
+═══════════════════════════════════════════════════════════════
+
+Nous comptons sur votre présence ou représentation.
+
+Veuillez agréer, Madame, Monsieur, l'expression de nos salutations distinguées.
+
+{{syndic_name}}
+Syndic de Copropriété
+{{syndic_address}}
+{{syndic_phone}}
+{{syndic_email}}
+
+---
+Copropriété: {{building_name}}
+Adresse: {{building_address}}
+N° SIRET: {{siret}}""",
+        "tone": "formal_legal",
+        "priority": "high"
+    },
+
+    EmailType.AG_PV: {
+        "subject_template": "Procès-Verbal - AG {{ag_type}} du {{ag_date}} - {{building_name}}",
+        "body_template": """Madame, Monsieur,
+
+Veuillez trouver ci-joint le procès-verbal de l'Assemblée Générale {{ag_type}} qui s'est tenue le {{ag_date}}.
+
+═══════════════════════════════════════════════════════════════
+                   RÉSUMÉ DES DÉCISIONS
+═══════════════════════════════════════════════════════════════
+
+{{resolutions_summary}}
+
+═══════════════════════════════════════════════════════════════
+                    STATISTIQUES DE VOTE
+═══════════════════════════════════════════════════════════════
+
+• Copropriétaires présents: {{nb_presents}}
+• Copropriétaires représentés: {{nb_representes}}
+• Total tantièmes représentés: {{tantiemes_representes}} / {{total_tantiemes}} ({{pourcentage_tantiemes}}%)
+
+═══════════════════════════════════════════════════════════════
+
+**Délai de contestation:**
+Conformément à l'article 42 de la loi du 10 juillet 1965, vous disposez d'un délai de 2 mois à compter de la notification du présent procès-verbal pour contester les décisions de l'assemblée.
+
+Le procès-verbal complet est joint à ce courrier.
+
+Cordialement,
+
+{{syndic_name}}
+Syndic de Copropriété""",
+        "tone": "formal_legal",
+        "priority": "high"
+    },
+
+    EmailType.AG_REMINDER: {
+        "subject_template": "RAPPEL - Assemblée Générale {{ag_type}} - {{building_name}} - {{ag_date}}",
+        "body_template": """Madame, Monsieur,
+
+Nous vous rappelons que l'Assemblée Générale {{ag_type}} de la copropriété {{building_name}} se tiendra:
+
+📅 **{{ag_date}}** à **{{ag_time}}**
+📍 **{{ag_location}}**
+
+{{#days_remaining}}
+⏰ **Plus que {{days_remaining}} jours avant l'AG**
+{{/days_remaining}}
+
+═══════════════════════════════════════════════════════════════
+                    ACTIONS REQUISES
+═══════════════════════════════════════════════════════════════
+
+{{#need_confirmation}}
+☐ **Confirmez votre participation** avant le {{confirmation_deadline}}
+{{/need_confirmation}}
+
+{{#need_pouvoir}}
+☐ **Retournez votre pouvoir** si vous ne pouvez pas participer
+{{/need_pouvoir}}
+
+{{#vote_correspondance}}
+☐ **Vote par correspondance:** à retourner avant le {{vote_deadline}}
+{{/vote_correspondance}}
+
+═══════════════════════════════════════════════════════════════
+                   DOCUMENTS À CONSULTER
+═══════════════════════════════════════════════════════════════
+
+{{documents_reminder}}
+
+{{#documents_url}}
+📎 Accès documents: {{documents_url}}
+{{/documents_url}}
+
+═══════════════════════════════════════════════════════════════
+
+Votre participation est importante pour les décisions de la copropriété.
+
+Cordialement,
+
+{{syndic_name}}
+Syndic de Copropriété""",
+        "tone": "professional",
         "priority": "medium"
     }
 }
@@ -500,11 +679,71 @@ JSON:
         db: AsyncSession
     ) -> List[Dict[str, Any]]:
         """Get email recipients from database based on request"""
+        import re
+
         # Check if request mentions specific copropriété
         user_request_lower = user_request.lower()
+        recipients = []
 
         try:
-            # If "tous" or "all" mentioned, get all coproprietaires
+            # PRIORITY 1: Extract email addresses directly from user request
+            # Pattern: email@domain.com
+            email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+            found_emails = re.findall(email_pattern, user_request)
+
+            if found_emails:
+                logger.info("emails_extracted_from_text", count=len(found_emails), emails=found_emails)
+
+                for email in found_emails:
+                    # Try to extract name from context (e.g., "fournisseur Nec+" -> "Nec+")
+                    name = email.split('@')[0]  # Default to email prefix
+
+                    # Check for common patterns like "fournisseur X" or "entreprise Y"
+                    name_patterns = [
+                        r'(?:fournisseur|entreprise|société|compagnie|cabinet)\s+([A-Za-z0-9\+\-\s]+)',
+                        r'(?:au|à|chez)\s+([A-Za-z0-9\+\-\s]+)\s+' + re.escape(email),
+                        r'([A-Za-z0-9\+\-\s]+)\s+' + re.escape(email)
+                    ]
+
+                    for pattern in name_patterns:
+                        match = re.search(pattern, user_request, re.IGNORECASE)
+                        if match:
+                            extracted_name = match.group(1).strip()
+                            if len(extracted_name) > 0 and len(extracted_name) < 50:
+                                name = extracted_name
+                                break
+
+                    recipients.append({
+                        "name": name,
+                        "email": email,
+                        "id": None
+                    })
+
+                return recipients
+
+            # PRIORITY 2: Check context for emails_available (from SQL query results)
+            if context and "emails_available" in context:
+                emails_from_context = context["emails_available"]
+                logger.info("emails_from_context", count=len(emails_from_context))
+
+                for item in emails_from_context:
+                    if isinstance(item, dict):
+                        recipients.append({
+                            "name": item.get("name", item.get("email", "")),
+                            "email": item.get("email", ""),
+                            "id": item.get("id")
+                        })
+                    elif isinstance(item, str):
+                        recipients.append({
+                            "name": item.split('@')[0],
+                            "email": item,
+                            "id": None
+                        })
+
+                if recipients:
+                    return recipients
+
+            # PRIORITY 3: If "tous" or "all" mentioned, get all coproprietaires
             if any(word in user_request_lower for word in ["tous", "tout", "all"]):
                 result = await db.execute(select(Coproprietaire))
                 coproprietaires = result.scalars().all()
@@ -518,11 +757,11 @@ JSON:
                     for c in coproprietaires
                 ]
 
-            # Otherwise return empty (will be filled by user or workflow)
+            # PRIORITY 4: Otherwise return empty (will be filled by user or workflow)
             return []
 
         except Exception as e:
-            logger.error("recipients_fetch_failed", error=str(e))
+            logger.error("recipients_fetch_failed", error=str(e), exc_info=True)
             return []
 
     async def _generate_content_v3(
@@ -656,6 +895,8 @@ JSON:
 
         For missing variables, LLM infers reasonable values from context
         """
+        import re
+
         subject_template = template["subject_template"]
         body_template = template["body_template"]
 
@@ -668,8 +909,68 @@ JSON:
                 subject = subject.replace(f"{{{{{key}}}}}", str(value))
                 body = body.replace(f"{{{{{key}}}}}", str(value))
 
+        # Check if there are still unreplaced variables
+        unreplaced_vars = re.findall(r'\{\{([^}]+)\}\}', subject + body)
+
+        if unreplaced_vars and len(unreplaced_vars) > 2:
+            # Too many missing variables - use LLM to generate full content
+            logger.info("template_has_many_missing_vars", count=len(unreplaced_vars), vars=unreplaced_vars)
+
+            prompt = f"""
+Tu es un assistant pour un syndic de copropriété. Génère un email professionnel basé sur cette demande.
+
+DEMANDE UTILISATEUR:
+{user_request}
+
+CONTEXTE:
+{context.get('context_summary', 'Aucun contexte supplémentaire')}
+
+OBJECTIF:
+{context.get('purpose', user_request)}
+
+TON: {template.get("tone", "professional")}
+URGENCE: {context.get("urgency", "medium")}
+
+INSTRUCTIONS:
+1. Génère un objet d'email clair et précis
+2. Génère un corps d'email professionnel et complet
+3. Utilise TOUTES les informations disponibles dans la demande utilisateur
+4. Si la demande mentionne des références (facture, bâtiment, etc.), INCLUS-LES dans l'email
+5. Sois concret et précis
+
+Réponds en JSON:
+{{
+    "subject": "Objet de l'email",
+    "body": "Corps de l'email complet avec salutations et signature"
+}}
+
+JSON:
+"""
+
+            try:
+                response = await self.llm_service.generate_response(
+                    prompt=prompt,
+                    max_tokens=800,
+                    temperature=0.4
+                )
+
+                import json
+                generated = json.loads(response.strip())
+
+                logger.info("email_generated_by_llm", has_subject=bool(generated.get("subject")))
+
+                return {
+                    "subject": generated.get("subject", subject),
+                    "body": generated.get("body", body),
+                    "tone": template["tone"],
+                    "urgency": context.get("urgency", template.get("priority", "medium"))
+                }
+
+            except Exception as e:
+                logger.error("llm_generation_failed", error=str(e))
+                # Fallback to template with placeholders
+
         # Remove unreplaced variables
-        import re
         subject = re.sub(r'\{\{[^}]+\}\}', '[À compléter]', subject)
         body = re.sub(r'\{\{#[^}]+\}\}.*?\{\{/[^}]+\}\}', '', body, flags=re.DOTALL)  # Remove conditional blocks
         body = re.sub(r'\{\{[^}]+\}\}', '[À compléter]', body)

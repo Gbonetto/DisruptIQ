@@ -1,6 +1,17 @@
 """
 WorkflowAgent V2 - Intelligent Workflow Orchestrator
 
+⚠️ ARCHITECTURE NOTE (Phase 3 - World-Class SMA):
+   This agent is wrapped by WrappedWorkflowAgent in wrapped_agents.py for integration
+   with the new BaseAgent interface and AgentRegistry system.
+
+   For new integrations, prefer using:
+   - WrappedWorkflowAgent from app.services.agents.wrapped_agents
+   - AgentRegistry for discovery and routing
+   - ResilientAgent wrapper for production resilience
+
+   See: base_agent.py, agent_registry.py, resilience.py
+
 Specialized agent for understanding problems and generating actionable to-do lists
 that guide users step-by-step through complex processes.
 
@@ -43,6 +54,8 @@ from app.services.llm_service import LLMService
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from app.models import WorkflowInstance, WorkflowStep, WorkflowStatus, StepStatus
+import uuid
 
 logger = structlog.get_logger()
 
@@ -227,9 +240,36 @@ class WorkflowAgentV2:
                     progress=1.0
                 )
 
-            # Step 4: Return workflow for user validation
+            # Step 4: Persist workflow if DB session available
+            workflow_id = None
+            if db:
+                try:
+                    workflow_instance = await self._create_workflow_instance(
+                        db=db,
+                        workflow_type=classification["workflow_type"],
+                        subtype=classification["subtype"],
+                        context=extracted_context,
+                        todo_list=todo_list
+                    )
+                    workflow_id = workflow_instance.id
+                    logger.info("workflow_persisted", workflow_id=workflow_id)
+                    
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            thought_type=ThoughtType.SUCCESS,
+                            title="💾 Workflow sauvegardé",
+                            content=f"ID: {workflow_id}",
+                            agent="WorkflowAgent",
+                            progress=1.0
+                        )
+                except Exception as e:
+                    logger.error("workflow_persistence_failed", error=str(e))
+                    # Don't fail the request if persistence fails, just log it
+
+            # Step 5: Return workflow for user validation
             return {
                 "success": True,
+                "workflow_id": workflow_id,
                 "workflow_type": classification["workflow_type"],
                 "subtype": classification["subtype"],
                 "confidence": classification["confidence"],
@@ -741,6 +781,49 @@ Réponds UNIQUEMENT avec le JSON, sans markdown."""
         message += f"💡 **Utilisez les actions suggérées pour gagner du temps.**"
 
         return message
+
+    async def _create_workflow_instance(
+        self,
+        db: AsyncSession,
+        workflow_type: str,
+        subtype: str,
+        context: Dict[str, Any],
+        todo_list: Dict[str, Any]
+    ) -> WorkflowInstance:
+        """Create and persist a new workflow instance with steps"""
+        
+        # Create instance
+        instance_id = str(uuid.uuid4())
+        workflow_instance = WorkflowInstance(
+            id=instance_id,
+            workflow_type=workflow_type,
+            subtype=subtype,
+            title=todo_list.get("workflow_name", f"Workflow {subtype}"),
+            status=WorkflowStatus.PENDING,
+            context_data=context,
+            current_step_index=0
+        )
+        
+        db.add(workflow_instance)
+        
+        # Create steps
+        for i, step_data in enumerate(todo_list.get("steps", [])):
+            step = WorkflowStep(
+                workflow_instance_id=instance_id,
+                step_index=i,
+                title=step_data.get("title", f"Step {i+1}"),
+                description=step_data.get("description"),
+                step_type=step_data.get("type", "manual"),
+                is_critical=step_data.get("is_critical", False),
+                status=StepStatus.PENDING,
+                step_data=step_data # Store full step data including actions
+            )
+            db.add(step)
+            
+        await db.commit()
+        await db.refresh(workflow_instance)
+        
+        return workflow_instance
 
     def list_workflow_types(self) -> List[Dict[str, Any]]:
         """List all available workflow types with metadata"""
