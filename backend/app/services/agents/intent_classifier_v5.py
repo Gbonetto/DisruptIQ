@@ -147,7 +147,10 @@ class IntentClassifierV5:
             "préviens", "prévenir", "alerter", "alerte ",
             "copropriétaires", "copropriétaire",
             "professionnel", "professionnels",
+            "prestataire",  # ADDED: Important target for vendor emails
             "chauffagiste", "plombier", "électricien",
+            "plomberie", "électricité",  # ADDED: Company type names
+            "fournisseur", "artisan", "entreprise",  # ADDED: Vendor types
             "voisin", "voisins", "syndic"
         ]
         return any(pattern in query_lower for pattern in email_target_patterns)
@@ -173,7 +176,66 @@ class IntentClassifierV5:
         """
 
         # ================================================================
-        # 0. INFO REQUEST INTERCEPTION - CRITICAL FIX
+        # 0. DIGEST/EMAIL SUMMARY - Check first (highest priority for digest requests)
+        # ================================================================
+        digest_keywords = {
+            # Direct digest requests
+            "mail digest": 0.98,
+            "email digest": 0.98,
+            "génère le digest": 0.98,
+            "génère mon digest": 0.98,
+            "génère moi le digest": 0.98,
+            "génère-moi le digest": 0.98,
+            "genere le digest": 0.98,
+            "genere mon digest": 0.98,
+            "genere moi le digest": 0.98,
+            "montre le digest": 0.95,
+            "montre-moi le digest": 0.95,
+            "affiche le digest": 0.95,
+            "affiche-moi le digest": 0.95,
+            "mon digest": 0.92,
+            "le digest": 0.90,
+            "digest des emails": 0.98,
+            "digest des mails": 0.98,
+            "digest email": 0.95,
+            # Email summary requests
+            "résumé des emails": 0.95,
+            "résumé des mails": 0.95,
+            "résumé de mes emails": 0.95,
+            "résumé de mes mails": 0.95,
+            "synthèse des emails": 0.95,
+            "synthèse des mails": 0.95,
+            "emails reçus": 0.90,
+            "mails reçus": 0.90,
+            "emails d'hier": 0.92,
+            "emails de la semaine": 0.92,
+            "emails urgents": 0.90,
+            "emails importants": 0.90,
+            "quels emails": 0.88,
+            "quels mails": 0.88,
+            "mes emails": 0.85,
+            "mes mails": 0.85,
+            # Classification by urgency
+            "classe les emails": 0.92,
+            "classe-les par": 0.90,
+            "trie les emails": 0.90,
+            "trie-les par urgence": 0.92,
+        }
+
+        for keyword, confidence in digest_keywords.items():
+            if keyword in query_lower:
+                logger.info("digest_keyword_matched", keyword=keyword, confidence=confidence)
+                return IntentClassification(
+                    intent=IntentType.GENERATE_DIGEST,
+                    domain=Domain.PROPERTY_MGMT,
+                    confidence=confidence,
+                    suggested_sources=[DataSource.SQL],
+                    reasoning=f"Digest keyword '{keyword}' - generating email digest",
+                    keywords_matched=[keyword]
+                )
+
+        # ================================================================
+        # 0.5 INFO REQUEST INTERCEPTION - CRITICAL FIX
         # Prevents "envoie-moi le budget" → SEND_EMAIL (was 15-20% false positive)
         # ================================================================
         is_info_request = self._is_info_request(query_lower)
@@ -225,6 +287,22 @@ class IntentClassifierV5:
             "résumé du pv": 0.95,
             "analyse le document": 0.92,
             "analyse la facture": 0.92,
+            # Synthèses de conversation/dossier
+            "synthèse": 0.90,
+            "synthese": 0.90,
+            "résumé complet": 0.92,
+            "résume complet": 0.92,
+            "résume notre conversation": 0.95,
+            "résumé de notre conversation": 0.95,
+            "récapitule": 0.90,
+            "récapitulatif": 0.90,
+            "résumé du dossier": 0.92,
+            "résume le dossier": 0.92,
+            "fais une synthèse": 0.92,
+            "fais un résumé": 0.92,
+            "les faits": 0.85,
+            "les actions effectuées": 0.88,
+            "ce qui a été fait": 0.88,
             # Questions sur documents uploadés
             "sur la facture": 0.90,  # NOUVEAU
             "sur le contrat": 0.90,  # NOUVEAU
@@ -267,7 +345,35 @@ class IntentClassifierV5:
                 )
 
         # ================================================================
-        # 1. SQL QUERIES - For DATABASE entities only (not document content)
+        # 1. EMAIL ACTIONS - PRIORITY CHECK (before SQL to avoid misclassification)
+        # "Envoie un email aux copropriétaires" must be SEND_EMAIL, not QUERY_DATA
+        # ================================================================
+        if not is_info_request:
+            # CRITICAL: Explicit email phrases that MUST be classified as SEND_EMAIL
+            email_explicit_phrases = [
+                "envoie un email", "envoie un mail", "envoyer un email",
+                "envoie email", "envoie mail",
+                "génère un email", "génère email", "genere un email", "genere email",
+                "écris un email", "ecris un email",
+                "rédige un email", "redige un email",
+            ]
+
+            has_explicit_email_phrase = any(phrase in query_lower for phrase in email_explicit_phrases)
+
+            if has_explicit_email_phrase:
+                # This is definitely an email action, not a SQL query
+                logger.info("explicit_email_phrase_detected", query=query_lower[:50])
+                return IntentClassification(
+                    intent=IntentType.SEND_EMAIL,
+                    domain=Domain.PROPERTY_MGMT,
+                    confidence=0.95,
+                    suggested_sources=[DataSource.SQL, DataSource.CONVERSATION],
+                    reasoning="Explicit email action phrase detected",
+                    keywords_matched=["email", "explicit"]
+                )
+
+        # ================================================================
+        # 2. SQL QUERIES - For DATABASE entities only (not document content)
         # ================================================================
         sql_strong_keywords = {
             "combien": 0.95,
@@ -310,14 +416,15 @@ class IntentClassifierV5:
                     )
 
         # ================================================================
-        # 2. EMAIL ACTIONS - Only with explicit recipients (not info requests)
+        # 3. EMAIL ACTIONS - Additional patterns (if not caught by priority check)
         # ================================================================
         if not is_info_request:
             # Explicit email action verbs WITH recipient context
             email_action_verbs = [
                 "envoie un email", "envoie un mail", "envoyer un email",
-                "écris un email", "écris un message", "rédige email", "rédige un email",
-                "transmets", "génère email", "génère un email",
+                "écris un email", "écris un message", "ecris un email", "ecris un message",
+                "rédige email", "rédige un email", "redige email", "redige un email",
+                "transmets", "génère email", "génère un email", "genere email", "genere un email",
                 "génère la convocation", "génère convocation",
                 "crée la convocation", "crée convocation",
                 "prépare la convocation", "prépare convocation",
@@ -446,6 +553,14 @@ class IntentClassifierV5:
                 )
 
         # 6. WORKFLOW TRIGGERS - Emergencies, incidents, AG convocations
+        # CRITICAL: Skip workflow if this is an explicit email request
+        email_action_indicators = [
+            "envoie un email", "envoie un mail", "envoyer un email",
+            "génère email", "génère un email", "rédige email", "rédige un email",
+            "écris un email", "écris un mail"
+        ]
+        is_explicit_email_request = any(ind in query_lower for ind in email_action_indicators)
+
         workflow_keywords = {
             "urgent": 0.90,
             "urgence": 0.90,
@@ -461,7 +576,7 @@ class IntentClassifierV5:
         }
 
         for keyword, confidence in workflow_keywords.items():
-            if keyword in query_lower:
+            if keyword in query_lower and not is_explicit_email_request:
                 # Determine domain based on keyword
                 domain = Domain.PROPERTY_MGMT
                 if keyword in ["fuite", "dégât", "dégât des eaux", "incendie", "panne"]:
@@ -477,9 +592,18 @@ class IntentClassifierV5:
                 )
 
         # 7. QUOTES - Vendor requests (lower priority than workflows)
+        # CRITICAL: Skip if this is an EMAIL request with "devis" in it
+        # "Génère un email au prestataire... demande aussi un devis" → SEND_EMAIL, not REQUEST_QUOTES
         quote_keywords = ["devis", "demande de devis", "prix", "tarif"]
+        email_action_indicators = ["génère email", "génère un email", "genere email", "genere un email",
+                                   "envoie email", "envoie un email",
+                                   "écris email", "écris un email", "ecris email", "ecris un email",
+                                   "rédige email", "rédige un email", "redige email", "redige un email"]
 
-        if any(kw in query_lower for kw in quote_keywords):
+        has_quote_keyword = any(kw in query_lower for kw in quote_keywords)
+        has_email_action = any(ind in query_lower for ind in email_action_indicators)
+
+        if has_quote_keyword and not has_email_action:
             return IntentClassification(
                 intent=IntentType.REQUEST_QUOTES,
                 domain=Domain.VENDOR_MGMT,

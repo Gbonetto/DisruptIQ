@@ -394,7 +394,9 @@ class EmailAgent:
 
             # Step 2: Get recipients if not provided
             if not recipients:
-                recipients = await self._get_recipients(user_request, email_context, db)
+                recipients = await self._get_recipients(
+                    user_request, email_context, db, conversation_history
+                )
 
             # Step 3: Generate email content with TYPE-SPECIFIC template (V3)
             email_draft = await self._generate_content_v3(
@@ -453,9 +455,22 @@ class EmailAgent:
                 logger.info("email_type_detected_from_workflow", type="urgent_intervention")
                 return EmailType.URGENT_INTERVENTION
 
-        # Rule 2: Keywords urgence
-        urgent_keywords = ["urgent", "urgence", "intervention", "fuite", "panne", "sinistre", "dégât", "immédiat"]
-        if any(kw in user_request_lower for kw in urgent_keywords):
+        # Rule 2: INFORMATION email to copropriétaires (check BEFORE urgent intervention)
+        # "informer des travaux" / "prévenir les copropriétaires" = INFORMATION
+        info_to_copro_keywords = ["informer", "prévenir", "avertir", "notifier"]
+        copro_keywords = ["les copropriétaires", "aux copropriétaires", "copropriétaires de"]
+
+        is_info_request = any(kw in user_request_lower for kw in info_to_copro_keywords)
+        is_to_copro = any(kw in user_request_lower for kw in copro_keywords)
+
+        if is_info_request and is_to_copro:
+            logger.info("email_type_detected_from_keywords", type="information", reason="info_to_copro")
+            return EmailType.INFORMATION
+
+        # Rule 3: Keywords urgence - for prestataire intervention (NOT copro info)
+        urgent_intervention_keywords = ["intervention urgente", "fuite", "panne", "sinistre", "dégât des eaux", "immédiat"]
+
+        if any(kw in user_request_lower for kw in urgent_intervention_keywords) and not is_to_copro:
             logger.info("email_type_detected_from_keywords", type="urgent_intervention")
             return EmailType.URGENT_INTERVENTION
 
@@ -630,14 +645,26 @@ Réponds en JSON avec:
     "key_points": ["Point 1", "Point 2", ...],
     "context_summary": "Résumé du contexte en 1-2 phrases",
     "extracted_data": {{
-        "building": "nom du bâtiment si disponible",
-        "address": "adresse si disponible",
-        "apartment": "numéro d'appartement si disponible",
-        "owner": "nom propriétaire si disponible",
-        "incident_type": "type d'incident si disponible",
-        "severity": "gravité si disponible"
+        "building_name": "nom du bâtiment/résidence/copropriété si disponible",
+        "building_address": "adresse complète si disponible",
+        "apartment_number": "numéro d'appartement si disponible",
+        "owner_name": "nom propriétaire si disponible",
+        "incident_type": "type d'incident/travaux si disponible (ex: plomberie, fuite, travaux)",
+        "incident_description": "description détaillée de l'incident",
+        "severity": "gravité si disponible (high/medium/low)",
+        "professional_name": "nom du prestataire/entreprise si mentionné",
+        "professional_type": "type de professionnel (plombier, électricien, etc.)",
+        "amount": "montant en euros si mentionné (ex: 587,40€)",
+        "date": "date d'intervention si mentionnée",
+        "article_loi": "articles de loi cités si applicable"
     }}
 }}
+
+IMPORTANT: Extrait TOUTES les données spécifiques de l'historique:
+- Montants (ex: "587,40€ TTC") → amount
+- Noms d'entreprises (ex: "Plomberie Azur") → professional_name
+- Dates (ex: "15 novembre 2024") → date
+- Articles de loi (ex: "article 18 de la loi de 1965") → article_loi
 
 JSON:
 """
@@ -676,52 +703,43 @@ JSON:
         self,
         user_request: str,
         context: Dict[str, Any],
-        db: AsyncSession
+        db: AsyncSession,
+        conversation_history: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
-        """Get email recipients from database based on request"""
-        import re
+        """
+        Get email recipients from database based on request and context.
 
-        # Check if request mentions specific copropriété
+        PRIORITY ORDER:
+        1. Explicit emails in request
+        2. Recipients from context (SQL query results)
+        3. Determine recipient TYPE from request (prestataire vs copropriétaires)
+        4. Filter by copropriété if mentioned in conversation
+        """
+        import re
+        from sqlalchemy import select
+        from app.models.professionnel import Professionnel
+        from app.models.copropriete import Copropriete
+
         user_request_lower = user_request.lower()
         recipients = []
 
         try:
+            # ================================================================
             # PRIORITY 1: Extract email addresses directly from user request
-            # Pattern: email@domain.com
+            # ================================================================
             email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
             found_emails = re.findall(email_pattern, user_request)
 
             if found_emails:
-                logger.info("emails_extracted_from_text", count=len(found_emails), emails=found_emails)
-
+                logger.info("emails_extracted_from_text", count=len(found_emails))
                 for email in found_emails:
-                    # Try to extract name from context (e.g., "fournisseur Nec+" -> "Nec+")
-                    name = email.split('@')[0]  # Default to email prefix
-
-                    # Check for common patterns like "fournisseur X" or "entreprise Y"
-                    name_patterns = [
-                        r'(?:fournisseur|entreprise|société|compagnie|cabinet)\s+([A-Za-z0-9\+\-\s]+)',
-                        r'(?:au|à|chez)\s+([A-Za-z0-9\+\-\s]+)\s+' + re.escape(email),
-                        r'([A-Za-z0-9\+\-\s]+)\s+' + re.escape(email)
-                    ]
-
-                    for pattern in name_patterns:
-                        match = re.search(pattern, user_request, re.IGNORECASE)
-                        if match:
-                            extracted_name = match.group(1).strip()
-                            if len(extracted_name) > 0 and len(extracted_name) < 50:
-                                name = extracted_name
-                                break
-
-                    recipients.append({
-                        "name": name,
-                        "email": email,
-                        "id": None
-                    })
-
+                    name = email.split('@')[0]
+                    recipients.append({"name": name, "email": email, "id": None})
                 return recipients
 
-            # PRIORITY 2: Check context for emails_available (from SQL query results)
+            # ================================================================
+            # PRIORITY 2: Check context for emails_available (from SQL results)
+            # ================================================================
             if context and "emails_available" in context:
                 emails_from_context = context["emails_available"]
                 logger.info("emails_from_context", count=len(emails_from_context))
@@ -734,31 +752,227 @@ JSON:
                             "id": item.get("id")
                         })
                     elif isinstance(item, str):
-                        recipients.append({
-                            "name": item.split('@')[0],
-                            "email": item,
-                            "id": None
-                        })
+                        recipients.append({"name": item.split('@')[0], "email": item, "id": None})
 
                 if recipients:
                     return recipients
 
-            # PRIORITY 3: If "tous" or "all" mentioned, get all coproprietaires
-            if any(word in user_request_lower for word in ["tous", "tout", "all"]):
-                result = await db.execute(select(Coproprietaire))
-                coproprietaires = result.scalars().all()
+            # ================================================================
+            # PRIORITY 3: DETECT RECIPIENT TYPE - prestataire vs copropriétaires
+            # ================================================================
+            # Check if we're emailing a PRESTATAIRE (not copropriétaires)
+            prestataire_keywords = ["lui", "prestataire", "artisan", "fournisseur", "entreprise",
+                                    "plombier", "électricien", "devis", "facture détaillée",
+                                    "rapport d'intervention", "rapport intervention", "maintenance"]
+            is_prestataire_target = any(kw in user_request_lower for kw in prestataire_keywords)
 
-                return [
-                    {
-                        "name": f"{c.prenom} {c.nom}",
-                        "email": c.email,
-                        "id": c.id
-                    }
-                    for c in coproprietaires
+            if is_prestataire_target:
+                logger.info("recipient_type_prestataire_detected")
+
+                # Try to find prestataire from multiple sources
+                prestataire_name = None
+                prestataire_email = None
+
+                # Source 0: CRITICAL - Extract from user_request FIRST (most reliable)
+                # Pattern: "pour le prestataire X" / "pour X" / "à X" where X is company name
+                user_request_patterns = [
+                    # "pour le prestataire Plomberie Azur Côte d'Azur"
+                    r"(?:pour\s+(?:le\s+)?prestataire|prestataire)\s+([A-ZÀ-Üa-zà-ü][A-ZÀ-Üa-zà-ü\'\-\s]+?)(?:\s+pour|\s+leur|\s+demander|$)",
+                    # "Plomberie Azur Côte d'Azur" directly in request (capitalized company name)
+                    r"((?:Plomberie|Électricité|Menuiserie|Chauffage|Ascenseurs|Jardins?|Ravalement)\s+[A-ZÀ-Üa-zà-ü][A-ZÀ-Üa-zà-ü\'\-\s]+?)(?:\s+pour|\s+leur|\s+demander|,|$)",
+                    # Known company names (explicit list)
+                    r"(Plomberie Azur Côte d'Azur|Plomberie Azur|Électricité Méditerranée|Ravalement Pro|Ascenseurs Riviera|Jardins Azuréens)",
                 ]
+                for pattern in user_request_patterns:
+                    match = re.search(pattern, user_request, re.IGNORECASE)
+                    if match:
+                        prestataire_name = match.group(1).strip()
+                        logger.info("prestataire_name_from_request", name=prestataire_name, pattern=pattern[:50])
+                        break
 
-            # PRIORITY 4: Otherwise return empty (will be filled by user or workflow)
-            return []
+                # Source 1: Check in resolved_references from context
+                if not prestataire_name and context and "resolved_references" in context:
+                    for ref, data in context["resolved_references"].items():
+                        if data.get("type") == "professionnel":
+                            prestataire_name = data.get("name")
+                            prestataire_email = data.get("email")
+                            break
+
+                # Source 2: Check in context extracted_data (from RAG or previous queries)
+                if not prestataire_name and context and context.get("extracted_data"):
+                    extracted = context["extracted_data"]
+                    prestataire_name = extracted.get("prestataire") or extracted.get("vendor")
+                    if not prestataire_name:
+                        # Check for company patterns in extracted data
+                        for key, value in extracted.items():
+                            if isinstance(value, str) and any(kw in key.lower() for kw in ["prestataire", "entreprise", "fournisseur"]):
+                                prestataire_name = value
+                                break
+
+                # Source 3: Extract from conversation history with improved patterns
+                if not prestataire_name and conversation_history:
+                    # Improved patterns for company names
+                    company_patterns = [
+                        # Pattern for "Prestataire : Company Name"
+                        r"[Pp]restataire\s*[:=]\s*([A-ZÀ-Üa-zà-ü][^\n\[\]]{3,50}?)(?:\[|\.|$|\n)",
+                        # Pattern for company names with business suffixes
+                        r"((?:[A-ZÀ-Ü][a-zà-ü\-]+\s*)+(?:SARL|SAS|EURL|Pro|Express|Services?))",
+                        # Pattern for "Plomberie/Électricité + Name"
+                        r"((?:Plomberie|Électricité|Menuiserie|Chauffage|Climatisation)\s+[A-ZÀ-Üa-zà-ü\'\-\s]+?)(?:\[|\.|$|\n)",
+                        # Pattern for generic capitalized company names (with location)
+                        r"((?:[A-ZÀ-Ü][a-zà-ü]+\s+){1,4}(?:Côte d'Azur|Nice|Paris|Lyon|Marseille)?)",
+                    ]
+
+                    for msg in reversed(conversation_history[-10:]):
+                        content = msg.get("content", "")
+                        for pattern in company_patterns:
+                            match = re.search(pattern, content)
+                            if match:
+                                candidate = match.group(1).strip()
+                                # Validate: min length and not generic words
+                                generic_words = ["le", "la", "les", "un", "une", "de", "du", "des", "et", "ou"]
+                                if len(candidate) > 5 and candidate.lower() not in generic_words:
+                                    prestataire_name = candidate
+                                    logger.info("prestataire_name_extracted", name=prestataire_name, pattern=pattern[:30])
+                                    break
+                        if prestataire_name:
+                            break
+
+                # Search in professionnels table if we have a name
+                if prestataire_name:
+                    # Clean the name for search
+                    search_name = prestataire_name.strip().rstrip('.')
+
+                    result = await db.execute(
+                        select(Professionnel).where(
+                            Professionnel.name.ilike(f"%{search_name}%") |
+                            Professionnel.company_name.ilike(f"%{search_name}%")
+                        )
+                    )
+                    pro = result.scalar_one_or_none()
+                    if pro and pro.email:
+                        logger.info("prestataire_found", name=pro.name, email=pro.email)
+                        return [{
+                            "name": pro.name or pro.company_name,
+                            "email": pro.email,
+                            "id": pro.id,
+                            "type": "professionnel"
+                        }]
+
+                    # Try partial search with first word only
+                    first_word = search_name.split()[0] if search_name else ""
+                    if first_word and len(first_word) > 3:
+                        result = await db.execute(
+                            select(Professionnel).where(
+                                Professionnel.name.ilike(f"%{first_word}%") |
+                                Professionnel.company_name.ilike(f"%{first_word}%")
+                            )
+                        )
+                        pros = result.scalars().all()
+                        if len(pros) == 1 and pros[0].email:
+                            logger.info("prestataire_found_partial", name=pros[0].name, email=pros[0].email, search=first_word)
+                            return [{
+                                "name": pros[0].name or pros[0].company_name,
+                                "email": pros[0].email,
+                                "id": pros[0].id,
+                                "type": "professionnel"
+                            }]
+
+                # If we have an email directly from context
+                if prestataire_email:
+                    logger.info("prestataire_email_from_context", email=prestataire_email)
+                    return [{
+                        "name": prestataire_name or "Prestataire",
+                        "email": prestataire_email,
+                        "id": None,
+                        "type": "professionnel"
+                    }]
+
+                # If no prestataire found, return empty (don't fallback to all copros!)
+                logger.warning("prestataire_not_found", searched_name=prestataire_name)
+                return []
+
+            # ================================================================
+            # PRIORITY 4: FILTER COPROPRIETAIRES by copropriété
+            # ================================================================
+            # Find copropriété from request or conversation
+            copropriete_id = None
+            copropriete_name = None
+
+            # Check in extracted_data
+            if context and context.get("extracted_data"):
+                copropriete_name = context["extracted_data"].get("building") or \
+                                   context["extracted_data"].get("copropriete")
+
+            # CRITICAL: Check in current user request FIRST
+            if not copropriete_name:
+                copro_patterns = [
+                    # Try explicit known names first (most reliable)
+                    r"(Arc-en-Ciel|Jardins de Provence|Parc des Étoiles|Les Mimosas|Arc en Ciel)",
+                    # Then try generic pattern with boundary - stop at "pour", "avec", "de la", etc.
+                    r"(?:résidence|copropriété|immeuble)\s+(?:de\s+la\s+|de\s+)?([A-ZÀ-Üa-zà-ü][A-ZÀ-Üa-zà-ü\-\']+(?:\s+[A-ZÀ-Üa-zà-ü\-\']+)?)\s*(?:pour|avec|de\s+la|,|$)"
+                ]
+                for pattern in copro_patterns:
+                    match = re.search(pattern, user_request, re.IGNORECASE)
+                    if match:
+                        copropriete_name = match.group(1).strip()
+                        logger.info("copropriete_found_in_request", name=copropriete_name)
+                        break
+
+            # Check in conversation for copropriété mentions (fallback)
+            if not copropriete_name and conversation_history:
+                for msg in reversed(conversation_history[-10:]):
+                    content = msg.get("content", "")
+                    for pattern in copro_patterns:
+                        match = re.search(pattern, content, re.IGNORECASE)
+                        if match:
+                            copropriete_name = match.group(1).strip()
+                            logger.info("copropriete_found_in_history", name=copropriete_name)
+                            break
+                    if copropriete_name:
+                        break
+
+            # If we found a copropriété name, get its ID
+            if copropriete_name:
+                result = await db.execute(
+                    select(Copropriete).where(Copropriete.nom.ilike(f"%{copropriete_name}%"))
+                )
+                copro = result.scalar_one_or_none()
+                if copro:
+                    copropriete_id = copro.id
+                    logger.info("copropriete_identified", name=copro.nom, id=copro.id)
+
+            # Get copropriétaires (filtered by copropriété if found)
+            if copropriete_id:
+                result = await db.execute(
+                    select(Coproprietaire).where(Coproprietaire.copropriete_id == copropriete_id)
+                )
+            else:
+                # Only if explicitly "tous les copropriétaires" mentioned
+                if any(word in user_request_lower for word in ["tous les copropriétaires", "all"]):
+                    result = await db.execute(select(Coproprietaire))
+                else:
+                    logger.info("no_specific_recipients_found")
+                    return []
+
+            coproprietaires = result.scalars().all()
+
+            recipients = [
+                {
+                    "name": f"{c.prenom} {c.nom}",
+                    "email": c.email,
+                    "id": c.id,
+                    "type": "coproprietaire"
+                }
+                for c in coproprietaires
+                if c.email  # Only include those with email
+            ]
+
+            logger.info("recipients_found",
+                       count=len(recipients),
+                       copropriete_filter=copropriete_name or "none")
+
+            return recipients
 
         except Exception as e:
             logger.error("recipients_fetch_failed", error=str(e), exc_info=True)
@@ -803,7 +1017,8 @@ JSON:
             template,
             template_vars,
             user_request,
-            context
+            context,
+            conversation_history
         )
 
         logger.info("email_generated_v3",
@@ -846,13 +1061,24 @@ JSON:
             }
             vars["severity_label"] = severity_map.get(vars.get("severity", "medium"), "Modérée")
 
-        # Extract from email context
+        # Extract from email context - map extracted_data keys to template vars
         extracted_data = context.get("extracted_data", {})
         if extracted_data:
+            # Direct mapping for matching keys
             vars.update({
                 k: v for k, v in extracted_data.items()
-                if k not in vars or not vars[k]  # Don't override workflow data
+                if v and (k not in vars or not vars[k])  # Don't override workflow data
             })
+
+            # Additional mappings for template compatibility
+            if extracted_data.get("amount") and not vars.get("amount"):
+                vars["amount"] = extracted_data["amount"]
+            if extracted_data.get("date") and not vars.get("intervention_date"):
+                vars["intervention_date"] = extracted_data["date"]
+            if extracted_data.get("professional_name") and not vars.get("prestataire_name"):
+                vars["prestataire_name"] = extracted_data["professional_name"]
+            if extracted_data.get("article_loi") and not vars.get("article_loi"):
+                vars["article_loi"] = extracted_data["article_loi"]
 
         # Type-specific defaults
         if email_type == EmailType.URGENT_INTERVENTION:
@@ -888,7 +1114,8 @@ JSON:
         template: Dict[str, Any],
         template_vars: Dict[str, Any],
         user_request: str,
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        conversation_history: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
         Use LLM to intelligently fill template variables
@@ -896,6 +1123,21 @@ JSON:
         For missing variables, LLM infers reasonable values from context
         """
         import re
+
+        # CRITICAL: Extract ALL data from user_request FIRST
+        # This is where dates, amounts, names are typically mentioned
+        extracted_from_request = self._extract_email_data_from_text(user_request)
+
+        # Merge with template_vars (user_request data takes priority)
+        for key, value in extracted_from_request.items():
+            if value and (key not in template_vars or not template_vars.get(key)):
+                template_vars[key] = value
+
+        logger.info("template_vars_after_extraction",
+                   vars_count=len(template_vars),
+                   has_date=bool(template_vars.get("intervention_date") or template_vars.get("date")),
+                   has_amount=bool(template_vars.get("amount")),
+                   has_building=bool(template_vars.get("building_name")))
 
         subject_template = template["subject_template"]
         body_template = template["body_template"]
@@ -912,68 +1154,394 @@ JSON:
         # Check if there are still unreplaced variables
         unreplaced_vars = re.findall(r'\{\{([^}]+)\}\}', subject + body)
 
-        if unreplaced_vars and len(unreplaced_vars) > 2:
-            # Too many missing variables - use LLM to generate full content
-            logger.info("template_has_many_missing_vars", count=len(unreplaced_vars), vars=unreplaced_vars)
+        # Build conversation context for richer emails
+        conversation_context_str = ""
+        if conversation_history and len(conversation_history) > 0:
+            recent = conversation_history[-5:] if len(conversation_history) > 5 else conversation_history
+            conversation_context_str = "\nCONTEXTE CONVERSATION RÉCENTE:\n"
+            for msg in recent:
+                role = "Utilisateur" if msg.get("role") == "user" else "Assistant"
+                content = msg.get("content", "")[:300]
+                conversation_context_str += f"- {role}: {content}\n"
 
-            prompt = f"""
-Tu es un assistant pour un syndic de copropriété. Génère un email professionnel basé sur cette demande.
+        # Build key points from context
+        key_points_str = ""
+        if context.get("key_points"):
+            key_points_str = "\nPOINTS CLÉS À INCLURE:\n" + "\n".join(f"- {p}" for p in context["key_points"])
 
-DEMANDE UTILISATEUR:
-{user_request}
+        # ALWAYS generate with LLM for professional quality (even if no unreplaced vars)
+        logger.info("generating_email_with_llm",
+                   unreplaced_count=len(unreplaced_vars) if unreplaced_vars else 0,
+                   user_request_preview=user_request[:100])
 
-CONTEXTE:
-{context.get('context_summary', 'Aucun contexte supplémentaire')}
+        # Build comprehensive data section from template_vars
+        data_section = "\nDONNÉES EXTRAITES DE LA DEMANDE:\n"
+        important_keys = ["date", "intervention_date", "amount", "montant", "building_name",
+                         "prestataire_name", "professional_name", "service_type", "incident_type"]
+        for key in important_keys:
+            if template_vars.get(key):
+                data_section += f"- {key}: {template_vars[key]}\n"
 
-OBJECTIF:
-{context.get('purpose', user_request)}
+        # Add all other non-empty vars
+        for k, v in template_vars.items():
+            if v and k not in important_keys:
+                data_section += f"- {k}: {v}\n"
 
-TON: {template.get("tone", "professional")}
-URGENCE: {context.get("urgency", "medium")}
+        prompt = f"""Tu es un assistant expert pour un syndic de copropriété. Génère un email COMPLET et PROFESSIONNEL.
 
-INSTRUCTIONS:
-1. Génère un objet d'email clair et précis
-2. Génère un corps d'email professionnel et complet
-3. Utilise TOUTES les informations disponibles dans la demande utilisateur
-4. Si la demande mentionne des références (facture, bâtiment, etc.), INCLUS-LES dans l'email
-5. Sois concret et précis
+=== DEMANDE UTILISATEUR (CRITIQUE - UTILISE CES INFORMATIONS) ===
+"{user_request}"
+{data_section}
+{conversation_context_str}
+CONTEXTE EXTRAIT:
+- Résumé: {context.get('context_summary', 'Information à communiquer')}
+- Objectif: {context.get('purpose', user_request)}
+- Ton requis: {template.get("tone", "professional")}
+- Urgence: {context.get("urgency", "medium")}
+{key_points_str}
 
-Réponds en JSON:
-{{
-    "subject": "Objet de l'email",
-    "body": "Corps de l'email complet avec salutations et signature"
-}}
+=== RÈGLES STRICTES ET ABSOLUES ===
+1. L'objet DOIT être concret: mentionner la date, le montant, ou l'objet spécifique
+2. Le corps NE DOIT PAS répéter l'objet - commence directement par "Madame, Monsieur,"
+3. Si une info est disponible (date, montant, nom) → UTILISE-LA dans le texte
+4. Si une info N'EST PAS disponible → NE LA MENTIONNE PAS, ne mets JAMAIS de placeholder
+5. TEXTE BRUT UNIQUEMENT: pas de markdown, pas de **, pas de formatage HTML
+6. Structure: Salutation → Corps informatif → Signature "Le Syndic"
 
-JSON:
-"""
+=== INTERDICTIONS ABSOLUES (violations = email rejeté) ===
+❌ JAMAIS de "[À compléter]", "[date]", "[nom]", ou toute balise entre crochets
+❌ JAMAIS de "si disponible", "le cas échéant", "[préciser]"
+❌ JAMAIS répéter l'objet dans le corps du message
+❌ JAMAIS de mise en forme markdown (**, ##, -, etc.)
+❌ JAMAIS de texte générique comme "dans les prochains jours" si la date est connue
 
-            try:
-                response = await self.llm_service.generate_response(
-                    prompt=prompt,
-                    max_tokens=800,
-                    temperature=0.4
-                )
+=== FORMAT DE RÉPONSE ===
+Réponds EXACTEMENT dans ce format (2 lignes séparées par SUBJECT_BODY_SEPARATOR):
 
-                import json
-                generated = json.loads(response.strip())
+SUBJECT: [objet précis - sans répétition dans le body]
+SUBJECT_BODY_SEPARATOR
+BODY: [corps email en texte brut, commence par "Madame, Monsieur,"]"""
 
-                logger.info("email_generated_by_llm", has_subject=bool(generated.get("subject")))
+        try:
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                max_tokens=1000,
+                temperature=0.3
+            )
+
+            import json
+
+            response_text = response.strip()
+            logger.info("llm_raw_response_preview", response=response_text[:300])
+
+            generated = None
+
+            # Method 1: Try new format with SUBJECT_BODY_SEPARATOR
+            if "SUBJECT_BODY_SEPARATOR" in response_text:
+                parts = response_text.split("SUBJECT_BODY_SEPARATOR")
+                if len(parts) >= 2:
+                    subject_part = parts[0].strip()
+                    body_part = parts[1].strip()
+
+                    # Extract subject
+                    if subject_part.startswith("SUBJECT:"):
+                        subject_text = subject_part.replace("SUBJECT:", "").strip()
+                    else:
+                        subject_text = subject_part
+
+                    # Extract body
+                    if body_part.startswith("BODY:"):
+                        body_text = body_part.replace("BODY:", "").strip()
+                    else:
+                        body_text = body_part
+
+                    if subject_text and body_text:
+                        generated = {"subject": subject_text, "body": body_text}
+                        logger.info("email_parsed_separator_format")
+
+            # Method 2: Try SUJET/CORPS format (French)
+            if not generated and ("SUJET:" in response_text or "OBJET:" in response_text):
+                lines = response_text.split('\n')
+                subject_text = ""
+                body_lines = []
+                in_body = False
+
+                for line in lines:
+                    line_upper = line.upper().strip()
+                    if line_upper.startswith("SUJET:") or line_upper.startswith("OBJET:"):
+                        subject_text = line.split(":", 1)[1].strip() if ":" in line else ""
+                    elif line_upper.startswith("CORPS:") or line_upper.startswith("BODY:"):
+                        in_body = True
+                    elif in_body:
+                        body_lines.append(line)
+
+                if subject_text and body_lines:
+                    generated = {"subject": subject_text, "body": "\n".join(body_lines).strip()}
+                    logger.info("email_parsed_french_format")
+
+            # Method 3: Try JSON format
+            if not generated:
+                try:
+                    generated = json.loads(response_text)
+                except json.JSONDecodeError:
+                    # Try to extract JSON block from markdown
+                    json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', response_text, re.DOTALL)
+                    if json_match:
+                        try:
+                            generated = json.loads(json_match.group(1).strip())
+                        except json.JSONDecodeError:
+                            pass
+
+                    # Try to find JSON object with subject and body
+                    if not generated:
+                        # More permissive regex for multiline JSON
+                        json_match = re.search(r'\{\s*"subject"\s*:\s*"([^"]+)"\s*,\s*"body"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}', response_text, re.DOTALL)
+                        if json_match:
+                            generated = {
+                                "subject": json_match.group(1),
+                                "body": json_match.group(2).replace('\\n', '\n').replace('\\"', '"')
+                            }
+
+            # Method 4: Fallback - extract any structured content
+            if not generated:
+                # Look for "Subject:" or "Objet:" anywhere
+                subject_match = re.search(r'(?:Subject|Objet|SUBJECT|OBJET)\s*:\s*(.+?)(?:\n|$)', response_text, re.IGNORECASE)
+                if subject_match:
+                    subject_text = subject_match.group(1).strip()
+                    # Body is everything after subject line
+                    body_start = subject_match.end()
+                    body_text = response_text[body_start:].strip()
+                    # Remove "Body:" or "Corps:" prefix if present
+                    body_text = re.sub(r'^(?:Body|Corps|BODY|CORPS)\s*:\s*', '', body_text, flags=re.IGNORECASE)
+
+                    if subject_text and body_text:
+                        generated = {"subject": subject_text, "body": body_text}
+                        logger.info("email_parsed_fallback_format")
+
+            if generated and generated.get("subject") and generated.get("body"):
+                # POST-PROCESSING: Clean up any remaining issues
+                subject_clean = self._sanitize_email_content(generated["subject"])
+                body_clean = self._sanitize_email_content(generated["body"])
+
+                # Remove subject repetition at start of body
+                body_clean = self._remove_subject_from_body(subject_clean, body_clean)
+
+                logger.info("email_generated_by_llm",
+                           subject_preview=subject_clean[:50],
+                           body_length=len(body_clean))
 
                 return {
-                    "subject": generated.get("subject", subject),
-                    "body": generated.get("body", body),
+                    "subject": subject_clean,
+                    "body": body_clean,
                     "tone": template["tone"],
                     "urgency": context.get("urgency", template.get("priority", "medium"))
                 }
+            else:
+                logger.warning("llm_no_valid_content", response_preview=response_text[:200])
 
-            except Exception as e:
-                logger.error("llm_generation_failed", error=str(e))
-                # Fallback to template with placeholders
+        except Exception as e:
+            logger.error("llm_generation_failed", error=str(e), exc_info=True)
 
-        # Remove unreplaced variables
-        subject = re.sub(r'\{\{[^}]+\}\}', '[À compléter]', subject)
-        body = re.sub(r'\{\{#[^}]+\}\}.*?\{\{/[^}]+\}\}', '', body, flags=re.DOTALL)  # Remove conditional blocks
-        body = re.sub(r'\{\{[^}]+\}\}', '[À compléter]', body)
+        # Last resort: Generate simple email from user request directly
+        logger.warning("using_fallback_email_generation")
+        return await self._generate_fallback_email(user_request, template_vars, template, context)
+
+    def _extract_email_data_from_text(self, text: str) -> Dict[str, Any]:
+        """Extract dates, amounts, names from user request text"""
+        import re
+        extracted = {}
+
+        # Extract date patterns (French)
+        date_patterns = [
+            r'(\d{1,2}\s+(?:janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)\s+\d{4})',
+            r'(\d{1,2}/\d{1,2}/\d{4})',
+            r'(\d{1,2}-\d{1,2}-\d{4})',
+        ]
+        for pattern in date_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                extracted["intervention_date"] = match.group(1)
+                extracted["date"] = match.group(1)
+                break
+
+        # Extract amount (euros)
+        amount_patterns = [
+            r'(\d+[\s,.]?\d*\s*€)',
+            r'(\d+[\s,.]?\d*\s*euros?)',
+            r'facture\s+(?:de\s+)?(\d+[\s,.]?\d*)',
+        ]
+        for pattern in amount_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                extracted["amount"] = match.group(1)
+                break
+
+        # Extract residence/building name
+        building_patterns = [
+            r'résidence\s+([A-ZÀ-Ü][a-zà-ü\-]+(?:\s+[A-ZÀ-Ü]?[a-zà-ü\-]+)*)',
+            r'copropriété\s+([A-ZÀ-Ü][a-zà-ü\-]+(?:\s+[A-ZÀ-Ü]?[a-zà-ü\-]+)*)',
+            r'(Arc-en-Ciel|Jardins de Provence|Les Mimosas)',
+        ]
+        for pattern in building_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                extracted["building_name"] = match.group(1)
+                break
+
+        # Extract prestataire name
+        prestataire_patterns = [
+            r'prestataire\s+([A-ZÀ-Ü][^\s,\.]+(?:\s+[A-ZÀ-Ü]?[^\s,\.]+)*)',
+            r'(Plomberie\s+[A-ZÀ-Ü][^\s,\.]+(?:\s+[^\s,\.]+)*)',
+            r'(Électricité\s+[A-ZÀ-Ü][^\s,\.]+(?:\s+[^\s,\.]+)*)',
+        ]
+        for pattern in prestataire_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                extracted["prestataire_name"] = match.group(1).strip()
+                extracted["professional_name"] = match.group(1).strip()
+                break
+
+        # Detect service type from keywords
+        if "maintenance" in text.lower():
+            extracted["service_type"] = "Maintenance préventive"
+        elif "devis" in text.lower():
+            extracted["service_type"] = "Demande de devis"
+        elif "rapport" in text.lower():
+            extracted["service_type"] = "Rapport d'intervention"
+
+        return extracted
+
+    def _sanitize_email_content(self, text: str) -> str:
+        """
+        Remove all placeholders, markdown formatting, and problematic content from email text.
+
+        This is a CRITICAL safety function to prevent embarrassing placeholders from being sent.
+        """
+        import re
+
+        if not text:
+            return text
+
+        # 1. Remove markdown bold/italic
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # **bold** → bold
+        text = re.sub(r'\*([^*]+)\*', r'\1', text)       # *italic* → italic
+        text = re.sub(r'__([^_]+)__', r'\1', text)       # __bold__ → bold
+        text = re.sub(r'_([^_]+)_', r'\1', text)         # _italic_ → italic
+
+        # 2. Remove markdown headers
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # ## Header → Header
+
+        # 3. Remove markdown lists (but keep content)
+        text = re.sub(r'^[\-\*]\s+', '', text, flags=re.MULTILINE)  # - item → item
+
+        # 4. CRITICAL: Remove ALL placeholder patterns
+        placeholder_patterns = [
+            r'\[À compléter[^\]]*\]',
+            r'\[à compléter[^\]]*\]',
+            r'\[À préciser[^\]]*\]',
+            r'\[à préciser[^\]]*\]',
+            r'\[date[^\]]*\]',
+            r'\[Date[^\]]*\]',
+            r'\[DATE[^\]]*\]',
+            r'\[nom[^\]]*\]',
+            r'\[Nom[^\]]*\]',
+            r'\[NOM[^\]]*\]',
+            r'\[montant[^\]]*\]',
+            r'\[Montant[^\]]*\]',
+            r'\[adresse[^\]]*\]',
+            r'\[préciser[^\]]*\]',
+            r'\[Préciser[^\]]*\]',
+            r'\[[^\]]*si disponible[^\]]*\]',
+            r'\[[^\]]*le cas échéant[^\]]*\]',
+            r'\{\{[^}]+\}\}',  # Mustache variables
+        ]
+        for pattern in placeholder_patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+        # 5. Remove problematic phrases (but not inside brackets - already removed)
+        problematic_phrases = [
+            r'\s*\(si disponible[^)]*\)',
+            r'\s*\(le cas échéant[^)]*\)',
+            r'\s*\(à préciser[^)]*\)',
+        ]
+        for pattern in problematic_phrases:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+        # 6. Clean up multiple spaces and empty lines
+        text = re.sub(r'  +', ' ', text)  # Multiple spaces → single space
+        text = re.sub(r'\n{3,}', '\n\n', text)  # Multiple newlines → double newline
+        text = text.strip()
+
+        return text
+
+    def _remove_subject_from_body(self, subject: str, body: str) -> str:
+        """
+        Remove the subject line if it appears at the start of the body.
+
+        Common LLM issue: repeating "Objet: xxx" at start of email body.
+        """
+        import re
+
+        if not body or not subject:
+            return body
+
+        # Pattern 1: "Objet : [subject text]" at start
+        body = re.sub(
+            r'^Objet\s*:\s*' + re.escape(subject) + r'\s*\n+',
+            '',
+            body,
+            flags=re.IGNORECASE
+        )
+
+        # Pattern 2: Just the subject text at start (without "Objet:")
+        # Only if it's the exact subject at the very beginning
+        body_lines = body.split('\n')
+        if body_lines and body_lines[0].strip().lower() == subject.lower().strip():
+            body = '\n'.join(body_lines[1:]).strip()
+
+        # Pattern 3: "Objet : xxx" anywhere at start (generic removal)
+        body = re.sub(r'^Objet\s*:\s*[^\n]+\n+', '', body, flags=re.IGNORECASE)
+
+        return body.strip()
+
+    async def _generate_fallback_email(
+        self,
+        user_request: str,
+        template_vars: Dict[str, Any],
+        template: Dict[str, Any],
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate a simple email when LLM parsing fails"""
+        # Build subject from available data
+        subject_parts = []
+        if template_vars.get("service_type"):
+            subject_parts.append(template_vars["service_type"])
+        elif "devis" in user_request.lower():
+            subject_parts.append("Demande de devis")
+        elif "rapport" in user_request.lower():
+            subject_parts.append("Demande de rapport")
+        else:
+            subject_parts.append("Demande")
+
+        if template_vars.get("building_name"):
+            subject_parts.append(f"- {template_vars['building_name']}")
+        if template_vars.get("intervention_date"):
+            subject_parts.append(f"- {template_vars['intervention_date']}")
+
+        subject = " ".join(subject_parts)
+
+        # Build body from user request
+        body = "Madame, Monsieur,\n\n"
+        body += f"Suite à notre échange, je me permets de vous contacter concernant:\n\n"
+        body += f"{user_request}\n\n"
+
+        if template_vars.get("amount"):
+            body += f"Montant concerné: {template_vars['amount']}\n"
+        if template_vars.get("intervention_date"):
+            body += f"Date d'intervention: {template_vars['intervention_date']}\n"
+
+        body += "\nMerci de nous faire parvenir votre retour dans les meilleurs délais.\n\n"
+        body += "Cordialement,\nLe Syndic"
 
         return {
             "subject": subject,
