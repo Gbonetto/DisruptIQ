@@ -161,15 +161,15 @@ class IntentClassifierV5:
         """
         Quick rule-based classification (70% accuracy target)
 
-        NEW PRIORITY ORDER (V6 - World-Class):
-        0. INFO REQUESTS (intercept "envoie-moi", "donne-moi" etc.) - FIRST!
-        1. SQL queries (aggregations, lists, data retrieval)
+        PRIORITY ORDER V7 - FIXED:
+        0. INFO REQUESTS (intercept "envoie-moi", "donne-moi" etc.)
+        0.5 RAG DOCUMENT SEARCH - AVANT SQL! (facture, montant, devis, contrat, prestataire)
+        1. SQL queries (aggregations, lists - ONLY for DB entities)
         2. Email actions (only with explicit recipients)
         3. Legal keywords
         4. Web search (explicit internet requests)
-        5. Document search (when documents exist)
-        6. Workflow triggers (incidents, emergencies)
-        7. Quotes (devis)
+        5. Workflow triggers (incidents, emergencies)
+        6. Quotes (devis requests)
         """
 
         # ================================================================
@@ -183,7 +183,91 @@ class IntentClassifierV5:
             # Continue to SQL/RAG classification, skip email detection
 
         # ================================================================
-        # 1. SQL QUERIES - Now FIRST priority (was incorrectly second)
+        # 0.5 RAG DOCUMENT SEARCH - AVANT SQL! (CRITICAL FIX)
+        # "montant facture", "quel prestataire", "dans le contrat" → RAG
+        # ================================================================
+        rag_document_keywords = {
+            # Factures et montants
+            "montant de la facture": 0.95,
+            "montant facture": 0.95,
+            "montant du devis": 0.95,
+            "prix dans": 0.90,
+            "coût dans": 0.90,
+            "tarif dans": 0.90,
+            # Questions sur contenu documents
+            "quel prestataire": 0.92,
+            "qui a fait les travaux": 0.92,
+            "qui a réalisé": 0.90,
+            "qui a émis": 0.92,  # NOUVEAU
+            "qui a envoyé": 0.90,  # NOUVEAU
+            "émis la facture": 0.95,  # NOUVEAU
+            "émetteur de la facture": 0.95,  # NOUVEAU
+            "quel fournisseur": 0.90,
+            "quel artisan": 0.90,
+            "nom du prestataire": 0.92,
+            "nom de l'entreprise": 0.90,
+            # Contenu spécifique documents
+            "que dit le": 0.90,
+            "que dit la": 0.90,
+            "selon le document": 0.95,
+            "selon la facture": 0.95,
+            "selon le contrat": 0.95,
+            "selon le devis": 0.95,
+            "dans la facture": 0.95,
+            "dans le contrat": 0.95,
+            "dans le devis": 0.95,
+            "dans le pv": 0.95,
+            "dans le procès-verbal": 0.95,
+            # Résumés documents
+            "résume le document": 0.95,
+            "résume la facture": 0.95,
+            "résume le contrat": 0.95,
+            "résumé du pv": 0.95,
+            "analyse le document": 0.92,
+            "analyse la facture": 0.92,
+            # Questions sur documents uploadés
+            "sur la facture": 0.90,  # NOUVEAU
+            "sur le contrat": 0.90,  # NOUVEAU
+            "sur le devis": 0.90,  # NOUVEAU
+        }
+
+        for keyword, confidence in rag_document_keywords.items():
+            if keyword in query_lower:
+                logger.info("rag_document_keyword_matched", keyword=keyword, confidence=confidence)
+                return IntentClassification(
+                    intent=IntentType.SEARCH_DOCUMENTS,
+                    domain=Domain.PROPERTY_MGMT,
+                    confidence=confidence,
+                    suggested_sources=[DataSource.RAG, DataSource.UPLOADED_DOCS],
+                    reasoning=f"RAG document keyword '{keyword}' - searching in uploaded documents",
+                    keywords_matched=[keyword]
+                )
+
+        # Check for document-related words that should trigger RAG (even without explicit "dans")
+        doc_content_words = ["facture", "devis", "contrat", "pv ", "procès-verbal"]
+        question_words = ["quel", "quelle", "quels", "quelles", "combien", "montant", "prix", "coût"]
+
+        has_doc_word = any(dw in query_lower for dw in doc_content_words)
+        has_question = any(qw in query_lower for qw in question_words)
+
+        # "Quel est le montant de la facture" → RAG (not SQL!)
+        if has_doc_word and has_question:
+            # Exception: "combien de factures" = SQL count, not RAG content
+            sql_count_patterns = ["combien de factures", "combien de devis", "combien de contrats",
+                                  "nombre de factures", "nombre de devis", "liste des factures"]
+            if not any(pattern in query_lower for pattern in sql_count_patterns):
+                logger.info("rag_inferred_from_doc_question", query=query_lower[:50])
+                return IntentClassification(
+                    intent=IntentType.SEARCH_DOCUMENTS,
+                    domain=Domain.PROPERTY_MGMT,
+                    confidence=0.88,
+                    suggested_sources=[DataSource.RAG, DataSource.UPLOADED_DOCS],
+                    reasoning="Question about document content (facture/devis/contrat)",
+                    keywords_matched=["document_content_question"]
+                )
+
+        # ================================================================
+        # 1. SQL QUERIES - For DATABASE entities only (not document content)
         # ================================================================
         sql_strong_keywords = {
             "combien": 0.95,

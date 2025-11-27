@@ -187,5 +187,140 @@ class SimpleContextStore:
         return facts
 
 
+    # ================================================================
+    # ENTITY TRACKING - For reference resolution
+    # ================================================================
+
+    def set_entity(
+        self,
+        session_id: str,
+        entity_type: str,
+        entity_data: Dict[str, Any]
+    ):
+        """
+        Store a mentioned entity for reference resolution.
+
+        Entity types: copropriete, coproprietaire, professionnel, document, montant
+
+        Args:
+            session_id: Conversation/session ID
+            entity_type: Type of entity
+            entity_data: {"name": "...", "id": ..., "metadata": {...}}
+        """
+        self._cleanup_expired()
+
+        if session_id not in self._store:
+            self._store[session_id] = {"_timestamp": datetime.now()}
+
+        if "entities" not in self._store[session_id]:
+            self._store[session_id]["entities"] = {}
+
+        if entity_type not in self._store[session_id]["entities"]:
+            self._store[session_id]["entities"][entity_type] = []
+
+        # Add to front of list (most recent first)
+        self._store[session_id]["entities"][entity_type].insert(0, {
+            "data": entity_data,
+            "timestamp": datetime.now()
+        })
+
+        # Keep only last 10 per type
+        self._store[session_id]["entities"][entity_type] = \
+            self._store[session_id]["entities"][entity_type][:10]
+
+        logger.info("context_entity_stored",
+                   session_id=session_id,
+                   entity_type=entity_type,
+                   entity_name=entity_data.get("name"))
+
+    def get_last_entity(
+        self,
+        session_id: str,
+        entity_types: List[str]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recently mentioned entity of given types.
+
+        Args:
+            session_id: Conversation/session ID
+            entity_types: List of types to search (e.g., ["copropriete", "coproprietaire"])
+
+        Returns:
+            Most recent entity data or None
+        """
+        self._cleanup_expired()
+
+        if session_id not in self._store:
+            return None
+
+        entities = self._store[session_id].get("entities", {})
+
+        # Find most recent entity across all requested types
+        best_entity = None
+        best_timestamp = None
+
+        for entity_type in entity_types:
+            type_entities = entities.get(entity_type, [])
+            if type_entities:
+                latest = type_entities[0]  # Already sorted by recency
+                ts = latest.get("timestamp")
+                if best_timestamp is None or (ts and ts > best_timestamp):
+                    best_entity = latest["data"]
+                    best_timestamp = ts
+
+        if best_entity:
+            logger.info("context_entity_retrieved",
+                       session_id=session_id,
+                       entity_types=entity_types,
+                       found_name=best_entity.get("name"))
+
+        return best_entity
+
+    def get_context(self, session_id: str) -> Dict[str, Any]:
+        """
+        Get full context including entities for reference resolution.
+
+        Returns dict with:
+        - coproprietes: List of mentioned copropriétés
+        - professionnels: List of mentioned professionnels
+        - coproprietaires: List of mentioned copropriétaires
+        - documents: List of mentioned documents
+        - montants: List of mentioned amounts
+        - last_mentioned: Most recently mentioned entity (any type)
+        """
+        self._cleanup_expired()
+
+        if session_id not in self._store:
+            return {}
+
+        store_data = self._store[session_id]
+        entities = store_data.get("entities", {})
+
+        result = {
+            "coproprietes": [e["data"] for e in entities.get("copropriete", [])],
+            "professionnels": [e["data"] for e in entities.get("professionnel", [])],
+            "coproprietaires": [e["data"] for e in entities.get("coproprietaire", [])],
+            "documents": [e["data"] for e in entities.get("document", [])],
+            "montants": [e["data"] for e in entities.get("montant", [])],
+        }
+
+        # Find the most recently mentioned entity overall
+        all_entities = []
+        for entity_type, entity_list in entities.items():
+            for e in entity_list:
+                all_entities.append({
+                    "type": entity_type,
+                    **e["data"],
+                    "timestamp": e.get("timestamp")
+                })
+
+        if all_entities:
+            # Sort by timestamp descending
+            all_entities.sort(key=lambda x: x.get("timestamp") or datetime.min, reverse=True)
+            result["last_mentioned"] = all_entities[0]
+
+        return result
+
+
 # Global singleton
 context_store = SimpleContextStore()

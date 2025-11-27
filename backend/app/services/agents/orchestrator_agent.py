@@ -14,6 +14,14 @@ from app.services.agents.state_registry import StateManager
 from app.utils.sql_validation import validate_sql_query
 from app.services.context_store import context_store
 
+# Import Unified Context Manager (Phase 3 - World-Class SMA)
+from app.services.unified_context import (
+    UnifiedContextManager,
+    get_unified_context_manager,
+    UnifiedContext,
+    ContextPriority
+)
+
 # Import centralized intent system
 from app.models.intent import (
     IntentType,
@@ -149,6 +157,93 @@ class OrchestratorAgent:
         """
         try:
             # ================================================================
+            # PRIORITY CHECK: EMAIL CONFIRMATION DETECTION
+            # Must check BEFORE template filter to prevent "ok" bypass
+            # ================================================================
+            if state_manager and state_manager.state.email_draft:
+                from .conversation_state import ActionType
+
+                # User has a pending email draft awaiting confirmation
+                if state_manager.state.pending_action == ActionType.AWAITING_EMAIL_CONFIRMATION:
+                    user_input_lower = user_input.lower().strip()
+
+                    # Confirmation patterns (permissive - context is clear)
+                    confirmation_patterns = [
+                        "envoyer", "envoie", "envoi",
+                        "ok", "oui", "d'accord", "valider", "confirmer",
+                        "vas-y", "vas y", "go", "yes", "✅",
+                        "parfait", "correct", "c'est bon"
+                    ]
+
+                    # Cancellation patterns
+                    cancellation_patterns = [
+                        "annuler", "annule", "non", "stop", "cancel", "❌"
+                    ]
+
+                    # Modification patterns
+                    modification_patterns = [
+                        "modifier", "modifie", "changer", "change", "corriger", "✏️"
+                    ]
+
+                    # Check confirmation
+                    if any(pattern in user_input_lower for pattern in confirmation_patterns):
+                        logger.info("email_confirmation_detected", user_input=user_input[:50])
+
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.EXECUTING,
+                                title="Envoi de l'email",
+                                content="Confirmation reçue. Je vais maintenant envoyer l'email via N8N...",
+                                agent="orchestrator",
+                                progress=0.5
+                            )
+
+                        return await self._handle_email_confirmation(
+                            state_manager=state_manager,
+                            db=db,
+                            session_id=session_id,
+                            thought_stream=thought_stream
+                        )
+
+                    # Check cancellation
+                    elif any(pattern in user_input_lower for pattern in cancellation_patterns):
+                        logger.info("email_cancellation_detected", user_input=user_input[:50])
+
+                        # Clear draft and pending action
+                        state_manager.state.email_draft = None
+                        state_manager.state.clear_pending_action()
+
+                        return AgentResponse(
+                            success=True,
+                            message="✅ Brouillon d'email annulé. Que puis-je faire pour vous ?",
+                            data={},
+                            agents_used=["orchestrator"],
+                            sources_used=[],
+                            confidence=1.0,
+                            suggestions=[],
+                            warnings=[]
+                        )
+
+                    # Check modification request
+                    elif any(pattern in user_input_lower for pattern in modification_patterns):
+                        logger.info("email_modification_detected", user_input=user_input[:50])
+
+                        return AgentResponse(
+                            success=True,
+                            message="✏️ Pour modifier l'email, veuillez préciser :\n- \"Modifier l'objet\" pour changer le sujet\n- \"Modifier le message\" pour changer le contenu\n- Ou reformulez votre demande complète",
+                            data={"email_draft": state_manager.state.email_draft},
+                            agents_used=["orchestrator"],
+                            sources_used=[],
+                            confidence=1.0,
+                            suggestions=[
+                                "Modifier l'objet",
+                                "Modifier le message",
+                                "Annuler"
+                            ],
+                            warnings=[]
+                        )
+
+            # ================================================================
             # NIVEAU 0: PRE-FILTRAGE (40% bypass) - Sprint 1 Optimization
             # ================================================================
             # Check template patterns first (greetings, thanks, etc.)
@@ -212,6 +307,44 @@ class OrchestratorAgent:
             # ================================================================
             # CONTINUE NORMAL FLOW (with or without bypass)
             # ================================================================
+
+            # ================================================================
+            # UNIFIED CONTEXT SYNCHRONIZATION (Phase 3 - World-Class SMA)
+            # Single Source of Truth for all context sources
+            # ================================================================
+            unified_ctx = None
+            if session_id:
+                unified_ctx = get_unified_context_manager(session_id)
+
+                # Sync from StateManager (if available)
+                if state_manager:
+                    unified_ctx.sync_from_state_manager(state_manager)
+
+                # Sync from ContextStore
+                unified_ctx.sync_from_context_store(context_store, session_id)
+
+                # Sync from EntityGraph (if available)
+                if state_manager:
+                    entity_graph = state_manager.get_entity_graph()
+                    if entity_graph:
+                        unified_ctx.sync_from_entity_graph(entity_graph)
+
+                # Update conversation summary
+                if conversation_history:
+                    unified_ctx.update_conversation_summary(
+                        summary=f"Conversation de {len(conversation_history)} messages",
+                        message_count=len(conversation_history)
+                    )
+
+                # Add unified context to the context dict for agents
+                if context is None:
+                    context = {}
+                context["unified_context"] = unified_ctx.get_llm_context_string()
+                context["unified_context_data"] = unified_ctx.to_dict()
+
+                logger.info("unified_context_synced",
+                           session_id=session_id,
+                           context_summary=unified_ctx.get_llm_context_string()[:100])
 
             # ================================================================
             # FACT EXTRACTION - Extract structured facts from user input
@@ -345,7 +478,61 @@ class OrchestratorAgent:
                                resolved=user_input,
                                filename=doc_filename)
 
-            # 1.5 NOUVEAU: Query Enrichment (résolution d'entités)
+            # 1.5 NOUVEAU: Reference Resolution (pronoms et références)
+            # Résout "elle", "lui", "ce prestataire", etc.
+            try:
+                from app.services.agents.reference_resolver import get_reference_resolver
+
+                reference_resolver = get_reference_resolver()
+
+                # Construire les données du context_store pour la résolution
+                context_store_data = {}
+                if session_id:
+                    # Récupérer les dernières entités mentionnées
+                    stored_context = context_store.get_context(session_id)
+                    if stored_context:
+                        context_store_data = stored_context
+
+                # Résoudre les références
+                resolution_result = await reference_resolver.resolve(
+                    query=user_input,
+                    conversation_history=conversation_history,
+                    context_store_data=context_store_data,
+                    session_id=session_id
+                )
+
+                # Si des références ont été résolues, utiliser la requête résolue
+                if resolution_result.changes_made:
+                    logger.info("references_resolved",
+                               original=user_input[:50],
+                               resolved=resolution_result.resolved_query[:50],
+                               changes=resolution_result.changes_made)
+
+                    user_input = resolution_result.resolved_query
+
+                    # Stocker les entités résolues dans le contexte
+                    if not context:
+                        context = {}
+                    context["resolved_references"] = {
+                        ref: {"name": entity.name, "type": entity.entity_type.value}
+                        for ref, entity in resolution_result.resolved_entities.items()
+                    }
+
+                    if thought_stream:
+                        changes_str = ", ".join(resolution_result.changes_made)
+                        await thought_stream.add_thought(
+                            ThoughtType.PROCESSING,
+                            title="Résolution des références",
+                            content=f"J'ai identifié et résolu les références dans votre demande : {changes_str}",
+                            agent="reference_resolver",
+                            progress=0.12
+                        )
+
+            except Exception as e:
+                logger.warning("reference_resolution_failed", error=str(e))
+                # Continue with original query if resolution fails
+
+            # 1.6 Query Enrichment (résolution d'entités supplémentaire)
             enriched_query_obj = None
             if state_manager:
                 try:
@@ -376,19 +563,6 @@ class OrchestratorAgent:
                         if not context:
                             context = {}
                         context.update(enriched_query_obj.context)
-
-                        if thought_stream:
-                            resolved_names = ", ".join([
-                                f"«{e.canonical_name}»"
-                                for e in enriched_query_obj.resolved_entities.values()
-                            ])
-                            await thought_stream.add_thought(
-                                ThoughtType.PROCESSING,
-                                title="Résolution des références",
-                                content=f"J'ai identifié et résolu {len(enriched_query_obj.resolved_entities)} entité(s) dans votre demande : {resolved_names}. Je vais utiliser ces informations pour générer une requête plus précise.",
-                                agent="orchestrator",
-                                progress=0.12
-                            )
 
                 except Exception as e:
                     logger.warning("query_enrichment_failed", error=str(e))
@@ -479,6 +653,46 @@ class OrchestratorAgent:
                     conversation_history=conversation_history
                 )
 
+            # ================================================================
+            # CLARIFICATION HANDLING - Ask user when confidence is low
+            # ================================================================
+            if classification_result and classification_result.needs_clarification:
+                logger.info("clarification_needed",
+                           intent=intent.value,
+                           confidence=classification_result.confidence,
+                           question=classification_result.clarification_question)
+
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.ANALYZING,
+                        title="Clarification nécessaire",
+                        content=f"Je ne suis pas sûr de bien comprendre votre demande (confiance: {classification_result.confidence:.0%}). Je vais vous demander de préciser.",
+                        agent="intent_classifier",
+                        progress=0.20
+                    )
+
+                # Build clarification response with options for UI
+                options_text = "\n".join([
+                    f"• **{opt['label']}** : {opt['description']}"
+                    for opt in classification_result.clarification_options
+                ])
+
+                return AgentResponse(
+                    success=True,
+                    message=f"{classification_result.clarification_question}\n\n{options_text}",
+                    data={
+                        "needs_clarification": True,
+                        "clarification_options": classification_result.clarification_options,
+                        "original_intent": intent.value,
+                        "confidence": classification_result.confidence
+                    },
+                    agents_used=["intent_classifier"],
+                    sources_used=[],
+                    confidence=classification_result.confidence,
+                    suggestions=[opt['label'] for opt in classification_result.clarification_options],
+                    warnings=[]
+                )
+
             if thought_stream:
                 await thought_stream.add_thought(
                     ThoughtType.CLASSIFYING,
@@ -538,7 +752,7 @@ class OrchestratorAgent:
                         agent="sql_agent",
                         progress=0.4
                     )
-                return await self._handle_query_data(user_input, db, state_manager, thought_stream)
+                return await self._handle_query_data(user_input, db, state_manager, thought_stream, session_id)
 
             elif intent == IntentType.SEARCH_DOCUMENTS:
                 return await self._handle_search_documents(user_input, db, state_manager, conversation_history, thought_stream, context)
@@ -797,10 +1011,34 @@ Réponse courte et directe (2-3 phrases maximum):"""
             logger.info("recipient_lookup_required", user_input=user_input[:50], has_names=has_specific_names)
         return result
 
-    async def _handle_query_data(self, user_input: str, db: AsyncSession, state_manager=None, thought_stream=None) -> AgentResponse:
+    async def _handle_query_data(self, user_input: str, db: AsyncSession, state_manager=None, thought_stream=None, session_id: Optional[str] = None) -> AgentResponse:
         """Handle SQL data queries and store results in context"""
         # Import here to avoid circular imports
         from .sql_agent import SQLAgent
+        import re
+
+        # NOUVEAU: Extract and store copropriete names from user query for reference resolution
+        if session_id:
+            # Pattern to match copropriete names - capture full name including prefix
+            copro_patterns = [
+                # Capture full name with prefix: "Résidence Arc-en-Ciel", "Immeuble Haussmann"
+                r"((?:résidence|copropriété|copropriete|immeuble|le clos|les)\s+(?:de\s+)?[A-ZÀ-Üa-zà-ü][a-zà-ü\-]+(?:[\s\-]+[A-ZÀ-Üa-zà-ü][a-zà-ü\-]+)*)",
+                # Known copropriété names
+                r"(Résidence Arc-en-Ciel|Arc-en-Ciel|Jardins de Provence|Parc des Étoiles|Les Mimosas|Le Clos des Oliviers|Clos des Oliviers|Immeuble Haussmann Saint-Germain|Haussmann Saint-Germain)",
+            ]
+            for pattern in copro_patterns:
+                matches = re.findall(pattern, user_input, re.IGNORECASE)
+                for match in matches:
+                    copro_name = match.strip() if isinstance(match, str) else match[0].strip()
+                    if copro_name and len(copro_name) > 2:
+                        context_store.set_entity(
+                            session_id=session_id,
+                            entity_type="copropriete",
+                            entity_data={"name": copro_name}
+                        )
+                        logger.info("copropriete_extracted_from_query",
+                                   session_id=session_id,
+                                   copro_name=copro_name)
 
         # Check if user is asking to filter by relevant professions based on context
         user_lower = user_input.lower()
@@ -874,6 +1112,17 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 response_data["emails_available"] = emails_found
                 logger.info("emails_extracted_from_query", count=len(emails_found))
 
+            # NOUVEAU: Store SQL results in context_store for email agent
+            if session_id:
+                context_store.set_sql_results(session_id, {
+                    "results": response_data.get("results", []),
+                    "query": response_data.get("sql_query", ""),
+                    "tables": response_data.get("tables", [])
+                })
+                logger.info("sql_results_stored_in_context_store",
+                           session_id=session_id,
+                           result_count=len(response_data.get("results", [])))
+
             # Store entities in state_manager for contextual reference resolution
             if state_manager and response_data.get("results"):
                 results = response_data.get("results", [])
@@ -944,6 +1193,24 @@ Réponse courte et directe (2-3 phrases maximum):"""
                             entity_graph=entity_graph
                         )
                         logger.info("entity_graph_populated_coproprietes", count=len(results))
+
+                        # NOUVEAU: Store in context_store for reference resolution
+                        if session_id:
+                            for res in results:
+                                copro_name = res.get("nom") or res.get("copropriete_nom", "")
+                                if copro_name:
+                                    context_store.set_entity(
+                                        session_id=session_id,
+                                        entity_type="copropriete",
+                                        entity_data={
+                                            "name": copro_name,
+                                            "id": res.get("id"),
+                                            "adresse": res.get("adresse"),
+                                            "ville": res.get("ville"),
+                                            "nombre_lots": res.get("nombre_lots")
+                                        }
+                                    )
+                            logger.info("context_store_coproprietes_stored", session_id=session_id, count=len(results))
                     elif "prenom" in first_row and "nom" in first_row and "email" in first_row:
                         # People (coproprietaires with email)
                         await entity_populator.populate_from_sql_results(
@@ -1181,6 +1448,24 @@ Réponse courte et directe (2-3 phrases maximum):"""
                                 progress=0.4
                             )
 
+            # NOUVEAU: Check context_store for SQL results if no recipients from query_data
+            if not recipients_found and session_id:
+                sql_results = context_store.get_sql_results(session_id)
+                if sql_results and sql_results.get("results"):
+                    for row in sql_results["results"]:
+                        if isinstance(row, dict) and "email" in row and row["email"]:
+                            recipients_found.append(str(row["email"]))
+                    if recipients_found:
+                        logger.info("recipients_from_context_store_intelligent", session_id=session_id, count=len(recipients_found))
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.ANALYZING,
+                                title="Destinataires récupérés",
+                                content=f"✓ {len(recipients_found)} destinataire(s) récupéré(s) du contexte de conversation",
+                                agent="orchestrator",
+                                progress=0.4
+                            )
+
             # Execute SQL query if needed and no recipients found yet
             if not recipients_found:
                 for i, step in enumerate(plan.steps):
@@ -1275,6 +1560,25 @@ Réponse courte et directe (2-3 phrases maximum):"""
         if context and "emails_available" in context:
             recipients_from_context = context["emails_available"]
             logger.info("recipients_found_in_context", count=len(recipients_from_context))
+
+        # NOUVEAU: Check context_store for SQL results if no recipients in direct context
+        if not recipients_from_context and session_id:
+            sql_results = context_store.get_sql_results(session_id)
+            if sql_results and sql_results.get("results"):
+                # Extract emails from SQL results
+                for row in sql_results["results"]:
+                    if isinstance(row, dict) and "email" in row and row["email"]:
+                        recipients_from_context.append({
+                            "name": f"{row.get('prenom', '')} {row.get('nom', '')}".strip(),
+                            "email": row["email"],
+                            "id": row.get("id")
+                        })
+                if recipients_from_context:
+                    logger.info("recipients_from_context_store", session_id=session_id, count=len(recipients_from_context))
+                    # Add to context so email_agent can use them
+                    if not context:
+                        context = {}
+                    context["emails_available"] = recipients_from_context
 
         # Enrich user input with context information
         enriched_input = user_input
@@ -3025,7 +3329,9 @@ Réponds uniquement avec le contenu, sans préambule."""
         session_id: str
     ):
         """
-        Extract structured facts from user input and store in context_store
+        Extract structured facts from user input and store in BOTH:
+        - context_store (legacy compatibility)
+        - UnifiedContextManager (Phase 3 - SSOT)
 
         Extracts:
         - Budgets (75000€, 50k, 120000 euros)
@@ -3036,6 +3342,9 @@ Réponds uniquement avec le contenu, sans préambule."""
         import re
 
         try:
+            # Get UnifiedContextManager for this session
+            unified_ctx = get_unified_context_manager(session_id)
+
             # Extract budgets - improved regex for all formats
             budget_patterns = [
                 (r'(\d+)\s?k€?', lambda m: int(m) * 1000),  # 75k, 50k€
@@ -3048,11 +3357,14 @@ Réponds uniquement avec le contenu, sans préambule."""
                 for match_obj in matches:
                     try:
                         amount = converter(match_obj.group(1))
-                        context_store.add_fact(session_id, "budget", {
+                        fact_data = {
                             "amount": amount,
                             "original_text": match_obj.group(0),
                             "extracted_from": user_input[:100]
-                        })
+                        }
+                        # Store in both systems
+                        context_store.add_fact(session_id, "budget", fact_data)
+                        unified_ctx.add_fact("budget", fact_data)
                         logger.info("fact_extracted_budget", amount=amount, session=session_id)
                     except:
                         pass
@@ -3067,10 +3379,13 @@ Réponds uniquement avec le contenu, sans préambule."""
                 matches = re.findall(pattern, user_input, re.IGNORECASE)
                 for match in matches:
                     date_clean = match.strip()
-                    context_store.add_fact(session_id, "date", {
+                    fact_data = {
                         "date_text": date_clean,
                         "extracted_from": user_input[:100]
-                    })
+                    }
+                    # Store in both systems
+                    context_store.add_fact(session_id, "date", fact_data)
+                    unified_ctx.add_fact("date", fact_data)
                     logger.info("fact_extracted_date", date=date_clean, session=session_id)
 
             # Extract counts
@@ -3082,16 +3397,221 @@ Réponds uniquement avec le contenu, sans préambule."""
             for pattern in count_patterns:
                 matches = re.findall(pattern, user_input, re.IGNORECASE)
                 for match in matches:
-                    context_store.add_fact(session_id, "count", {
+                    fact_data = {
                         "count": int(match),
                         "extracted_from": user_input[:100]
-                    })
+                    }
+                    # Store in both systems
+                    context_store.add_fact(session_id, "count", fact_data)
+                    unified_ctx.add_fact("count", fact_data)
                     logger.info("fact_extracted_count", count=match, session=session_id)
 
         except Exception as e:
             logger.error("fact_extraction_failed", error=str(e))
             # Don't fail the whole request if extraction fails
             pass
+
+    async def _handle_email_confirmation(
+        self,
+        state_manager,
+        db: AsyncSession,
+        session_id: Optional[str] = None,
+        thought_stream = None
+    ) -> AgentResponse:
+        """
+        Handle email confirmation - send draft via N8N webhook
+
+        Args:
+            state_manager: State manager with email_draft
+            db: Database session
+            session_id: Session ID for context
+            thought_stream: ThoughtStream for real-time updates
+
+        Returns:
+            AgentResponse with send status
+        """
+        from app.services.webhook_service import WebhookService
+
+        try:
+            # Get draft from state
+            email_draft = state_manager.state.email_draft
+            if not email_draft:
+                logger.error("email_confirmation_no_draft")
+                return AgentResponse(
+                    success=False,
+                    message="❌ Aucun brouillon d'email trouvé. Veuillez d'abord générer un email.",
+                    data={},
+                    agents_used=["orchestrator"],
+                    sources_used=[],
+                    confidence=1.0,
+                    suggestions=["Générer un nouvel email"],
+                    warnings=[]
+                )
+
+            # Extract email data
+            subject = email_draft.get("subject", "Sans objet")
+            body = email_draft.get("body", "")
+            recipients = email_draft.get("recipients", [])
+            tone = email_draft.get("tone", "professional")
+            urgency = email_draft.get("urgency", "medium")
+
+            # Validate recipients
+            if not recipients or len(recipients) == 0:
+                logger.error("email_confirmation_no_recipients")
+                return AgentResponse(
+                    success=False,
+                    message="❌ Aucun destinataire trouvé dans le brouillon. Impossible d'envoyer l'email.",
+                    data={"email_draft": email_draft},
+                    agents_used=["orchestrator"],
+                    sources_used=[],
+                    confidence=1.0,
+                    suggestions=["Générer un nouvel email avec destinataires"],
+                    warnings=[]
+                )
+
+            logger.info("sending_email_confirmation",
+                       recipients_count=len(recipients),
+                       subject=subject[:50])
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.EXECUTING,
+                    title="Envoi via N8N",
+                    content=f"Envoi de l'email à {len(recipients)} destinataire(s) via le workflow N8N...",
+                    agent="webhook_service",
+                    progress=0.7
+                )
+
+            # Send via N8N webhook
+            webhook_service = WebhookService()
+            result = None
+
+            try:
+                result = await webhook_service.send_email(
+                    subject=subject,
+                    body=body,
+                    recipients=recipients,
+                    tenant_id="default",  # TODO: Get from context
+                    user_id="user",       # TODO: Get from context
+                    urgency=urgency,
+                    tone=tone,
+                    request_id=f"email_{session_id}" if session_id else None,
+                    thought_stream_id=None,  # TODO: Extract from thought_stream
+                    conversation_id=session_id
+                )
+
+            finally:
+                await webhook_service.close()
+
+            # Check result (AFTER try/finally to avoid exception catching the return)
+            if result:
+                # N8N peut retourner soit {"success": true} soit {"status": "warning"/"success"}
+                # Le warning "No thought_stream_id" n'est pas bloquant
+                is_success = (
+                    result.get("success") == True or
+                    result.get("status") in ["success", "warning"]
+                )
+
+                if is_success:
+                    logger.info("email_sent_successfully",
+                               recipients_count=len(recipients),
+                               n8n_response=result)
+
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.SUCCESS,
+                            title="Email envoyé",
+                            content=f"✅ Email envoyé avec succès à {len(recipients)} destinataire(s) !",
+                            agent="webhook_service",
+                            progress=1.0
+                        )
+
+                    # Clear draft and pending action
+                    state_manager.state.email_draft = None
+                    state_manager.state.clear_pending_action()
+
+                    # Format recipient list for display
+                    recipient_list = []
+                    for r in recipients:
+                        if isinstance(r, dict):
+                            recipient_list.append(r.get("email", str(r)))
+                        else:
+                            recipient_list.append(str(r))
+
+                    message = f"✅ **Email envoyé avec succès !**\n\n"
+                    message += f"**Destinataire(s):** {', '.join(recipient_list)}\n"
+                    message += f"**Objet:** {subject}\n\n"
+                    message += "L'email a été envoyé via N8N et devrait arriver dans quelques instants."
+
+                    return AgentResponse(
+                        success=True,
+                        message=message,
+                        data={
+                            "n8n_response": result,
+                            "recipients_count": len(recipients),
+                            "subject": subject
+                        },
+                        agents_used=["orchestrator", "webhook_service", "n8n"],
+                        sources_used=[],
+                        confidence=1.0,
+                        suggestions=[],
+                        warnings=[]
+                    )
+                else:
+                    # N8N error
+                    error_msg = result.get("error", result.get("message", "Erreur inconnue"))
+                    logger.error("n8n_email_send_failed",
+                                error=error_msg,
+                                n8n_response=result)
+
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.ERROR,
+                            title="Erreur d'envoi",
+                            content=f"❌ Erreur lors de l'envoi : {error_msg}",
+                            agent="webhook_service",
+                            progress=1.0
+                        )
+
+                    return AgentResponse(
+                        success=False,
+                        message=f"❌ **Erreur lors de l'envoi de l'email**\n\n{error_msg}\n\nLe brouillon est toujours disponible. Vous pouvez réessayer ou le modifier.",
+                        data={
+                            "email_draft": email_draft,
+                            "error": error_msg,
+                            "n8n_response": result
+                        },
+                        agents_used=["orchestrator", "webhook_service"],
+                        sources_used=[],
+                        confidence=1.0,
+                        suggestions=["Réessayer", "Modifier l'email", "Annuler"],
+                        warnings=[f"Erreur N8N: {error_msg}"]
+                    )
+
+        except Exception as e:
+            logger.error("email_confirmation_failed",
+                        error=str(e),
+                        exc_info=True)
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.ERROR,
+                    title="Erreur système",
+                    content=f"❌ Erreur technique : {str(e)}",
+                    agent="orchestrator",
+                    progress=1.0
+                )
+
+            return AgentResponse(
+                success=False,
+                message=f"❌ **Erreur technique lors de l'envoi**\n\n{str(e)}\n\nVeuillez réessayer ou contacter le support si le problème persiste.",
+                data={},
+                agents_used=["orchestrator"],
+                sources_used=[],
+                confidence=1.0,
+                suggestions=["Réessayer", "Annuler"],
+                warnings=[f"Exception: {str(e)}"]
+            )
 
     async def _recall_from_context_store(
         self,
