@@ -30,6 +30,7 @@ logger = structlog.get_logger()
 # WORLD-CLASS RAG CONFIGURATION
 # ============================================================================
 # Enable/disable advanced agents (feature flags for gradual rollout)
+ENABLE_QUERY_PLANNING = True      # Decompose complex queries (multi-hop, comparison)
 ENABLE_VERIFICATION_AGENT = True  # Verify if chunks answer the query
 ENABLE_REFLECTION_AGENT = True    # Fix retrieval failures
 VERIFICATION_CONFIDENCE_THRESHOLD = 0.40  # Below this, trigger verification
@@ -199,6 +200,46 @@ class HybridExecutor:
             else:
                 logger.info("rag_no_active_docs_set_searching_all")
 
+        # ================================================================
+        # PHASE 0: QUERY PLANNING (Multi-hop / Comparison detection)
+        # Decomposes complex queries into simpler sub-queries
+        # ================================================================
+        query_plan = None
+        is_complex_query = False
+
+        if ENABLE_QUERY_PLANNING:
+            try:
+                from .query_planning_agent import QueryPlanningAgent, AggregationStrategy
+
+                planner = QueryPlanningAgent()
+                query_plan = await planner.plan_query(query)
+
+                if query_plan.is_complex:
+                    is_complex_query = True
+                    if thought_stream:
+                        sub_query_list = [sq.query[:40] + "..." for sq in query_plan.sub_queries[:3]]
+                        await thought_stream.add_thought(
+                            ThoughtType.ANALYZING,
+                            title=f"🧩 Requête complexe détectée ({query_plan.query_type.value})",
+                            content=f"Décomposition en {len(query_plan.sub_queries)} sous-requête(s):\n" +
+                                    "\n".join([f"• {sq}" for sq in sub_query_list]),
+                            agent="query_planner",
+                            data={
+                                "query_type": query_plan.query_type.value,
+                                "sub_queries": len(query_plan.sub_queries),
+                                "strategy": query_plan.aggregation_strategy.value
+                            },
+                            progress=0.25
+                        )
+                    logger.info("complex_query_planned",
+                               query_type=query_plan.query_type.value,
+                               sub_queries=len(query_plan.sub_queries),
+                               strategy=query_plan.aggregation_strategy.value)
+
+            except Exception as e:
+                logger.warning("query_planning_error", error=str(e))
+                # Continue with normal search
+
         # Emit thought: Starting search
         if thought_stream:
             await thought_stream.add_thought(
@@ -221,15 +262,81 @@ class HybridExecutor:
             limit = 15  # Standard mode
             use_expansion = False
 
-        # Retrieve chunks with optimized pipeline
-        chunks = await rag_service.search(
-            query=query,
-            limit=limit,
-            document_ids=document_ids,
-            use_hybrid=True,  # Enable hybrid search (vector + keyword)
-            use_reranker=True,  # Enable cross-encoder re-ranking
-            use_query_expansion=use_expansion  # INTERGALACTIC: Enable controlled expansion
-        )
+        # ================================================================
+        # EXECUTE SEARCH (Simple or Multi-hop)
+        # ================================================================
+        chunks = []
+
+        if is_complex_query and query_plan and len(query_plan.sub_queries) > 1:
+            # COMPLEX QUERY: Execute sub-queries and aggregate
+            all_sub_chunks = []
+
+            for i, sub_query in enumerate(query_plan.sub_queries):
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.RAG_SEARCHING,
+                        title=f"Sous-requête {i+1}/{len(query_plan.sub_queries)}",
+                        content=f"Recherche: {sub_query.query[:60]}...",
+                        agent="rag_agent",
+                        progress=0.3 + (i * 0.1)
+                    )
+
+                sub_chunks = await rag_service.search(
+                    query=sub_query.query,
+                    limit=sub_query.expected_doc_count or limit,
+                    document_ids=document_ids,
+                    use_hybrid=True,
+                    use_reranker=True
+                )
+
+                # Tag chunks with sub-query info for aggregation
+                for chunk in sub_chunks:
+                    chunk['_sub_query_index'] = i
+                    chunk['_sub_query'] = sub_query.query
+
+                all_sub_chunks.extend(sub_chunks)
+                logger.info("sub_query_executed",
+                           sub_query_index=i,
+                           chunks_found=len(sub_chunks))
+
+            # Aggregate results based on strategy
+            if query_plan.aggregation_strategy == AggregationStrategy.COMPARE:
+                # Keep chunks grouped by sub-query for comparison
+                chunks = all_sub_chunks
+            elif query_plan.aggregation_strategy == AggregationStrategy.MERGE:
+                # Deduplicate by chunk ID
+                seen_ids = set()
+                for chunk in all_sub_chunks:
+                    chunk_id = chunk.get('id', str(chunk.get('text', '')[:50]))
+                    if chunk_id not in seen_ids:
+                        seen_ids.add(chunk_id)
+                        chunks.append(chunk)
+            else:
+                # CONCAT (default) - just combine all
+                chunks = all_sub_chunks
+
+            # Sort by score and limit
+            chunks = sorted(chunks, key=lambda x: x.get('cross_encoder_score', x.get('score', 0)), reverse=True)[:limit * 2]
+
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.RAG_RESULTS,
+                    title=f"✅ {len(chunks)} passage(s) agrégés",
+                    content=f"Stratégie: {query_plan.aggregation_strategy.value}",
+                    agent="query_planner",
+                    progress=0.5
+                )
+
+        else:
+            # SIMPLE QUERY: Direct search
+            chunks = await rag_service.search(
+                query=query,
+                limit=limit,
+                document_ids=document_ids,
+                use_hybrid=True,  # Enable hybrid search (vector + keyword)
+                use_reranker=True,  # Enable cross-encoder re-ranking
+                use_query_expansion=use_expansion  # INTERGALACTIC: Enable controlled expansion
+            )
 
         search_duration = time.time() - start_time
         logger.info("rag_search_returned", chunks_count=len(chunks), query=query[:50], filtered_by_docs=document_ids is not None, duration=search_duration)
