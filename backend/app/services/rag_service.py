@@ -1068,3 +1068,16 @@ class RAGService:
             )
 
         return "\n---\n".join(context_parts)
+
+
+# Singleton instance
+_rag_service_instance: Optional[RAGService] = None
+
+
+def get_rag_service() -> RAGService:
+    """Get or create the singleton RAGService instance."""
+    global _rag_service_instance
+    if _rag_service_instance is None:
+        _rag_service_instance = RAGService()
+        logger.info("rag_service_singleton_initialized")
+    return _rag_service_instance

@@ -70,6 +70,12 @@ class OrchestratorAgent:
         # - Total: 40% queries never hit classification (0ms, $0)
         from app.services.template_filter import TemplateFilter, UIContextBypass
 
+        # WORLD-CLASS ROUTER (Phase 4): Perplexity-style multi-source routing
+        # - Fast Pre-filter: ~1ms keyword detection
+        # - Parallel Retrieval: Query multiple sources simultaneously
+        # - Cross-Encoder Rerank: Score and filter results
+        from app.services.agents.world_class_router import get_world_class_router, SourceType
+
         # Only instantiate what we actually use
         self.intent_classifier = IntentClassifierV5()  # Fallback/quick rules
         self.llm_classifier = classify_intent_with_llm  # Primary LLM-based classifier
@@ -80,11 +86,22 @@ class OrchestratorAgent:
         self.template_filter = TemplateFilter()
         self.ui_context_bypass = UIContextBypass()
 
+        # World-Class Router (lazy loaded)
+        self._world_class_router = None
+
         logger.info("orchestrator_agent_initialized",
-                   version="v6.0_llm_classifier",
-                   classifier="llm_mistral",
+                   version="v7.0_world_class",
+                   classifier="llm_groq",
                    fallback="v5_keywords",
-                   optimizations=["template_filter", "ui_context_bypass"])
+                   optimizations=["template_filter", "ui_context_bypass", "world_class_router"])
+
+    @property
+    def world_class_router(self):
+        """Lazy load the World-Class Router."""
+        if self._world_class_router is None:
+            from app.services.agents.world_class_router import get_world_class_router
+            self._world_class_router = get_world_class_router()
+        return self._world_class_router
 
     async def classify_intention(
         self,
@@ -193,7 +210,8 @@ class OrchestratorAgent:
         thought_stream: ThoughtStream = None,
         state_manager = None,
         selected_sources: Optional[List[str]] = None,  # ['sql', 'rag', 'web'] or None for auto
-        session_id: Optional[str] = None  # For context_store
+        session_id: Optional[str] = None,  # For context_store
+        use_world_class_router: bool = False  # Enable Perplexity-style routing
     ) -> AgentResponse:
         """
         Main orchestration method - routes to appropriate agents
@@ -204,6 +222,7 @@ class OrchestratorAgent:
             context: Optional context (files, metadata)
             conversation_history: Previous messages
             selected_sources: User-selected sources (['sql', 'rag', 'web']) or None for auto-detection
+            use_world_class_router: If True, use Perplexity-style multi-source routing
 
         Returns:
             AgentResponse with results
@@ -366,6 +385,24 @@ class OrchestratorAgent:
                 logger.info("level_0_bypass_classification_ui",
                            intent=bypass_intent.value,
                            method=ui_bypass_result.get('method'))
+
+            # ================================================================
+            # WORLD-CLASS ROUTER MODE (Phase 4 - Perplexity-style)
+            # When enabled, bypasses traditional intent classification
+            # ================================================================
+            if use_world_class_router and selected_sources is None:
+                # No user-selected sources AND world_class_router enabled
+                # → Use intelligent multi-source routing
+                logger.info("world_class_router_mode_enabled", query=user_input[:50])
+
+                return await self._execute_with_world_class_router(
+                    user_input=user_input,
+                    db=db,
+                    thought_stream=thought_stream,
+                    state_manager=state_manager,
+                    context=context,
+                    conversation_history=conversation_history
+                )
 
             # ================================================================
             # CONTINUE NORMAL FLOW (with or without bypass)
@@ -3139,6 +3176,232 @@ Réponds uniquement avec le contenu, sans préambule."""
 
             response_parts.append("\n---\n_Sources citées ci-dessus._")
             return "".join(response_parts)
+
+    async def _execute_with_world_class_router(
+        self,
+        user_input: str,
+        db,
+        thought_stream=None,
+        state_manager=None,
+        context: Dict[str, Any] = None,
+        conversation_history: List[Dict] = None
+    ) -> AgentResponse:
+        """
+        Execute query using World-Class Router (Perplexity-style)
+
+        This method:
+        1. Pre-filters query to determine sources (~1ms)
+        2. Retrieves from all relevant sources in parallel (~200-400ms)
+        3. Reranks results with Cross-Encoder (~100ms)
+        4. Synthesizes response with Mistral
+
+        Total latency: ~500ms for routing + retrieval
+        """
+        from app.services.agents.world_class_router import SourceType
+
+        try:
+            logger.info("world_class_router_execution_started", query=user_input[:50])
+
+            # Thought: Starting intelligent routing
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.ANALYZING,
+                    title="Routage intelligent",
+                    content="J'analyse votre demande pour déterminer automatiquement les meilleures sources d'information...",
+                    agent="world_class_router",
+                    progress=0.1
+                )
+
+            # 1. Route and retrieve using World-Class Router
+            router_result = await self.world_class_router.route_and_retrieve(
+                query=user_input,
+                db=db,
+                context=context,
+                top_k=5
+            )
+
+            # Thought: Sources determined and retrieved
+            if thought_stream:
+                sources_str = ", ".join([s.value for s in router_result.sources_used])
+                await thought_stream.add_thought(
+                    ThoughtType.EXECUTING,
+                    title=f"Sources consultées : {sources_str}",
+                    content=f"Récupération parallèle terminée en {router_result.retrieval_time_ms:.0f}ms. {len(router_result.documents)} documents trouvés.",
+                    agent="world_class_router",
+                    progress=0.5
+                )
+
+            # 2. If no documents found, fallback to general response
+            if not router_result.documents:
+                logger.warning("world_class_router_no_results", query=user_input[:50])
+
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title="Aucun résultat trouvé",
+                        content="Je n'ai pas trouvé d'information pertinente dans les sources consultées.",
+                        agent="world_class_router",
+                        progress=1.0
+                    )
+
+                return AgentResponse(
+                    success=True,
+                    message="Je n'ai pas trouvé d'information pertinente pour répondre à votre question. Pouvez-vous reformuler ou préciser votre demande ?",
+                    data={},
+                    agents_used=["world_class_router"],
+                    sources_used=[s.value for s in router_result.sources_queried],
+                    confidence=0.3,
+                    suggestions=["Reformuler la question", "Préciser le contexte"],
+                    warnings=[]
+                )
+
+            # 3. ÉTAPE 3: Adaptive response - Skip synthesis for simple queries
+            if router_result.skip_synthesis:
+                # Simple SQL/WEB query → Use document content directly (template response or pre-synthesized)
+                doc = router_result.documents[0]
+                response_message = doc.content
+
+                # Determine agent and source based on complexity
+                if router_result.complexity.value == "simple_sql":
+                    agent_name = "sql_agent"
+                    sources = [DataSource.SQL]
+                    thought_title = "Réponse SQL directe (fast-path)"
+                    thought_content = f"Requête SQL simple - réponse directe en {router_result.total_time_ms:.0f}ms"
+                elif router_result.complexity.value == "simple_web":
+                    agent_name = "web_agent"
+                    sources = [DataSource.WEB]
+                    thought_title = "Réponse Web directe (fast-path)"
+                    thought_content = f"Recherche web - réponse pré-synthétisée en {router_result.total_time_ms:.0f}ms"
+                elif router_result.complexity.value == "simple_legal":
+                    agent_name = "legal_agent"
+                    sources = [DataSource.LEGIFRANCE]
+                    thought_title = "Réponse juridique (fast-path)"
+                    thought_content = f"Recherche Légifrance - réponse en {router_result.total_time_ms:.0f}ms"
+                else:
+                    agent_name = "fast_path"
+                    sources = [s.value for s in router_result.sources_used]
+                    thought_title = "Réponse directe (fast-path)"
+                    thought_content = f"Réponse directe en {router_result.total_time_ms:.0f}ms"
+
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title=thought_title,
+                        content=thought_content,
+                        agent=agent_name,
+                        progress=1.0
+                    )
+
+                logger.info("world_class_router_fast_path_complete",
+                           query=user_input[:50],
+                           complexity=router_result.complexity.value,
+                           total_time_ms=router_result.total_time_ms)
+
+                return AgentResponse(
+                    success=True,
+                    message=response_message,
+                    data={
+                        "router_metrics": {
+                            "prefilter_ms": router_result.prefilter_time_ms,
+                            "retrieval_ms": router_result.retrieval_time_ms,
+                            "rerank_ms": router_result.rerank_time_ms,
+                            "total_ms": router_result.total_time_ms,
+                            "complexity": router_result.complexity.value,
+                            "fast_path": True,
+                            "is_legal_query": router_result.is_legal_query,
+                            "is_pure_legal": router_result.is_pure_legal,
+                            "sources_queried": [s.value for s in router_result.sources_queried],
+                            "sources_used": [s.value for s in router_result.sources_used]
+                        }
+                    },
+                    agents_used=["world_class_router", agent_name],
+                    sources_used=sources,
+                    confidence=0.95,
+                    suggestions=[],
+                    warnings=[]
+                )
+
+            # 4. Full synthesis for hybrid/complex queries
+            chunks = []
+            for doc in router_result.documents:
+                chunks.append({
+                    "content": doc.content,
+                    "score": doc.score,
+                    "source": doc.source.value,
+                    "metadata": doc.metadata,
+                    "citation_id": doc.citation_id
+                })
+
+            # Use SynthesisAgent for response generation (uses Mistral)
+            from app.services.agents.synthesis_agent import SynthesisAgent
+            synthesis_agent = SynthesisAgent()
+
+            synthesized = await synthesis_agent.synthesize_with_citations(
+                query=user_input,
+                chunks=chunks,
+                conversation_context=str(conversation_history[-3:]) if conversation_history else None
+            )
+
+            # Thought: Response synthesized
+            if thought_stream:
+                await thought_stream.add_thought(
+                    ThoughtType.COMPLETED,
+                    title="Réponse synthétisée",
+                    content=f"Confiance: {synthesized.overall_confidence:.0%}. {len(synthesized.sources)} sources citées.",
+                    agent="synthesis",
+                    progress=1.0
+                )
+
+            # 5. Build final response
+            logger.info("world_class_router_complete",
+                       query=user_input[:50],
+                       complexity=router_result.complexity.value,
+                       sources_used=[s.value for s in router_result.sources_used],
+                       documents_count=len(router_result.documents),
+                       total_time_ms=router_result.total_time_ms)
+
+            return AgentResponse(
+                success=True,
+                message=synthesized.text,
+                data={
+                    "sources": [s.model_dump() for s in synthesized.sources],
+                    "router_metrics": {
+                        "prefilter_ms": router_result.prefilter_time_ms,
+                        "retrieval_ms": router_result.retrieval_time_ms,
+                        "rerank_ms": router_result.rerank_time_ms,
+                        "total_ms": router_result.total_time_ms,
+                        "complexity": router_result.complexity.value,
+                        "is_legal_query": router_result.is_legal_query,
+                        "is_pure_legal": router_result.is_pure_legal,
+                        "sources_queried": [s.value for s in router_result.sources_queried],
+                        "sources_used": [s.value for s in router_result.sources_used]
+                    }
+                },
+                agents_used=["world_class_router", "synthesis"],
+                sources_used=[DataSource.SQL if s == SourceType.SQL else
+                             DataSource.RAG if s == SourceType.RAG else
+                             DataSource.WEB if s == SourceType.WEB else
+                             DataSource.LEGIFRANCE
+                             for s in router_result.sources_used],
+                confidence=synthesized.overall_confidence,
+                suggestions=[],
+                warnings=synthesized.warnings
+            )
+
+        except Exception as e:
+            logger.error("world_class_router_error", error=str(e), query=user_input[:50])
+
+            # Fallback to traditional routing
+            return AgentResponse(
+                success=False,
+                message=f"Erreur lors du traitement: {str(e)}",
+                data={},
+                agents_used=["world_class_router"],
+                sources_used=[],
+                confidence=0.0,
+                suggestions=["Réessayer", "Reformuler la question"],
+                warnings=[str(e)]
+            )
 
     async def _execute_hybrid_sources(
         self,

@@ -422,23 +422,27 @@ class LegalAgent:
 
         # Enhanced keyword sets with linguistic variants
 
-        # Analysis keywords (extended)
+        # Analysis keywords (extended) - requires a document to analyze
+        # NOTE: Be specific to avoid matching advisory questions
         analyze_keywords = [
-            # Commands
-            "analyser", "analyse", "analyser ce", "analyser le", "analyser la",
-            "étudier", "étude", "examiner", "examen",
-            "décortiquer", "décortique",
-            # Summaries
-            "résume", "résumer", "résumé", "fais-moi un résumé", "faire un résumé",
-            "synthèse", "synthétise", "synthétiser",
-            "en bref", "l'essentiel",
-            # Verification
-            "identifier les risques", "vérifier", "contrôler", "vérification", "contrôle",
-            "conformité", "obligations", "clauses",
-            "checker", "check",
-            # Extraction
-            "extraire", "extraction", "lister", "liste",
-            "quelles sont les clauses", "quels sont les risques"
+            # Commands (explicit document analysis)
+            "analyser ce document", "analyse ce document", "analyser le document", "analyser la piece",
+            "analyser ce contrat", "analyse ce contrat",
+            "étudier ce document", "étudier le document", "examiner ce document", "examiner le document",
+            "décortiquer ce", "décortique ce",
+            # Summaries (of provided documents)
+            "résume ce document", "résumer ce", "résumé du document",
+            "fais-moi un résumé de ce", "faire un résumé du",
+            "synthèse du document", "synthétise ce",
+            # Verification (of documents)
+            "identifier les risques du document", "vérifier ce document", "contrôler ce document",
+            "vérifier les clauses", "contrôler les clauses",
+            "conformité du document", "clauses du document", "clauses du contrat",
+            "checker ce document", "check le document",
+            # Extraction (from documents)
+            "extraire du document", "extraction des clauses",
+            "lister les clauses", "liste des clauses",
+            "quelles sont les clauses du", "quels sont les risques du document"
         ]
 
         # Risk keywords (extended)
@@ -499,14 +503,26 @@ class LegalAgent:
         ]
 
         # Advice keywords (questions about legal obligations, rights, procedures)
+        # Include both accented and unaccented variants for robustness
         advice_keywords = [
-            "quelles sont mes obligations", "mes obligations", "obligations légales",
+            # Obligations
+            "quelles sont mes obligations", "mes obligations", "obligations légales", "obligations legales",
+            "quelles sont les obligations", "obligations du syndic", "obligations du",
+            # Rights
             "quels sont mes droits", "mes droits", "droits du", "droits de",
-            "ai-je le droit", "puis-je", "peut-on", "dois-je", "suis-je obligé",
-            "comment faire pour", "comment procéder", "quelle procédure",
+            "ai-je le droit", "puis-je", "peut-on", "dois-je", "suis-je obligé", "suis-je oblige",
+            # Procedures
+            "comment faire pour", "comment procéder", "comment proceder", "quelle procédure", "quelle procedure",
             "que faire si", "que dois-je faire",
+            # Advice
             "conseille", "conseil", "recommandation",
-            "puis-je faire", "est-il possible de"
+            "puis-je faire", "est-il possible de",
+            # Legal questions (que dit la loi)
+            "que dit la loi", "selon la loi", "d'après la loi", "d'apres la loi",
+            "la loi prévoit", "la loi prevoit", "la loi stipule",
+            # Copropriété specific
+            "convocation d'ag", "convocation ag", "convocation assemblée", "convocation assemblee",
+            "majorité de vote", "majorite de vote", "règlement de copropriété", "reglement de copropriete"
         ]
 
         # 1. Legal advice (check BEFORE document analysis to prioritize advisory questions)
@@ -1814,16 +1830,16 @@ Réponds en format JSON:
             # First, try to find relevant documents in RAG
             rag_sources = []
             try:
-                rag_results = await self.rag_service.search_similar_chunks(
+                rag_results = await self.rag_service.search(
                     query=situation,
-                    top_k=3
+                    limit=3
                 )
                 rag_sources = [
                     {
                         "type": "rag",
-                        "title": chunk.get("filename", "Document"),
-                        "content": chunk.get("content", "")[:300],
-                        "score": chunk.get("score", 0.0)
+                        "title": chunk.get("filename", chunk.get("document_name", "Document")),
+                        "content": chunk.get("content", chunk.get("text", ""))[:300],
+                        "score": chunk.get("score", chunk.get("relevance_score", 0.0))
                     }
                     for chunk in rag_results
                 ]
@@ -2028,19 +2044,19 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
             # 2. Try RAG (if jurisprudence documents are indexed)
             rag_cases = []
             try:
-                rag_results = await self.rag_service.search_similar_chunks(
+                rag_results = await self.rag_service.search(
                     query=f"jurisprudence {legal_question}",
-                    top_k=5
+                    limit=5
                 )
                 rag_cases = [
                     {
                         "source": "RAG",
-                        "title": chunk.get("filename", "Document"),
-                        "excerpt": chunk.get("content", "")[:400],
-                        "relevance": chunk.get("score", 0.0)
+                        "title": chunk.get("filename", chunk.get("document_name", "Document")),
+                        "excerpt": chunk.get("content", chunk.get("text", ""))[:400],
+                        "relevance": chunk.get("score", chunk.get("relevance_score", 0.0))
                     }
                     for chunk in rag_results
-                    if chunk.get("score", 0) > 0.7
+                    if chunk.get("score", chunk.get("relevance_score", 0)) > 0.7
                 ]
             except Exception as e:
                 logger.warning("rag_search_failed_for_jurisprudence", error=str(e))
