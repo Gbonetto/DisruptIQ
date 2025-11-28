@@ -11,14 +11,29 @@ Use cases:
 - HYBRID intent: Both SQL and RAG needed
 - Enrichment: SQL provides facts, RAG provides context
 - Validation: Cross-check SQL data against documents
+
+World-Class Features (Harvey AI / LexisNexis inspired):
+- Verification Agent: Validates if chunks answer the query
+- Reflection Agent: Diagnoses and fixes retrieval failures
+- Confidence Calibration: Quality-aware response generation
 """
 
 import asyncio
 import structlog
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
+from functools import partial
 
 logger = structlog.get_logger()
+
+# ============================================================================
+# WORLD-CLASS RAG CONFIGURATION
+# ============================================================================
+# Enable/disable advanced agents (feature flags for gradual rollout)
+ENABLE_VERIFICATION_AGENT = True  # Verify if chunks answer the query
+ENABLE_REFLECTION_AGENT = True    # Fix retrieval failures
+VERIFICATION_CONFIDENCE_THRESHOLD = 0.40  # Below this, trigger verification
+REFLECTION_CONFIDENCE_THRESHOLD = 0.30    # Below this, trigger reflection
 
 
 class SQLResult(BaseModel):
@@ -184,57 +199,78 @@ class HybridExecutor:
             else:
                 logger.info("rag_no_active_docs_set_searching_all")
 
-        # Emit thought: Starting search - DeepSeek format (narrative in title, details in content)
+        # Emit thought: Starting search
         if thought_stream:
             await thought_stream.add_thought(
-                ThoughtType.EXECUTING,
-                title=f"Ok, je cherche dans {filter_info}. J'utilise une recherche hybride (sémantique + mots-clés) pour maximiser mes chances de trouver quelque chose de pertinent.",
-                content="",  # Empty for DeepSeek style
-                agent="rag"
+                ThoughtType.RAG_SEARCHING,
+                title=f"Recherche dans {filter_info}",
+                content="Recherche hybride (sémantique + mots-clés) en cours...",
+                agent="rag_agent",
+                progress=0.3
             )
 
-        # Retrieve chunks (increased from 5 to 15 for better precision)
+        # INTERGALACTIC MODE: Fetch more for maximum precision
+        # User accepts 3-5s latency for better results
+        # Pipeline: Fetch 60 → Hybrid 30 → Rerank 20 → Filter 10
+        INTERGALACTIC_MODE = True
+
+        if INTERGALACTIC_MODE:
+            limit = 10  # Final chunks (reduced from 15 to focus on best quality)
+            use_expansion = False  # DISABLED: Query expansion conflicts with score filtering
+        else:
+            limit = 15  # Standard mode
+            use_expansion = False
+
+        # Retrieve chunks with optimized pipeline
         chunks = await rag_service.search(
             query=query,
-            limit=15,
+            limit=limit,
             document_ids=document_ids,
             use_hybrid=True,  # Enable hybrid search (vector + keyword)
             use_reranker=True,  # Enable cross-encoder re-ranking
-            use_query_expansion=True  # Generate query variants for better recall
+            use_query_expansion=use_expansion  # INTERGALACTIC: Enable controlled expansion
         )
 
         search_duration = time.time() - start_time
         logger.info("rag_search_returned", chunks_count=len(chunks), query=query[:50], filtered_by_docs=document_ids is not None, duration=search_duration)
 
-        # Emit thought: Results found - DeepSeek format (everything in title as narrative)
+        # Emit thought: Results found with document details
         if thought_stream:
             if chunks:
                 # Calculate score info
                 top_scores = [chunk.get('cross_encoder_score', chunk.get('score', 0)) for chunk in chunks[:3]]
-                scores_display = [f'{int(s*100)}%' for s in top_scores if s]
-
-                # Evaluate quality - DeepSeek style narrative
                 avg_score = sum(top_scores[:3]) / len(top_scores) if top_scores else 0
-                if avg_score >= 0.8:
-                    quality_assessment = "Excellent ! Les passages semblent très pertinents, je devrais pouvoir donner une réponse précise."
-                elif avg_score >= 0.6:
-                    quality_assessment = "Scores corrects. Les informations sont utiles mais peut-être un peu incomplètes."
-                else:
-                    quality_assessment = "Hmm... scores moyens ({', '.join(scores_display[:3])}). Les documents ne mentionnent peut-être le sujet que partiellement."
 
-                # DeepSeek format: full narrative in title
+                # Extract document names from chunks
+                doc_names = list(set([
+                    chunk.get('metadata', {}).get('filename', chunk.get('filename', 'Document'))
+                    for chunk in chunks[:5]
+                ]))
+
                 await thought_stream.add_thought(
-                    ThoughtType.COMPLETED,
-                    title=f"Trouvé {len(chunks)} passages en {search_duration:.1f}s. Meilleurs scores : {', '.join(scores_display[:3])}. {quality_assessment}",
-                    content="",  # Empty for DeepSeek style
-                    agent="rag"
+                    ThoughtType.RAG_RESULTS,
+                    title=f"{len(chunks)} passage(s) trouvé(s)",
+                    content=f"Recherche terminée en {search_duration:.1f}s",
+                    agent="rag_agent",
+                    data={
+                        "documents": doc_names[:5],
+                        "chunks": len(chunks),
+                        "confidence": avg_score
+                    },
+                    progress=0.6
                 )
             else:
                 await thought_stream.add_thought(
-                    ThoughtType.COMPLETED,
-                    title=f"Recherche terminée en {search_duration:.1f}s mais aucun passage pertinent trouvé. Soit l'information n'existe pas dans les documents, soit il faudrait reformuler la question différemment.",
-                    content="",  # Empty for DeepSeek style
-                    agent="rag"
+                    ThoughtType.RAG_RESULTS,
+                    title="Aucun passage pertinent trouvé",
+                    content=f"Recherche terminée en {search_duration:.1f}s",
+                    agent="rag_agent",
+                    data={
+                        "documents": [],
+                        "chunks": 0,
+                        "confidence": 0
+                    },
+                    progress=0.6
                 )
 
         # 🔴 CRITICAL FIX: NEVER ignore user's explicit document selection!
@@ -265,14 +301,129 @@ class HybridExecutor:
                 confidence=0.0
             )
         else:
-            # Emit thought: Synthesizing response - DeepSeek format
+            # ================================================================
+            # WORLD-CLASS RAG: VERIFICATION & REFLECTION PIPELINE
+            # Inspired by Harvey AI / LexisNexis best practices
+            # ================================================================
+
+            # Calculate initial confidence from chunk scores
+            top_scores = [chunk.get('cross_encoder_score', chunk.get('score', 0)) for chunk in chunks[:5]]
+            initial_confidence = sum(top_scores) / len(top_scores) if top_scores else 0
+
+            # PHASE 1: VERIFICATION AGENT
+            # Check if chunks actually answer the query (not just keyword match)
+            if ENABLE_VERIFICATION_AGENT and initial_confidence < VERIFICATION_CONFIDENCE_THRESHOLD:
+                try:
+                    from .verification_agent import VerificationAgent
+
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.ANALYZING,
+                            title="🔍 Vérification de la pertinence",
+                            content=f"Confiance initiale: {initial_confidence:.0%} - Vérification en cours...",
+                            agent="verification_agent",
+                            progress=0.55
+                        )
+
+                    verifier = VerificationAgent()
+
+                    # Create a search function for potential re-search
+                    async def rag_search_func(refined_query: str):
+                        return await rag_service.search(
+                            query=refined_query,
+                            limit=limit,
+                            document_ids=document_ids,
+                            use_hybrid=True,
+                            use_reranker=True
+                        )
+
+                    verified_chunks = await verifier.verify_and_refine(
+                        query=query,
+                        chunks=chunks,
+                        rag_search_func=rag_search_func,
+                        max_iterations=1  # Keep latency reasonable
+                    )
+
+                    if verified_chunks and len(verified_chunks) > 0:
+                        chunks = verified_chunks
+                        logger.info("verification_improved_results",
+                                   original_count=len(top_scores),
+                                   verified_count=len(chunks))
+
+                except Exception as e:
+                    logger.warning("verification_agent_error", error=str(e))
+                    # Continue with original chunks
+
+            # PHASE 2: REFLECTION AGENT
+            # If still low confidence, diagnose and fix the retrieval failure
+            refined_scores = [chunk.get('cross_encoder_score', chunk.get('score', 0)) for chunk in chunks[:5]]
+            refined_confidence = sum(refined_scores) / len(refined_scores) if refined_scores else 0
+
+            if ENABLE_REFLECTION_AGENT and refined_confidence < REFLECTION_CONFIDENCE_THRESHOLD:
+                try:
+                    from .reflection_agent import ReflectionAgent
+
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.ANALYZING,
+                            title="🔄 Amélioration des résultats",
+                            content=f"Confiance: {refined_confidence:.0%} - Réflexion en cours...",
+                            agent="reflection_agent",
+                            progress=0.6
+                        )
+
+                    reflector = ReflectionAgent()
+
+                    # Create search function for reflection agent
+                    async def reflection_search_func(refined_query: str):
+                        return await rag_service.search(
+                            query=refined_query,
+                            limit=limit,
+                            document_ids=document_ids,
+                            use_hybrid=True,
+                            use_reranker=True
+                        )
+
+                    reflection_result = await reflector.reflect_and_improve(
+                        query=query,
+                        low_quality_chunks=chunks,
+                        search_func=reflection_search_func,
+                        verification_attempts=0
+                    )
+
+                    # Use improved results if available
+                    if reflection_result.improved_results and len(reflection_result.improved_results) > 0:
+                        chunks = reflection_result.improved_results
+                        logger.info("reflection_improved_results",
+                                   strategy=reflection_result.strategy_used.value if reflection_result.strategy_used else "none",
+                                   new_count=len(chunks))
+
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.ANALYZING,
+                                title=f"✅ Amélioration: {reflection_result.strategy_used.value if reflection_result.strategy_used else 'none'}",
+                                content=reflection_result.fallback_message or "Résultats améliorés",
+                                agent="reflection_agent",
+                                progress=0.65
+                            )
+
+                except Exception as e:
+                    logger.warning("reflection_agent_error", error=str(e))
+                    # Continue with current chunks
+
+            # ================================================================
+            # END WORLD-CLASS RAG PIPELINE
+            # ================================================================
+
+            # Emit thought: Synthesizing response
             synthesis_start = time.time()
             if thought_stream:
                 await thought_stream.add_thought(
-                    ThoughtType.EXECUTING,
-                    title=f"Maintenant je vais analyser et combiner ces {len(chunks)} passages. Je vérifie aussi s'il y a des contradictions entre les sources.",
-                    content="",  # Empty for DeepSeek style
-                    agent="synthesis"
+                    ThoughtType.SYNTHESIZING,
+                    title=f"Analyse de {len(chunks)} passage(s)",
+                    content="Synthèse des informations en cours...",
+                    agent="rag_agent",
+                    progress=0.7
                 )
 
             # Synthesize with citations
@@ -286,28 +437,24 @@ class HybridExecutor:
             synthesis_duration = time.time() - synthesis_start
             total_duration = time.time() - start_time
 
-            # Emit thought: Synthesis complete - DeepSeek format (full narrative)
+            # Emit thought: Synthesis complete
             if thought_stream:
-                confidence = int(synthesized.overall_confidence * 100)
-                factual_count = len([s for s in synthesized.sentences if s.is_factual])
+                confidence = synthesized.overall_confidence
+                sources_count = len(synthesized.sources)
 
-                # Build natural narrative - DeepSeek style
-                if confidence >= 80:
-                    confidence_narrative = f"Parfait ! J'ai une réponse solide avec {confidence}% de confiance. Les {len(synthesized.sources)} sources sont détaillées et cohérentes, j'ai extrait {factual_count} fait{'s' if factual_count > 1 else ''}."
-                elif confidence >= 60:
-                    confidence_narrative = f"Synthèse terminée en {synthesis_duration:.1f}s avec {confidence}% de confiance. Les {len(synthesized.sources)} sources contiennent l'info mais de façon partielle. J'ai quand même pu extraire {factual_count} fait{'s' if factual_count > 1 else ''}."
-                else:
-                    confidence_narrative = f"Hmm, synthèse terminée mais ma confiance est faible ({confidence}%). Les informations sont fragmentaires sur les {len(synthesized.sources)} sources. Les documents ne couvrent peut-être pas bien le sujet."
-
-                # Add contradiction warning if needed
-                if synthesized.has_contradictions:
-                    confidence_narrative += " ⚠️ Attention : j'ai détecté des contradictions entre les sources."
+                # Extract source titles for display
+                source_titles = [s.title for s in synthesized.sources[:5]]
 
                 await thought_stream.add_thought(
                     ThoughtType.COMPLETED,
-                    title=confidence_narrative,
-                    content="",  # Empty for DeepSeek style
-                    agent="synthesis"
+                    title=f"Synthèse terminée ({int(confidence * 100)}% confiance)",
+                    content=f"{sources_count} source(s) utilisée(s)",
+                    agent="rag_agent",
+                    data={
+                        "documents": source_titles,
+                        "confidence": confidence
+                    },
+                    progress=0.9
                 )
 
             # Clean HTML tags from synthesized text (remove <!--COT_START--> etc.)
