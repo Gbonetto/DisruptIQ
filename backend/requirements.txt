@@ -13,13 +13,16 @@ asyncpg==0.29.0
 redis==5.0.8
 hiredis==2.3.2
 
-# LangChain & AI (Mistral AI primary)
+# LangChain & AI
 langchain==0.3.27
-langchain-mistralai==0.2.6  # Mistral AI integration (PRIMARY)
+langchain-mistralai==0.2.6  # Mistral AI integration (fallback)
 langchain-openai==0.3.35     # OpenAI fallback
 langchain-community==0.3.27  # Security: Updated from 0.2.16 (CVE-2025-6984, CVE-2024-8309)
-mistralai==1.0.1             # Official Mistral SDK for Pixtral vision
-openai==1.104.2              # Fallback
+
+# LLM Providers
+groq==0.15.0                 # Groq API - PRIMARY for intent classification (ultra-fast Llama 3.1 8B)
+mistralai==1.0.1             # Official Mistral SDK for Pixtral vision & fallback
+openai==1.104.2              # OpenAI fallback
 anthropic==0.34.1            # Deprecated
 
 # Vector Database & Re-Ranking
