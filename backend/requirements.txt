@@ -25,6 +25,7 @@ anthropic==0.34.1            # Deprecated
 # Vector Database & Re-Ranking
 qdrant-client==1.11.0
 sentence-transformers==3.1.0  # Security: Updated from 3.0.1 (PVE-2024-73169)
+tokenizers>=0.21,<0.22  # Pin version to avoid incompatibility with transformers
 rank-bm25==0.2.2
 
 # Fuzzy Matching (for EntityGraph)
@@ -47,13 +48,13 @@ pytesseract==0.3.13
 pdf2image==1.17.0
 pillow==10.4.0
 
-# Excel Export
+# Excel Export (pour TableGenerationAgent)
 openpyxl==3.1.2
 
 # PDF Export
 reportlab==4.0.7
 
-# Data Processing
+# Data Processing (pour TableGenerationAgent & AgentResumeurDigest)
 pandas==2.2.2
 
 # Utilities

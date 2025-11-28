@@ -99,6 +99,20 @@ class WebhookService:
 
             # Try to parse JSON response, fallback to text if not JSON
             try:
+                # Handle empty response body (N8N sometimes returns empty on success)
+                if not response.text or response.text.strip() == '':
+                    logger.warning(
+                        "webhook_empty_response",
+                        endpoint=endpoint,
+                        status=response.status_code,
+                        note="N8N returned empty response, treating as success"
+                    )
+                    return {
+                        "success": True,
+                        "status": "success",
+                        "message": "Email sent (N8N empty response)",
+                        "emails_sent": []  # Mark as email response
+                    }
                 return response.json()
             except Exception:
                 return {
@@ -206,6 +220,112 @@ class WebhookService:
         }
 
         return await self._send_webhook("/webhook/archive-document", payload)
+
+    async def send_email(
+        self,
+        subject: str,
+        body: str,
+        recipients: list,
+        tenant_id: str = "default",
+        user_id: str = "anonymous",
+        urgency: str = "medium",
+        tone: str = "professional",
+        request_id: Optional[str] = None,
+        thought_stream_id: Optional[str] = None,
+        conversation_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Send email via N8N workflow
+
+        Args:
+            subject: Email subject
+            body: Email body (text or HTML)
+            recipients: List of recipients (can be strings or dicts with 'email', 'name')
+            tenant_id: Tenant identifier
+            user_id: User identifier
+            urgency: Email urgency level ("low", "medium", "high", "critical")
+            tone: Email tone ("professional", "urgent", "friendly")
+            request_id: Request tracking ID
+            thought_stream_id: ThoughtStream ID for real-time updates
+            conversation_id: Conversation ID for context
+
+        Returns:
+            N8N workflow response with email sending status
+
+        Example:
+            >>> webhook_service = WebhookService()
+            >>> result = await webhook_service.send_email(
+            ...     subject="Test Email",
+            ...     body="Hello World",
+            ...     recipients=["test@example.com"]
+            ... )
+            >>> print(result)
+            {'success': True, 'message': 'Email sent successfully to 1 recipient(s)', ...}
+        """
+        # Normalize recipients to list of dicts
+        normalized_recipients = []
+        for recipient in recipients:
+            if isinstance(recipient, dict):
+                normalized_recipients.append({
+                    "email": recipient.get("email", str(recipient)),
+                    "name": recipient.get("name", recipient.get("email", "")),
+                    "id": recipient.get("id")
+                })
+            else:
+                # String format (just email)
+                normalized_recipients.append({
+                    "email": str(recipient),
+                    "name": str(recipient)
+                })
+
+        payload = {
+            "action": "send_email",
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "urgency": urgency,
+            "data": {
+                "subject": subject,
+                "body": body,
+                "recipients": normalized_recipients,
+                "tone": tone,
+                "urgency": urgency
+            },
+            "trace": {
+                "request_id": request_id or f"email_{datetime.utcnow().timestamp()}",
+                "thought_stream_id": thought_stream_id,
+                "conversation_id": conversation_id
+            }
+        }
+
+        logger.info(
+            "sending_email_via_n8n",
+            recipients_count=len(normalized_recipients),
+            subject=subject,
+            urgency=urgency
+        )
+
+        try:
+            result = await self._send_webhook("/webhook/send-email", payload)
+
+            logger.info(
+                "email_sent_via_n8n",
+                success=result.get("success", False),
+                recipients_count=len(normalized_recipients)
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(
+                "email_send_failed",
+                error=str(e),
+                recipients_count=len(normalized_recipients)
+            )
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Échec de l'envoi d'email: {str(e)}"
+            }
 
     async def trigger_custom_workflow(
         self,

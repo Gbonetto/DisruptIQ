@@ -101,17 +101,21 @@ TABLES DISPONIBLES:
    - processed: Boolean
 """
 
-    async def process(self, user_input: str, db: AsyncSession) -> Dict[str, Any]:
+    async def process(self, user_input: str, db: AsyncSession, thought_stream=None) -> Dict[str, Any]:
         """
         Process natural language query and execute SQL
 
         Args:
             user_input: User's question in natural language
             db: Database session
+            thought_stream: Optional ThoughtStream for CoT display
 
         Returns:
             Dict with success, message, data, sql_query
         """
+        # Import here to avoid circular imports
+        from app.services.agents.thought_stream import ThoughtType
+
         try:
             # Step 1: Generate SQL query
             sql_query = await self._generate_sql(user_input)
@@ -138,6 +142,22 @@ TABLES DISPONIBLES:
                         "user_input": user_input
                     }
                 }
+
+            # Emit thought with SQL query for CoT display
+            if thought_stream:
+                # Extract tables from query for display
+                tables_in_query = [t for t in ALLOWED_TABLES if t.lower() in sql_query.lower()]
+                await thought_stream.add_thought(
+                    ThoughtType.SQL_EXECUTING,
+                    title="Exécution de la requête SQL",
+                    content=f"Interrogation des tables : {', '.join(tables_in_query) if tables_in_query else 'base de données'}",
+                    agent="sql_agent",
+                    data={
+                        "query": sql_query,
+                        "tables": tables_in_query
+                    },
+                    progress=0.6
+                )
 
             # Step 3: Execute SQL
             results = await self._execute_sql(sql_query, db)

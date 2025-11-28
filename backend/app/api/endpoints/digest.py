@@ -642,3 +642,297 @@ async def process_emails(
             status_code=500,
             detail=f"Failed to process emails: {str(e)}"
         )
+
+
+# ============================================================================
+# ROUTES PREMIUM - Composants Avancés
+# ============================================================================
+
+class DigestIntelligentRequest(BaseModel):
+    """Requête génération digest intelligent avec composants premium"""
+    emails_bruts: Optional[List[Dict[str, Any]]] = None  # Emails directs à classifier (optionnel)
+    periode_heures: Optional[int] = 24
+    max_emails: Optional[int] = 100
+    generer_actions: Optional[bool] = True
+
+
+class ActionsRequest(BaseModel):
+    """Requête exécution actions automatiques"""
+    email_ids: Optional[List[str]] = None  # Si None, traite tous les emails critiques/urgents récents
+
+
+@router.post("/generate-intelligent")
+async def generer_digest_intelligent(
+    request: DigestIntelligentRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Génère un digest intelligent avec classification avancée
+
+    Utilise les composants premium:
+    - ClassificateurEmailAvance: 6 niveaux urgence + extraction entités
+    - AgentResumeurDigest: Résumé Markdown structuré + tendances
+    - ExecuteurActions: Actions automatiques selon urgence
+
+    Returns:
+        - resume_markdown: Digest formaté en Markdown
+        - statistiques: Stats détaillées (total, par urgence, etc.)
+        - actions_urgentes: Top actions prioritaires
+        - tendances: Patterns identifiés
+        - emails_classifies: Liste complète emails avec classification
+    """
+    try:
+        from app.services.classificateur_email_avance import ClassificateurEmailAvance
+        from app.services.agents.agent_resumeur_digest import AgentResumeurDigest
+
+        logger.info("generation_digest_intelligent_demarree",
+                   periode_heures=request.periode_heures,
+                   max_emails=request.max_emails,
+                   emails_bruts_fournis=request.emails_bruts is not None)
+
+        # 1. Récupérer emails (soit depuis request, soit depuis DB)
+        if request.emails_bruts:
+            # Mode 1: Emails fournis directement dans la requête
+            emails_bruts = request.emails_bruts
+            logger.info("utilisation_emails_bruts_request", count=len(emails_bruts))
+        else:
+            # Mode 2: Récupération depuis DB
+            since_time = datetime.now() - timedelta(hours=request.periode_heures)
+            result = await db.execute(
+                select(Email)
+                .where(Email.received_at >= since_time)
+                .order_by(Email.received_at.desc())
+                .limit(request.max_emails)
+            )
+            emails_db = result.scalars().all()
+
+            if not emails_db:
+                return {
+                    "resume_markdown": f"# 📧 Digest Emails - Aucun email trouvé\n\nAucun email reçu dans les dernières {request.periode_heures}h.",
+                    "statistiques": {"total_emails": 0},
+                    "actions_urgentes": [],
+                    "tendances": [],
+                    "emails_classifies": []
+                }
+
+            emails_bruts = [
+                {
+                    "id_message": email.message_id,
+                    "sujet": email.subject,
+                    "corps": email.body,
+                    "expediteur": email.sender,
+                    "recu_le": email.received_at
+                }
+                for email in emails_db
+            ]
+            logger.info("utilisation_emails_db", count=len(emails_bruts))
+
+        # 2. Classification avancée batch
+        classificateur = ClassificateurEmailAvance()
+
+        emails_classifies = await classificateur.classifier_batch(emails_bruts, taille_batch=20)
+        logger.info("classification_batch_terminee", total=len(emails_classifies))
+
+        # 3. Génération digest avec résumés intelligents
+        agent_resumeur = AgentResumeurDigest()
+        digest = await agent_resumeur.generer_digest(
+            emails_classifies,
+            periode_heures=request.periode_heures
+        )
+
+        # 4. Ajouter liste emails pour UI
+        digest["emails_classifies"] = [
+            {
+                "id_message": e.id_message,
+                "sujet": e.sujet,
+                "expediteur": e.expediteur,
+                "urgence": e.urgence.value,
+                "categorie": e.categorie.value,
+                "confiance": e.confiance,
+                "resume": e.resume,
+                "action_requise": e.action_requise,
+                "action_suggeree": e.action_suggeree,
+                "recu_le": e.recu_le.isoformat() if e.recu_le else None
+            }
+            for e in emails_classifies
+        ]
+
+        logger.info("digest_intelligent_genere",
+                   total_emails=digest["statistiques"]["total_emails"],
+                   nb_actions=len(digest["actions_urgentes"]))
+
+        return digest
+
+    except Exception as e:
+        logger.error("generation_digest_intelligent_echouee", erreur=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec génération digest intelligent: {str(e)}"
+        )
+
+
+@router.get("/actions-pending")
+async def get_actions_pending(
+    periode_heures: int = 24,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Récupère les actions urgentes en attente
+
+    Retourne uniquement les emails critiques/urgents des dernières N heures
+    qui nécessitent une action immédiate
+
+    Returns:
+        Liste actions avec priorité, sujet, action suggérée
+    """
+    try:
+        from app.services.classificateur_email_avance import ClassificateurEmailAvance, NiveauUrgenceEmail
+
+        # Récupérer emails récents non traités
+        since_time = datetime.now() - timedelta(hours=periode_heures)
+        result = await db.execute(
+            select(Email)
+            .where(Email.received_at >= since_time)
+            .where(Email.processed == True)  # Processed mais pas encore actionné
+            .order_by(Email.received_at.desc())
+        )
+        emails_db = result.scalars().all()
+
+        if not emails_db:
+            return {"actions_pending": [], "total": 0}
+
+        # Classifier pour identifier urgences
+        classificateur = ClassificateurEmailAvance()
+        emails_bruts = [
+            {
+                "id_message": email.message_id,
+                "sujet": email.subject,
+                "corps": email.body,
+                "expediteur": email.sender
+            }
+            for email in emails_db
+        ]
+
+        emails_classifies = await classificateur.classifier_batch(emails_bruts, taille_batch=20)
+
+        # Filtrer uniquement critiques/urgents
+        actions_pending = []
+        for email in emails_classifies:
+            if email.urgence in [NiveauUrgenceEmail.CRITIQUE, NiveauUrgenceEmail.URGENT]:
+                actions_pending.append({
+                    "priorite": "🚨 CRITIQUE" if email.urgence == NiveauUrgenceEmail.CRITIQUE else "⚠️ URGENT",
+                    "id_message": email.id_message,
+                    "sujet": email.sujet,
+                    "expediteur": email.expediteur,
+                    "categorie": email.categorie.value,
+                    "action_suggeree": email.action_suggeree,
+                    "confiance": email.confiance
+                })
+
+        logger.info("actions_pending_recuperees", total=len(actions_pending))
+
+        return {
+            "actions_pending": actions_pending,
+            "total": len(actions_pending),
+            "periode_heures": periode_heures
+        }
+
+    except Exception as e:
+        logger.error("recuperation_actions_pending_echouee", erreur=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec récupération actions: {str(e)}"
+        )
+
+
+@router.post("/execute-actions")
+async def execute_actions(
+    request: ActionsRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Exécute actions automatiques pour emails urgents
+
+    Workflow:
+    - 🚨 CRITIQUE → Workflow N8N immédiat (fuite, incendie, etc.)
+    - ⚠️ URGENT → Recherche SQL/RAG + suggestion contexte
+    - 📌 IMPORTANT → Génération email draft réponse
+    - 📋 ROUTINIER → Création tâche
+
+    Returns:
+        Résultats avec workflows déclenchés, requêtes SQL, drafts, tâches
+    """
+    try:
+        from app.services.classificateur_email_avance import ClassificateurEmailAvance
+        from app.services.executeur_actions import ExecuteurActions
+
+        logger.info("execution_actions_demarree", email_ids=request.email_ids)
+
+        # Si IDs spécifiés, récupérer ces emails, sinon prendre récents critiques/urgents
+        if request.email_ids:
+            result = await db.execute(
+                select(Email).where(Email.message_id.in_(request.email_ids))
+            )
+        else:
+            # Prendre emails des dernières 48h
+            since_time = datetime.now() - timedelta(hours=48)
+            result = await db.execute(
+                select(Email)
+                .where(Email.received_at >= since_time)
+                .order_by(Email.received_at.desc())
+                .limit(50)
+            )
+
+        emails_db = result.scalars().all()
+
+        if not emails_db:
+            return {
+                "workflows_declenches": [],
+                "requetes_sql_executees": [],
+                "drafts_generes": [],
+                "taches_creees": [],
+                "total_actions": 0
+            }
+
+        # Classifier emails
+        classificateur = ClassificateurEmailAvance()
+        emails_bruts = [
+            {
+                "id_message": email.message_id,
+                "sujet": email.subject,
+                "corps": email.body,
+                "expediteur": email.sender
+            }
+            for email in emails_db
+        ]
+
+        emails_classifies = await classificateur.classifier_batch(emails_bruts, taille_batch=20)
+
+        # Exécuter actions
+        executeur = ExecuteurActions()
+        resultats = await executeur.executer_actions_depuis_digest(emails_classifies, db)
+
+        total_actions = (
+            len(resultats["workflows_declenches"]) +
+            len(resultats["requetes_sql_executees"]) +
+            len(resultats["drafts_generes"]) +
+            len(resultats["taches_creees"])
+        )
+
+        resultats["total_actions"] = total_actions
+
+        logger.info("execution_actions_terminee",
+                   total_actions=total_actions,
+                   workflows=len(resultats["workflows_declenches"]),
+                   sql=len(resultats["requetes_sql_executees"]),
+                   drafts=len(resultats["drafts_generes"]),
+                   taches=len(resultats["taches_creees"]))
+
+        return resultats
+
+    except Exception as e:
+        logger.error("execution_actions_echouee", erreur=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec exécution actions: {str(e)}"
+        )

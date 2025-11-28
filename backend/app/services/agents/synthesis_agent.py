@@ -271,6 +271,14 @@ CONSIGNES DE RÉPONSE :
 8. Synthétise les informations de plusieurs sources si pertinent
 9. Pour les tableaux : génère UNIQUEMENT le tableau, sans texte explicatif avant/après
 10. Reste concis, sobre et élégant
+11. **Formatage Markdown obligatoire** :
+    - Utilise **gras** pour les valeurs clés (montants, dates, noms importants)
+    - Structure avec des listes à puces si plusieurs éléments
+    - Pour les résumés de documents, utilise ce format :
+      - **Prestataire :** Nom[N]
+      - **Montant :** X,XX €[N]
+      - **Date :** JJ/MM/AAAA[N]
+    - Ajoute une phrase de conclusion si pertinent
 """
 
         # Context section
@@ -327,8 +335,10 @@ N'ajoute PAS de section "Sources" à la fin - elle sera ajoutée automatiquement
 
             header = f"[{source.id}] {source.title}{page_info} (confiance: {confidence_pct}%)"
 
-            # Excerpt (truncated to 300 chars for prompt efficiency)
-            excerpt = source.chunk_text[:300] + "..." if len(source.chunk_text) > 300 else source.chunk_text
+            # Send FULL chunk to LLM - we increased chunk_size to 2000 for structured content
+            # Mistral can handle 32k context, and HybridExecutor limits to 15 chunks max (30k chars)
+            # Information is often in the MIDDLE/END of chunks (e.g., "Fenêtres = coloris acajou")
+            excerpt = source.chunk_text  # No truncation
 
             formatted.append(f"{header}\n{excerpt}\n")
 
@@ -617,7 +627,7 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
         Compute overall confidence score for the response
 
         Factors:
-        - Average source confidence (reranked scores)
+        - INTERGALACTIC MODE: Weighted source confidence (top 5 chunks 70%, rest 30%)
         - Citation coverage (% of factual sentences cited)
 
         Args:
@@ -630,8 +640,23 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
         if not sources:
             return 0.0
 
-        # Factor 1: Average source confidence
-        avg_source_confidence = sum(s.confidence for s in sources) / len(sources)
+        # INTERGALACTIC MODE: Weighted confidence calculation
+        # Top 5 chunks are weighted 70%, rest 30%
+        # This prioritizes the most relevant chunks
+        top_k = 5
+        if len(sources) <= top_k:
+            # All sources are top sources
+            avg_source_confidence = sum(s.confidence for s in sources) / len(sources)
+        else:
+            # Split into top 5 and rest
+            top_sources = sources[:top_k]
+            rest_sources = sources[top_k:]
+
+            top_avg = sum(s.confidence for s in top_sources) / len(top_sources)
+            rest_avg = sum(s.confidence for s in rest_sources) / len(rest_sources)
+
+            # Weighted average: top chunks 70%, rest 30%
+            avg_source_confidence = (0.7 * top_avg) + (0.3 * rest_avg)
 
         # Factor 2: Citation coverage
         factual_sentences = [s for s in sentences if s.is_factual]
@@ -648,7 +673,9 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
             "confidence_computed",
             source_conf=avg_source_confidence,
             citation_cov=citation_coverage,
-            overall=overall
+            overall=overall,
+            top_sources_count=min(len(sources), top_k),
+            rest_sources_count=max(0, len(sources) - top_k)
         )
 
         return overall

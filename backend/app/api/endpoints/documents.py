@@ -340,8 +340,68 @@ async def upload_document(
         rag_service = RAGService()
         await rag_service.initialize()  # Initialize Qdrant collection
 
-        # Chunk text for better retrieval
-        chunks = doc_service.chunk_text(extracted_text, chunk_size=1000, overlap=200)
+        # INTERGALACTIC MODE: Adaptive chunking based on document type
+        def detect_document_type(text: str, filename: str) -> str:
+            """
+            Classify document type for optimal chunking
+
+            Returns: "invoice" | "legal" | "narrative" | "technical"
+            """
+            text_lower = text.lower()
+
+            # Invoice indicators
+            invoice_keywords = ["facture", "invoice", "devis", "montant", "tva", "total ttc"]
+            invoice_score = sum(1 for kw in invoice_keywords if kw in text_lower)
+
+            # Legal indicators
+            legal_keywords = ["règlement", "article", "copropriété", "contrat", "clause", "alinéa"]
+            legal_score = sum(1 for kw in legal_keywords if kw in text_lower)
+
+            # Filename hints
+            if "facture" in filename.lower() or "invoice" in filename.lower():
+                return "invoice"
+            if "reglement" in filename.lower() or "contrat" in filename.lower():
+                return "legal"
+
+            # Text-based classification
+            if invoice_score >= 3:
+                return "invoice"
+            if legal_score >= 3:
+                return "legal"
+
+            # Length-based fallback
+            if len(text) < 2000:
+                return "invoice"  # Short docs likely invoices
+            if len(text) > 20000:
+                return "legal"    # Long docs likely legal
+
+            return "narrative"  # Default
+
+        doc_type = detect_document_type(extracted_text, db_document.original_filename)
+
+        # Adaptive chunk sizing - optimized for document type
+        chunk_config = {
+            "invoice": {"size": 800, "overlap": 150},    # Small, focused chunks for invoices
+            "legal": {"size": 1200, "overlap": 250},     # Medium chunks for legal docs (structured content)
+            "narrative": {"size": 1000, "overlap": 200}, # Balanced for general text
+            "technical": {"size": 1000, "overlap": 200}  # Balanced for technical docs
+        }
+
+        config = chunk_config[doc_type]
+
+        logger.info("adaptive_chunking_applied",
+                   document_id=db_document.id,
+                   doc_type=doc_type,
+                   chunk_size=config["size"],
+                   overlap=config["overlap"],
+                   text_length=len(extracted_text))
+
+        # Apply adaptive chunking
+        chunks = doc_service.chunk_text(
+            extracted_text,
+            chunk_size=config["size"],
+            overlap=config["overlap"]
+        )
 
         if chunks:
             # Build enhanced metadata for indexation
@@ -351,6 +411,8 @@ async def upload_document(
                 "title": db_document.original_filename,
                 "mime_type": file.content_type,
                 "document_type": document_type,
+                "detected_doc_type": doc_type,  # INTERGALACTIC: Add detected type for adaptive retrieval
+                "chunk_size_used": config["size"],  # INTERGALACTIC: Track chunk configuration
                 "uploaded_at": datetime.now().isoformat()
             }
 
@@ -823,3 +885,414 @@ async def ocr_progress_websocket(websocket: WebSocket, task_id: str):
         # Unregister websocket
         ocr_progress_service.unregister_websocket(task_id, websocket)
         logger.info("websocket_cleaned_up", task_id=task_id)
+
+
+# ============================================================================
+# ROUTES PREMIUM - Extraction et Génération de Tableaux
+# ============================================================================
+
+from pydantic import BaseModel
+from typing import Dict, Any
+
+
+class ExtractionTableauxRequest(BaseModel):
+    """Requête extraction tableaux depuis document"""
+    document_id: int
+
+
+class GenerationTableauRequest(BaseModel):
+    """Requête génération tableau depuis prompt utilisateur"""
+    document_id: int
+    prompt_utilisateur: str
+
+
+@router.post("/{document_id}/extraire-tableaux")
+async def extraire_tableaux_document(
+    document_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Extraire tous les tableaux d'un document
+
+    Utilise AgentGenerationTableaux pour:
+    - Détection automatique de tableaux
+    - Extraction via Vision (Pixtral) si image disponible
+    - Extraction via LLM sur texte en fallback
+    - Export JSON/CSV/Excel/Markdown
+
+    Returns:
+        Liste de tableaux structurés avec métadonnées
+    """
+    try:
+        from app.services.agents.agent_generation_tableaux import AgentGenerationTableaux
+
+        # Récupérer document
+        result = await db.execute(
+            select(Document).where(Document.id == document_id)
+        )
+        document = result.scalar_one_or_none()
+
+        if not document:
+            raise HTTPException(status_code=404, detail="Document non trouvé")
+
+        logger.info("extraction_tableaux_demarree", document_id=document_id)
+
+        # Initialiser agent
+        agent = AgentGenerationTableaux()
+
+        # Extraire tableaux
+        tableaux = await agent.extraire_tableaux_depuis_document(
+            texte_document=document.extracted_text or "",
+            contenu_image=None,  # TODO: Ajouter support image si disponible
+            nom_fichier=document.original_filename
+        )
+
+        # Sérialiser pour JSON
+        resultats = []
+        for tableau in tableaux:
+            resultats.append({
+                "titre": tableau.titre,
+                "entetes": tableau.entetes,
+                "lignes": tableau.lignes,
+                "confiance": tableau.confiance,
+                "metadonnees": tableau.metadonnees,
+                "exports": {
+                    "csv": tableau.vers_csv(),
+                    "markdown": tableau.vers_markdown()
+                }
+            })
+
+        logger.info("extraction_tableaux_terminee",
+                   document_id=document_id,
+                   nombre_tableaux=len(resultats))
+
+        return {
+            "document_id": document_id,
+            "nom_fichier": document.original_filename,
+            "tableaux": resultats,
+            "total_tableaux": len(resultats)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("extraction_tableaux_echouee",
+                    document_id=document_id,
+                    erreur=str(e),
+                    exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec extraction tableaux: {str(e)}"
+        )
+
+
+@router.post("/{document_id}/generer-tableau")
+async def generer_tableau_depuis_prompt(
+    document_id: int,
+    request: GenerationTableauRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Générer un tableau personnalisé depuis un prompt utilisateur
+
+    FONCTIONNALITÉ PHARE: L'utilisateur dit "fais-moi un tableau avec fournisseur, montant, date"
+    et on le génère automatiquement!
+
+    Args:
+        document_id: ID du document source
+        prompt_utilisateur: Demande utilisateur (ex: "tableau avec fournisseur, montant TTC, date")
+
+    Returns:
+        Tableau structuré correspondant à la demande
+    """
+    try:
+        from app.services.agents.agent_generation_tableaux import AgentGenerationTableaux
+
+        # Récupérer document
+        result = await db.execute(
+            select(Document).where(Document.id == document_id)
+        )
+        document = result.scalar_one_or_none()
+
+        if not document:
+            raise HTTPException(status_code=404, detail="Document non trouvé")
+
+        logger.info("generation_tableau_depuis_prompt_demarree",
+                   document_id=document_id,
+                   prompt=request.prompt_utilisateur[:100])
+
+        # Initialiser agent
+        agent = AgentGenerationTableaux()
+
+        # Générer tableau
+        tableau = await agent.generer_tableau_depuis_prompt(
+            prompt_utilisateur=request.prompt_utilisateur,
+            texte_document=document.extracted_text or "",
+            contexte={
+                "document_id": document_id,
+                "nom_fichier": document.original_filename
+            }
+        )
+
+        logger.info("generation_tableau_terminee",
+                   document_id=document_id,
+                   nombre_lignes=len(tableau.lignes))
+
+        return {
+            "document_id": document_id,
+            "prompt_utilisateur": request.prompt_utilisateur,
+            "tableau": {
+                "titre": tableau.titre,
+                "entetes": tableau.entetes,
+                "lignes": tableau.lignes,
+                "confiance": tableau.confiance,
+                "metadonnees": tableau.metadonnees
+            },
+            "exports": {
+                "csv": tableau.vers_csv(),
+                "markdown": tableau.vers_markdown()
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("generation_tableau_echouee",
+                    document_id=document_id,
+                    erreur=str(e),
+                    exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec génération tableau: {str(e)}"
+        )
+
+
+@router.get("/{document_id}/tableaux/{index}/export-excel")
+async def exporter_tableau_excel(
+    document_id: int,
+    index: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Exporter un tableau spécifique en Excel
+
+    Args:
+        document_id: ID du document
+        index: Index du tableau (0-based)
+
+    Returns:
+        Fichier Excel en StreamingResponse
+    """
+    try:
+        from app.services.agents.agent_generation_tableaux import AgentGenerationTableaux
+
+        # Récupérer document
+        result = await db.execute(
+            select(Document).where(Document.id == document_id)
+        )
+        document = result.scalar_one_or_none()
+
+        if not document:
+            raise HTTPException(status_code=404, detail="Document non trouvé")
+
+        # Extraire tableaux
+        agent = AgentGenerationTableaux()
+        tableaux = await agent.extraire_tableaux_depuis_document(
+            texte_document=document.extracted_text or "",
+            nom_fichier=document.original_filename
+        )
+
+        if index >= len(tableaux):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tableau {index} non trouvé (total: {len(tableaux)})"
+            )
+
+        tableau = tableaux[index]
+
+        # Générer Excel
+        excel_bytes = tableau.vers_bytes_excel()
+
+        # Retourner en streaming
+        return StreamingResponse(
+            io.BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename=tableau_{document_id}_{index}.xlsx"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("export_excel_echoue",
+                    document_id=document_id,
+                    index=index,
+                    erreur=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec export Excel: {str(e)}"
+        )
+
+
+# ============================================================================
+# ROUTE PREMIUM - Question & Answer sur Documents (RAG)
+# ============================================================================
+
+from pydantic import BaseModel
+
+class DocumentQuestionRequest(BaseModel):
+    """Requête question sur documents"""
+    question: str
+    document_ids: Optional[List[int]] = None  # Si None, cherche dans tous les docs
+    top_k: Optional[int] = 3  # Nombre de chunks à retourner
+    use_reranker: Optional[bool] = True
+    use_hybrid: Optional[bool] = True
+    use_query_planning: Optional[bool] = False  # Agentic RAG pour questions complexes
+
+
+@router.post("/ask")
+async def poser_question_documents(
+    request: DocumentQuestionRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Poser une question sur un ou plusieurs documents (RAG Q&A)
+
+    Utilise le RAGService existant avec toutes ses optimisations:
+    - Recherche vectorielle (Qdrant + Mistral embeddings)
+    - Hybrid search (BM25 + Vector)
+    - Reranking (cross-encoder)
+    - Query planning (agentic RAG pour questions complexes)
+    - Verification & Reflection agents
+
+    Use Cases:
+    - "Quel est le montant total des factures ?"
+    - "Liste tous les numéros d'appartement mentionnés"
+    - "Résume les travaux prévus en 2024"
+    - "Qui sont les fournisseurs cités dans les documents ?"
+
+    Args:
+        question: Question utilisateur
+        document_ids: IDs documents à interroger (optionnel, tous par défaut)
+        top_k: Nombre de passages pertinents à retourner
+        use_reranker: Activer reranking pour meilleure précision
+        use_hybrid: Activer hybrid search (BM25 + vector)
+        use_query_planning: Activer agentic RAG pour questions multi-hop
+
+    Returns:
+        - question: Question originale
+        - reponse: Réponse générée par LLM
+        - sources: Passages sources utilisés (avec scores)
+        - contexte_complet: Texte complet utilisé pour génération
+    """
+    try:
+        from app.services.rag_service import RAGService
+        from app.services.llm_service import LLMService
+
+        logger.info("question_document_recue",
+                   question=request.question[:100],
+                   document_ids=request.document_ids,
+                   top_k=request.top_k)
+
+        # Initialiser services
+        rag_service = RAGService()
+        await rag_service.initialize()
+
+        llm_service = LLMService()
+
+        # 1. Rechercher passages pertinents avec RAG
+        chunks = await rag_service.search(
+            query=request.question,
+            limit=request.top_k,
+            document_ids=request.document_ids,
+            use_reranker=request.use_reranker,
+            use_hybrid=request.use_hybrid,
+            use_query_planning=request.use_query_planning
+        )
+
+        if not chunks:
+            return {
+                "question": request.question,
+                "reponse": "Aucune information pertinente trouvée dans les documents disponibles.",
+                "sources": [],
+                "contexte_complet": "",
+                "confiance": 0.0
+            }
+
+        # 2. Construire contexte à partir des chunks
+        contexte_parts = []
+        sources = []
+
+        for i, chunk in enumerate(chunks, 1):
+            text = chunk.get('content') or chunk.get('text', '')
+            score = chunk.get('reranked_score', chunk.get('score', 0))
+            doc_id = chunk.get('document_id')
+
+            contexte_parts.append(f"[Passage {i}]\n{text}\n")
+
+            sources.append({
+                "passage_num": i,
+                "document_id": doc_id,
+                "text": text[:300] + "..." if len(text) > 300 else text,
+                "score": round(score, 4),
+                "metadata": chunk.get('metadata', {})
+            })
+
+        contexte_complet = "\n---\n".join(contexte_parts)
+
+        # 3. Générer réponse avec LLM
+        prompt = f"""Tu es un assistant expert en analyse de documents pour la gestion de copropriétés.
+
+Question: {request.question}
+
+Contexte (passages pertinents des documents):
+{contexte_complet}
+
+Instructions:
+- Réponds de manière précise et concise à la question
+- Base-toi UNIQUEMENT sur les passages fournis ci-dessus
+- Si l'information n'est pas dans le contexte, dis-le clairement
+- Cite les numéros de passages ([Passage X]) quand tu utilises une information
+- Pour les montants, dates, noms: cite EXACTEMENT ce qui est écrit
+- Si plusieurs éléments sont demandés (ex: liste), structure ta réponse clairement
+
+Réponse:"""
+
+        reponse = await llm_service.generate_response(
+            prompt=prompt,
+            temperature=0.1,  # Basse température pour précision factuelle
+            max_tokens=800
+        )
+
+        # 4. Calculer confiance (score moyen des sources)
+        confiance = sum(s['score'] for s in sources) / len(sources) if sources else 0.0
+
+        logger.info("reponse_generee",
+                   chunks_utilises=len(sources),
+                   confiance=confiance,
+                   longueur_reponse=len(reponse))
+
+        return {
+            "question": request.question,
+            "reponse": reponse.strip(),
+            "sources": sources,
+            "contexte_complet": contexte_complet,
+            "confiance": round(confiance, 4),
+            "metadata": {
+                "chunks_count": len(chunks),
+                "reranker_used": request.use_reranker,
+                "hybrid_used": request.use_hybrid,
+                "query_planning_used": request.use_query_planning
+            }
+        }
+
+    except Exception as e:
+        logger.error("question_document_echouee",
+                    question=request.question[:100],
+                    erreur=str(e),
+                    exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec traitement question: {str(e)}"
+        )

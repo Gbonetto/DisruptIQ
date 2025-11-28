@@ -177,6 +177,11 @@ class DocumentService:
                 text_length=len(extracted_text),
                 pages_with_text=len(text_parts)
             )
+
+            # Phase 2.1: NER Post-OCR enrichment (for metadata extraction during indexing)
+            # Note: Actual enrichment happens in RAG service during indexing
+            logger.info("ocr_text_ready_for_ner_enrichment")
+
             return extracted_text, True
 
         except ImportError as e:
@@ -261,7 +266,7 @@ class DocumentService:
         try:
             from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-            # Semantic-aware splitter
+            # Semantic-aware splitter with entity preservation
             # Prioritizes: paragraphs > sentences > words > characters
             splitter = RecursiveCharacterTextSplitter(
                 chunk_size=chunk_size,
@@ -282,7 +287,10 @@ class DocumentService:
                 keep_separator=True,  # Preserve separators for readability
             )
 
-            chunks = splitter.split_text(text)
+            raw_chunks = splitter.split_text(text)
+
+            # POST-PROCESSING: Fix chunks that cut entities mid-word
+            chunks = self._fix_entity_boundaries(raw_chunks, overlap)
 
             logger.info(
                 "text_chunked_semantic",
@@ -305,6 +313,43 @@ class DocumentService:
             logger.error("semantic_chunking_failed", error=str(e), exc_info=True)
             # Fallback to basic chunking
             return self._basic_chunk_text(text, chunk_size, overlap)
+
+    def _fix_entity_boundaries(self, chunks: list[str], overlap: int) -> list[str]:
+        """
+        Post-process chunks to avoid cutting named entities or key terms
+
+        Ensures chunks don't end mid-entity like "NE|C" or "LAU|RENT MOUSSU"
+        """
+        import re
+
+        fixed_chunks = []
+
+        for i, chunk in enumerate(chunks):
+            # Skip if last chunk
+            if i == len(chunks) - 1:
+                fixed_chunks.append(chunk)
+                continue
+
+            # Check if chunk ends mid-capitalized-word (likely entity)
+            # Pattern: chunk ends with capital letter not followed by space
+            if len(chunk) > 10 and re.search(r'[A-Z][a-z]*$', chunk):
+                # Likely cut mid-entity, try to extend
+                next_chunk = chunks[i + 1] if i + 1 < len(chunks) else ""
+
+                # Extract continuation (up to next space or 20 chars)
+                continuation_match = re.match(r'^([^\s]{1,20})', next_chunk)
+                if continuation_match:
+                    continuation = continuation_match.group(1)
+                    # Add continuation to current chunk
+                    chunk = chunk + continuation
+                    # Remove from next chunk (will be handled by overlap)
+                    logger.debug("entity_boundary_fixed",
+                                chunk_index=i,
+                                added=continuation)
+
+            fixed_chunks.append(chunk)
+
+        return fixed_chunks
 
     def _basic_chunk_text(self, text: str, chunk_size: int, overlap: int) -> list[str]:
         """Fallback basic chunking method (legacy)"""

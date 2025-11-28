@@ -3,7 +3,8 @@ Email Management Endpoints
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
@@ -361,4 +362,167 @@ async def delete_email(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete email: {str(e)}"
+        )
+
+
+# ============================================================================
+# ROUTES PREMIUM - Classification Avancée
+# ============================================================================
+
+class ClassifyEmailRequest(BaseModel):
+    """Requête classification email individuel"""
+    sujet: str
+    corps: str
+    expediteur: str
+    id_message: Optional[str] = ""
+
+
+class ClassifyBatchRequest(BaseModel):
+    """Requête classification batch emails"""
+    emails: List[Dict[str, str]]  # Liste de {sujet, corps, expediteur, id_message}
+    taille_batch: Optional[int] = 20
+
+
+@router.post("/classify-advanced")
+async def classify_email_advanced(request: ClassifyEmailRequest):
+    """
+    Classification avancée d'un email individuel
+
+    Utilise ClassificateurEmailAvance pour:
+    - 6 niveaux d'urgence (critique → spam)
+    - 20+ catégories métier
+    - Extraction entités (téléphone, montant, appartement, etc.)
+    - Suggestion action automatique
+    - Confiance de classification
+
+    Returns:
+        EmailClassifie avec toutes métadonnées enrichies
+    """
+    try:
+        from app.services.classificateur_email_avance import ClassificateurEmailAvance
+
+        logger.info("classification_avancee_demarree",
+                   sujet=request.sujet[:50],
+                   expediteur=request.expediteur)
+
+        classificateur = ClassificateurEmailAvance()
+        email_classifie = await classificateur.classifier(
+            sujet=request.sujet,
+            corps=request.corps,
+            expediteur=request.expediteur,
+            id_message=request.id_message
+        )
+
+        # Sérialiser pour JSON
+        result = {
+            "id_message": email_classifie.id_message,
+            "sujet": email_classifie.sujet,
+            "expediteur": email_classifie.expediteur,
+            "urgence": email_classifie.urgence.value,
+            "categorie": email_classifie.categorie.value,
+            "confiance": email_classifie.confiance,
+            "entites_detectees": email_classifie.entites_detectees,
+            "intention": email_classifie.intention,
+            "action_requise": email_classifie.action_requise,
+            "action_suggeree": email_classifie.action_suggeree,
+            "resume": email_classifie.resume,
+            "mots_cles": email_classifie.mots_cles,
+            "sentiment": email_classifie.sentiment,
+            "classifie_le": email_classifie.classifie_le.isoformat()
+        }
+
+        logger.info("classification_avancee_terminee",
+                   urgence=result["urgence"],
+                   categorie=result["categorie"],
+                   confiance=result["confiance"])
+
+        return result
+
+    except Exception as e:
+        logger.error("classification_avancee_echouee",
+                    erreur=str(e),
+                    exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec classification avancée: {str(e)}"
+        )
+
+
+@router.post("/batch-classify")
+async def classify_emails_batch(request: ClassifyBatchRequest):
+    """
+    Classification batch de plusieurs emails (optimisé)
+
+    Batch processing économise ~94% de coûts LLM:
+    - 50 emails individuels = 50 appels LLM = 0.15€
+    - 50 emails batch (20/appel) = 3 appels LLM = 0.009€
+
+    Args:
+        emails: Liste emails avec {sujet, corps, expediteur, id_message}
+        taille_batch: Nb emails par appel LLM (défaut 20, max recommandé 20)
+
+    Returns:
+        Liste emails classifiés avec métadonnées complètes
+    """
+    try:
+        from app.services.classificateur_email_avance import ClassificateurEmailAvance
+
+        logger.info("classification_batch_demarree",
+                   total_emails=len(request.emails),
+                   taille_batch=request.taille_batch)
+
+        classificateur = ClassificateurEmailAvance()
+        emails_classifies = await classificateur.classifier_batch(
+            request.emails,
+            taille_batch=request.taille_batch
+        )
+
+        # Sérialiser pour JSON
+        results = [
+            {
+                "id_message": e.id_message,
+                "sujet": e.sujet,
+                "expediteur": e.expediteur,
+                "urgence": e.urgence.value,
+                "categorie": e.categorie.value,
+                "confiance": e.confiance,
+                "entites_detectees": e.entites_detectees,
+                "intention": e.intention,
+                "action_requise": e.action_requise,
+                "action_suggeree": e.action_suggeree,
+                "resume": e.resume,
+                "mots_cles": e.mots_cles,
+                "sentiment": e.sentiment,
+                "classifie_le": e.classifie_le.isoformat()
+            }
+            for e in emails_classifies
+        ]
+
+        # Stats par urgence
+        from collections import Counter
+        urgences_count = Counter([e["urgence"] for e in results])
+
+        logger.info("classification_batch_terminee",
+                   total_classifies=len(results),
+                   critiques=urgences_count.get("critique", 0),
+                   urgents=urgences_count.get("urgent", 0),
+                   importants=urgences_count.get("important", 0))
+
+        return {
+            "emails_classifies": results,
+            "total": len(results),
+            "statistiques": {
+                "par_urgence": dict(urgences_count),
+                "taille_batch": request.taille_batch,
+                "nb_appels_llm_estimes": (len(request.emails) // request.taille_batch) + 1
+            }
+        }
+
+    except Exception as e:
+        logger.error("classification_batch_echouee",
+                    erreur=str(e),
+                    exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Échec classification batch: {str(e)}"
         )

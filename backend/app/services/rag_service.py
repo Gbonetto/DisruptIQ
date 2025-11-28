@@ -27,6 +27,7 @@ import uuid
 
 from app.core.config import settings
 from app.services.llm_service import LLMService
+from app.services.query_processor import QueryProcessor
 
 logger = structlog.get_logger()
 
@@ -185,6 +186,20 @@ class RAGService:
                 **metadata
             }
 
+            # Delete existing points for this document to prevent duplicates
+            await self._run_sync(
+                self.client.delete,
+                collection_name=self.collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="document_id",
+                            match=MatchValue(value=document_id)
+                        )
+                    ]
+                )
+            )
+
             # Upload to Qdrant (async wrapper)
             await self._run_sync(
                 self.client.upsert,
@@ -203,6 +218,13 @@ class RAGService:
                 document_id=document_id,
                 point_id=point_id
             )
+
+            # Cache invalidation hook (Phase 1.3)
+            try:
+                from app.services.cache_invalidation_hooks import on_document_indexed
+                await on_document_indexed(document_id, point_id)
+            except Exception as cache_err:
+                logger.warning("cache_invalidation_failed", error=str(cache_err))
 
             return point_id
 
@@ -299,6 +321,20 @@ class RAGService:
                     )
                 )
 
+            # Delete existing points for this document to prevent duplicates
+            await self._run_sync(
+                self.client.delete,
+                collection_name=self.collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="document_id",
+                            match=MatchValue(value=document_id)
+                        )
+                    ]
+                )
+            )
+
             # Batch upload (async wrapper)
             await self._run_sync(
                 self.client.upsert,
@@ -324,6 +360,13 @@ class RAGService:
             except Exception as e:
                 logger.warning("bm25_index_update_failed", error=str(e))
 
+            # Cache invalidation hook (Phase 1.3)
+            try:
+                from app.services.cache_invalidation_hooks import on_document_chunks_indexed
+                await on_document_chunks_indexed(document_id, len(chunks))
+            except Exception as cache_err:
+                logger.warning("cache_invalidation_failed", error=str(cache_err))
+
             return point_ids
 
         except Exception as e:
@@ -343,10 +386,10 @@ class RAGService:
         return self._reranker
 
     async def _get_hybrid_search(self):
-        """Lazy-load hybrid search service"""
+        """Lazy-load hybrid search service (singleton)"""
         if self._hybrid_search is None:
-            from app.services.hybrid_search_service import HybridSearchService
-            self._hybrid_search = HybridSearchService()
+            from app.services.hybrid_search_service import get_hybrid_search_service
+            self._hybrid_search = get_hybrid_search_service()  # Use singleton
         return self._hybrid_search
 
     async def _get_query_expansion(self):
@@ -356,6 +399,82 @@ class RAGService:
             self._query_expansion = QueryExpansionService()
         return self._query_expansion
 
+    def _deduplicate_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Deduplicate chunks by text content with SMART AGGREGATION
+        Used in agentic RAG to merge results from multiple sub-queries
+
+        Key insight: Chunks appearing in multiple sub-queries are likely more relevant!
+        We boost their score based on frequency.
+
+        Args:
+            chunks: List of chunks (potentially duplicated)
+
+        Returns:
+            Deduplicated list with boosted scores for frequent chunks
+        """
+        from collections import Counter
+
+        # Count chunk frequency (how many sub-queries returned this chunk)
+        text_to_chunks = {}
+        text_counter = Counter()
+
+        for chunk in chunks:
+            text = chunk.get('text', '') or chunk.get('chunk', '') or chunk.get('content', '')
+
+            if not text:
+                continue
+
+            # Use first 200 chars as key
+            text_key = text[:200]
+
+            # Track all versions of this chunk
+            if text_key not in text_to_chunks:
+                text_to_chunks[text_key] = []
+
+            text_to_chunks[text_key].append(chunk)
+            text_counter[text_key] += 1
+
+        # Deduplicate with SMART BOOSTING
+        result = []
+
+        for text_key, chunk_versions in text_to_chunks.items():
+            frequency = text_counter[text_key]
+
+            # Find best chunk version (highest score)
+            best_chunk = max(
+                chunk_versions,
+                key=lambda c: c.get('score', 0) or c.get('reranked_score', 0)
+            )
+
+            # BOOST score if chunk appears in multiple sub-queries
+            original_score = best_chunk.get('score', 0) or best_chunk.get('reranked_score', 0)
+
+            if frequency > 1:
+                # Frequency boost: +20% per additional occurrence (capped at +60%)
+                boost_multiplier = 1 + min(0.6, (frequency - 1) * 0.2)
+                boosted_score = original_score * boost_multiplier
+
+                # Update score
+                best_chunk['score'] = boosted_score
+                if 'reranked_score' in best_chunk:
+                    best_chunk['reranked_score'] = boosted_score
+
+                # Add metadata
+                best_chunk['metadata'] = best_chunk.get('metadata', {})
+                best_chunk['metadata']['frequency_boost'] = boost_multiplier
+                best_chunk['metadata']['appeared_in_n_subqueries'] = frequency
+
+                logger.debug("chunk_frequency_boost",
+                            frequency=frequency,
+                            boost=f"{(boost_multiplier-1)*100:.0f}%",
+                            original_score=f"{original_score:.1%}",
+                            boosted_score=f"{boosted_score:.1%}")
+
+            result.append(best_chunk)
+
+        return result
+
     async def search(
         self,
         query: str,
@@ -364,7 +483,10 @@ class RAGService:
         document_ids: Optional[List[int]] = None,
         use_reranker: bool = True,
         use_hybrid: bool = True,
-        use_query_expansion: bool = False
+        use_query_expansion: bool = False,
+        use_query_planning: bool = False,
+        use_verification: bool = False,
+        use_reflection: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant documents
@@ -377,6 +499,8 @@ class RAGService:
             use_reranker: Use cross-encoder re-ranking (default: True)
             use_hybrid: Use hybrid search (BM25 + Vector) (default: True)
             use_query_expansion: Use query expansion for better recall (default: False)
+            use_query_planning: Use agentic query decomposition for multi-hop queries (default: False)
+            use_verification: Use verification agent to validate and refine results (default: False)
 
         Returns:
             List of search results with scores
@@ -386,10 +510,14 @@ class RAGService:
 
         Note:
             Search pipeline:
-            1. Vector search (retrieves 3x limit if reranker enabled)
-            2. Hybrid fusion with BM25 (if use_hybrid=True)
-            3. Cross-encoder re-ranking (if use_reranker=True)
+            1. Query planning (if use_query_planning=True, decomposes complex queries)
+            2. Vector search (retrieves 3x limit if reranker enabled)
+            3. Hybrid fusion with BM25 (if use_hybrid=True)
+            4. Cross-encoder re-ranking (if use_reranker=True)
+            5. Verification (if use_verification=True, validates and refines results)
             Total latency: ~50-150ms depending on options
+            + 100-200ms if query planning
+            + 200-500ms if verification (with potential re-searches)
         """
         # Validate inputs
         if not query or not query.strip():
@@ -398,8 +526,127 @@ class RAGService:
         if limit < 1 or limit > 100:
             raise ValueError("Limit must be between 1 and 100")
 
+        # AGENTIC RAG: Query Planning (if enabled)
+        # Decomposes complex queries into sub-queries for better retrieval
+        if use_query_planning:
+            try:
+                from app.services.agents.query_planning_agent import QueryPlanningAgent
+
+                planner = QueryPlanningAgent()
+                plan = await planner.plan_query(query)
+
+                # If query is complex, execute sub-queries and merge
+                if plan.is_complex:
+                    logger.info("agentic_rag_activated",
+                               query_type=plan.query_type.value,
+                               sub_queries_count=len(plan.sub_queries),
+                               strategy=plan.aggregation_strategy.value)
+
+                    # Execute sub-queries
+                    all_chunks = []
+                    for sub_query in plan.sub_queries:
+                        logger.info("executing_sub_query",
+                                   order=sub_query.order,
+                                   query=sub_query.query[:60])
+
+                        # Recursive call WITHOUT query_planning to avoid infinite loop
+                        sub_chunks = await self.search(
+                            query=sub_query.query,
+                            limit=sub_query.expected_doc_count,
+                            filter_conditions=filter_conditions,
+                            document_ids=document_ids,
+                            use_reranker=use_reranker,
+                            use_hybrid=use_hybrid,
+                            use_query_expansion=False,  # Disable expansion for sub-queries
+                            use_query_planning=False  # CRITICAL: Disable to avoid recursion
+                        )
+
+                        all_chunks.extend(sub_chunks)
+
+                    # Aggregate results based on strategy
+                    if plan.aggregation_strategy.value == "concat":
+                        # Deduplicate and rerank all chunks together
+                        merged_chunks = self._deduplicate_chunks(all_chunks)
+
+                        # Rerank merged chunks if reranker enabled
+                        if use_reranker and merged_chunks:
+                            reranker = await self._get_reranker()
+                            merged_chunks = await reranker.rerank(
+                                query=query,  # Use ORIGINAL query for final reranking
+                                results=merged_chunks,
+                                top_k=limit
+                            )
+                        else:
+                            # Just sort by score and limit
+                            merged_chunks = sorted(
+                                merged_chunks,
+                                key=lambda x: x.get('score', 0),
+                                reverse=True
+                            )[:limit]
+
+                        logger.info("agentic_rag_completed",
+                                   sub_queries_executed=len(plan.sub_queries),
+                                   total_chunks_retrieved=len(all_chunks),
+                                   final_chunks=len(merged_chunks))
+
+                        return merged_chunks
+
+                    elif plan.aggregation_strategy.value == "compare":
+                        # Return results grouped by sub-query (for comparison)
+                        # Format same as normal search but with metadata indicating source
+                        for chunk in all_chunks:
+                            chunk['metadata'] = chunk.get('metadata', {})
+                            chunk['metadata']['agentic_rag'] = True
+                            chunk['metadata']['query_plan'] = plan.reasoning
+
+                        return all_chunks[:limit]
+
+                    else:
+                        # Other strategies: merge, filter, sequence
+                        # For now, fallback to concat
+                        merged_chunks = self._deduplicate_chunks(all_chunks)
+                        return merged_chunks[:limit]
+
+                else:
+                    # Simple query - continue with normal pipeline
+                    logger.info("query_classified_as_simple",
+                               reasoning=plan.reasoning)
+
+            except Exception as e:
+                logger.error("query_planning_failed_fallback",
+                            error=str(e),
+                            query=query[:60])
+                # Continue with normal search on error
+
+        # Preprocess query: remove stopwords, normalize
+        query_processor = QueryProcessor()
+        normalized_query = query_processor.normalize(query)
+
+        # OPTIMIZATION: For long queries (>8 words), extract keywords for BM25
+        # This helps BM25 focus on key terms instead of being diluted
+        query_length = len(query.split())
+        if query_length > 8:
+            keywords_query = query_processor.extract_keywords(query, max_keywords=5)
+            logger.info("long_query_simplified",
+                       original_length=query_length,
+                       keywords=keywords_query)
+            # Use keywords for BM25, full normalized for embeddings
+            query_for_bm25 = keywords_query
+        else:
+            query_for_bm25 = normalized_query
+
+        logger.info("query_preprocessing",
+                   original=query[:50],
+                   normalized=normalized_query[:50],
+                   length_before=len(query.split()),
+                   length_after=len(normalized_query.split()))
+
+        # Use normalized query for embedding (better semantic matching)
+        query_for_embedding = normalized_query
+
         try:
             # Apply query expansion if enabled
+            # Phase 2.2: Enhanced with HyDE for complex queries
             if use_query_expansion:
                 try:
                     query_expansion = await self._get_query_expansion()
@@ -416,23 +663,50 @@ class RAGService:
                             use_query_expansion=False  # Disable to avoid recursion
                         )
 
-                    # Use query expansion
+                    # Determine best expansion strategy based on query type
+                    # - Short queries (<5 words): Use multi_query for variants
+                    # - Question queries: Use HyDE (hypothetical document better for Q&A)
+                    # - Complex queries: Use "all" strategies combined
+                    word_count = len(query.split())
+                    is_question = any(q in query.lower() for q in ['comment', 'pourquoi', 'quel', 'combien', 'quand', 'où', '?'])
+
+                    if is_question and word_count > 5:
+                        # Complex question - use HyDE for better semantic matching
+                        strategy = "hyde"
+                        num_variants = 1  # HyDE generates one hypothetical doc
+                        logger.info("query_expansion_strategy_hyde", reason="complex_question")
+                    elif word_count <= 4:
+                        # Short query - use multi_query for coverage
+                        strategy = "multi_query"
+                        num_variants = 3
+                        logger.info("query_expansion_strategy_multi_query", reason="short_query")
+                    else:
+                        # Medium query - use both for best results
+                        strategy = "all"
+                        num_variants = 2
+                        logger.info("query_expansion_strategy_all", reason="medium_complexity")
+
+                    # Use query expansion with adaptive strategy
                     expanded_results = await query_expansion.expand_and_search(
                         query=query,
                         search_func=base_search,
-                        num_variants=3,
+                        num_variants=num_variants,
+                        strategy=strategy,
                         top_k=limit
                     )
 
-                    logger.info("query_expansion_used", query=query[:50], results_count=len(expanded_results))
+                    logger.info("query_expansion_used",
+                              query=query[:50],
+                              strategy=strategy,
+                              results_count=len(expanded_results))
                     return expanded_results
 
                 except Exception as e:
                     logger.warning("query_expansion_failed_fallback", error=str(e))
                     # Continue with normal search if query expansion fails
 
-            # Generate query embedding with cache
-            query_embedding = await self._get_embedding_cached(query)
+            # Generate query embedding with cache (use normalized query)
+            query_embedding = await self._get_embedding_cached(query_for_embedding)
 
             # Build filter if provided
             search_filter = None
@@ -463,7 +737,11 @@ class RAGService:
                 search_filter = Filter(must=conditions)
 
             # Determine search limit (fetch more if using reranker)
-            search_limit = limit * 3 if use_reranker else limit
+            # INTERGALACTIC MODE: Fetch 6x for maximum precision (increased from 3x)
+            # OPTIMIZATION: Increase to 8x if searching long documents
+            # This helps find specific info buried in 50k+ char documents
+            multiplier = 8 if use_reranker else 6  # Increased for long docs
+            search_limit = limit * multiplier
 
             # Search (async wrapper)
             results = await self._run_sync(
@@ -493,30 +771,209 @@ class RAGService:
             if use_hybrid and formatted_results:
                 try:
                     hybrid_search = await self._get_hybrid_search()
+                    # INTERGALACTIC MODE: Hybrid returns 3x for reranking (increased from 2x)
+                    # OPTIMIZATION: Use keywords query for BM25 if query is long
+                    bm25_query = query_for_bm25 if query_length > 8 else query_for_embedding
                     formatted_results = await hybrid_search.hybrid_search(
-                        query=query,
+                        query=bm25_query,  # Use optimized query for BM25
                         vector_results=formatted_results,
-                        top_k=limit * 2 if use_reranker else limit  # Get more for reranking
+                        top_k=limit * 3 if use_reranker else limit  # Get more for reranking
                     )
                     logger.info("hybrid_search_applied", result_count=len(formatted_results))
                 except Exception as e:
                     logger.warning("hybrid_search_failed_fallback", error=str(e))
                     # Continue with vector-only results
 
-            # Apply re-ranking if enabled
+            # Apply re-ranking if enabled (with multi-level fallback)
             if use_reranker and formatted_results:
                 try:
                     reranker = await self._get_reranker()
-                    formatted_results = await reranker.rerank(
+                    reranked_results = await reranker.rerank(
                         query=query,
                         results=formatted_results,
                         top_k=limit
                     )
-                    logger.info("reranking_applied", original_count=len(results), final_count=len(formatted_results))
+
+                    # Validate reranked results are not empty
+                    if reranked_results:
+                        formatted_results = reranked_results
+                        logger.info("reranking_applied",
+                                   original_count=len(results),
+                                   final_count=len(formatted_results))
+                    else:
+                        logger.warning("reranking_returned_empty_fallback_to_original")
+                        formatted_results = formatted_results[:limit]
+
                 except Exception as e:
-                    logger.warning("reranking_failed_fallback", error=str(e))
-                    # Fallback to original results on reranking failure
-                    formatted_results = formatted_results[:limit]
+                    logger.error("reranking_failed_using_fallback", error=str(e), exc_info=True)
+
+                    # FALLBACK LEVEL 1: Try hybrid-only (vector + BM25 without reranking)
+                    if use_hybrid:
+                        logger.warning("fallback_level_1_hybrid_only")
+                        formatted_results = formatted_results[:limit]
+                    else:
+                        # FALLBACK LEVEL 2: Vector-only with score threshold
+                        logger.warning("fallback_level_2_vector_only_with_threshold")
+                        min_score = 0.5  # Minimum vector similarity score
+                        filtered_results = [r for r in formatted_results if r.get("score", 0) >= min_score]
+
+                        if filtered_results:
+                            formatted_results = filtered_results[:limit]
+                            logger.info("fallback_vector_threshold_applied",
+                                       original=len(formatted_results),
+                                       filtered=len(filtered_results))
+                        else:
+                            # FALLBACK LEVEL 3: Return top results without threshold
+                            logger.warning("fallback_level_3_vector_only_no_threshold")
+                            formatted_results = formatted_results[:limit]
+
+            # FINAL VALIDATION: Ensure results have valid text
+            if formatted_results:
+                valid_results = []
+                for r in formatted_results:
+                    # Check if result has valid text content
+                    text_content = r.get("text") or r.get("chunk") or r.get("content", "")
+                    if text_content and len(text_content.strip()) >= 10:
+                        valid_results.append(r)
+                    else:
+                        logger.warning(
+                            "invalid_result_filtered",
+                            result_id=r.get("id"),
+                            text_length=len(text_content),
+                            score=r.get("score", 0)
+                        )
+
+                if len(valid_results) < len(formatted_results):
+                    logger.warning(
+                        "final_validation_filtered_results",
+                        original=len(formatted_results),
+                        valid=len(valid_results),
+                        removed=len(formatted_results) - len(valid_results)
+                    )
+
+                formatted_results = valid_results
+
+            # AGENTIC RAG: Verification (if enabled)
+            # Validates results and refines search if needed
+            if use_verification and formatted_results:
+                try:
+                    from app.services.agents.verification_agent import VerificationAgent
+
+                    verifier = VerificationAgent()
+
+                    # Quick check: should we verify?
+                    should_verify = verifier.should_verify(formatted_results)
+
+                    if should_verify:
+                        logger.info("verification_agent_activated",
+                                   top_score=formatted_results[0].get('score', 0),
+                                   reason="low_confidence")
+
+                        # Create search function for verifier (recursive with verification disabled)
+                        async def verification_search(query: str, limit: int = 5):
+                            return await self.search(
+                                query=query,
+                                limit=limit,
+                                filter_conditions=filter_conditions,
+                                document_ids=document_ids,
+                                use_reranker=use_reranker,
+                                use_hybrid=use_hybrid,
+                                use_query_expansion=False,
+                                use_query_planning=False,  # Disable planning in verification
+                                use_verification=False  # CRITICAL: Disable to avoid infinite recursion
+                            )
+
+                        # Verify and refine
+                        verified_results = await verifier.verify_and_refine(
+                            query=query,
+                            chunks=formatted_results,
+                            rag_search_func=verification_search,
+                            max_iterations=2
+                        )
+
+                        if verified_results:
+                            formatted_results = verified_results[:limit]
+                            logger.info("verification_completed",
+                                       original_count=len(formatted_results),
+                                       verified_count=len(verified_results))
+                    else:
+                        logger.info("verification_skipped",
+                                   reason="high_confidence",
+                                   top_score=formatted_results[0].get('score', 0))
+
+                except Exception as e:
+                    logger.error("verification_failed_using_original_results",
+                                error=str(e))
+                    # Continue with original results on error
+
+            # === AGENTIC RAG PHASE 3: Reflection (Last Resort) ===
+            # Activates if results are STILL low quality after verification
+            if use_reflection and formatted_results:
+                try:
+                    top_score_after_verification = formatted_results[0].get('reranked_score', formatted_results[0].get('score', 0))
+
+                    # Only reflect if still below threshold (0.25 = 25%)
+                    if top_score_after_verification < 0.25:
+                        from app.services.agents.reflection_agent import ReflectionAgent
+
+                        reflector = ReflectionAgent()
+
+                        logger.info("reflection_agent_activated",
+                                   reason="low_quality_after_verification",
+                                   top_score=top_score_after_verification)
+
+                        # Create search function for reflector
+                        async def reflection_search(query: str, limit: int = 5):
+                            return await self.search(
+                                query=query,
+                                limit=limit,
+                                filter_conditions=filter_conditions,
+                                document_ids=document_ids,
+                                use_reranker=use_reranker,
+                                use_hybrid=use_hybrid,
+                                use_query_expansion=False,
+                                use_query_planning=False,  # Disable all agents in recursive calls
+                                use_verification=False,
+                                use_reflection=False  # CRITICAL: Prevent infinite recursion
+                            )
+
+                        # Reflect and attempt to improve
+                        reflection_result = await reflector.reflect_and_improve(
+                            query=query,
+                            low_quality_chunks=formatted_results,
+                            search_func=reflection_search,
+                            verification_attempts=1  # Verification already tried
+                        )
+
+                        if reflection_result.should_return and reflection_result.improved_results:
+                            formatted_results = reflection_result.improved_results[:limit]
+
+                            logger.info("reflection_completed",
+                                       strategy=reflection_result.strategy_used.value,
+                                       confidence=f"{reflection_result.confidence:.1%}",
+                                       improved_count=len(formatted_results))
+
+                            # Add reflection metadata to results
+                            for result in formatted_results:
+                                if 'metadata' not in result:
+                                    result['metadata'] = {}
+                                result['metadata']['reflection_applied'] = True
+                                result['metadata']['failure_type'] = reflection_result.failure_type.value
+                                result['metadata']['strategy_used'] = reflection_result.strategy_used.value
+
+                                # If fallback message exists, add to first result
+                                if reflection_result.fallback_message and formatted_results.index(result) == 0:
+                                    result['metadata']['fallback_message'] = reflection_result.fallback_message
+
+                    else:
+                        logger.info("reflection_skipped",
+                                   reason="acceptable_quality_after_verification",
+                                   top_score=top_score_after_verification)
+
+                except Exception as e:
+                    logger.error("reflection_failed_using_original_results",
+                                error=str(e))
+                    # Continue with original results on error
 
             # Log detailed search results
             if formatted_results:
@@ -567,6 +1024,13 @@ class RAGService:
             )
 
             logger.info("document_deleted", document_id=document_id)
+
+            # Cache invalidation hook (Phase 1.3)
+            try:
+                from app.services.cache_invalidation_hooks import on_document_deleted
+                await on_document_deleted(document_id)
+            except Exception as cache_err:
+                logger.warning("cache_invalidation_failed", error=str(cache_err))
 
         except Exception as e:
             logger.error(

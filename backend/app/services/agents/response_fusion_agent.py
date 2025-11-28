@@ -514,6 +514,11 @@ DONNÉES :
 - Format lisible et professionnel avec **gras** pour les informations importantes
 - Si liste : utilise format markdown
 - Concis et direct
+- **IMPORTANT**: INCLUS TOUTES les informations de contact disponibles (email 📧, téléphone 📞)
+- Pour les personnes, utilise ce format:
+  **Prénom NOM**
+  📧 email@example.com | 📞 0X XX XX XX XX
+  📍 Ville, Adresse
 
 Réponds uniquement avec les données formatées :"""
 

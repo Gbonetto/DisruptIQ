@@ -88,10 +88,10 @@ async def startup_event():
 
     # Initialize BM25 Index for Hybrid Search
     try:
-        from app.services.hybrid_search_service import HybridSearchService
+        from app.services.hybrid_search_service import get_hybrid_search_service
         from app.core.database import get_db
 
-        hybrid_search = HybridSearchService()
+        hybrid_search = get_hybrid_search_service()  # Use singleton
 
         # Get all indexed documents from database
         async for db in get_db():
@@ -118,6 +118,12 @@ async def startup_event():
                 logger.info("bm25_index_initialized", doc_count=len(doc_list))
             else:
                 logger.info("bm25_index_empty", message="No indexed documents found, BM25 will be built on first search")
+
+            # Log singleton state for debugging
+            logger.info("hybrid_search_initialized",
+                       bm25_initialized=hybrid_search._initialized,
+                       doc_count=len(hybrid_search._documents) if hybrid_search._initialized else 0,
+                       instance_id=id(hybrid_search))
 
             break  # Only need one db session
     except Exception as e:

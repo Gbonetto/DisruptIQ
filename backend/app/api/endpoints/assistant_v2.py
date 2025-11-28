@@ -78,7 +78,8 @@ async def assistant_chat(
                     db=db,
                     context=request.context,
                     conversation_history=[msg.dict() for msg in request.conversation_history],
-                    selected_sources=request.selected_sources  # User-controlled source selection
+                    selected_sources=request.selected_sources,  # User-controlled source selection
+                    session_id=request.session_id  # Pass session_id for context_store
                 ),
                 timeout=90.0
             )

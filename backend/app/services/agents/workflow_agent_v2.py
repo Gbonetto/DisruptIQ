@@ -46,11 +46,18 @@ WorkflowAgent = The Conductor
 
 import structlog
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import json
 import re
 
 from app.services.llm_service import LLMService
+
+
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -256,7 +263,7 @@ class WorkflowAgentV2:
                     
                     if thought_stream:
                         await thought_stream.add_thought(
-                            thought_type=ThoughtType.SUCCESS,
+                            thought_type=ThoughtType.COMPLETED,
                             title="💾 Workflow sauvegardé",
                             content=f"ID: {workflow_id}",
                             agent="WorkflowAgent",
@@ -447,7 +454,7 @@ DEMANDE UTILISATEUR:
 TYPE DE WORKFLOW: {workflow_type} - {subtype}
 
 CONTEXTE DISPONIBLE:
-{json.dumps(context or {}, indent=2, ensure_ascii=False)}
+{json.dumps(context or {}, indent=2, ensure_ascii=False, default=json_serial)}
 
 EXTRAIT les informations clés au format JSON:
 {{
@@ -586,7 +593,7 @@ Réponds UNIQUEMENT avec le JSON, sans markdown."""
 
 SITUATION:
 Type: {workflow_type} - {subtype}
-Contexte: {json.dumps(context, indent=2, ensure_ascii=False)}
+Contexte: {json.dumps(context, indent=2, ensure_ascii=False, default=json_serial)}
 
 IMPORTANT: Cette to-do list doit être IMMÉDIATEMENT ACTIONNABLE par le syndic.
 Chaque étape doit contenir:

@@ -90,8 +90,20 @@ class MetadataEnrichmentService:
             # Start with basic metadata
             enriched = dict(basic_metadata)
 
-            # 1. Extract entities
-            enriched["entities"] = self._extract_entities(text)
+            # Phase 2.1: Use NER Post-OCR service for advanced entity extraction
+            try:
+                from app.services.ner_post_ocr_service import get_ner_post_ocr_service
+                ner_service = get_ner_post_ocr_service()
+                enriched = ner_service.enrich_metadata(text, enriched)
+                logger.debug("ner_enrichment_applied", entity_count=enriched.get("ner_entity_count", 0))
+            except Exception as ner_err:
+                logger.warning("ner_enrichment_failed_using_fallback", error=str(ner_err))
+                # Fallback to basic entity extraction
+                enriched["entities"] = self._extract_entities(text)
+
+            # 1. Extract entities (basic fallback if NER not already applied)
+            if "ner_entities" not in enriched:
+                enriched["entities"] = self._extract_entities(text)
 
             # 2. Detect language
             enriched["language"] = self._detect_language(text)

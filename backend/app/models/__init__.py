@@ -13,6 +13,7 @@ from app.models.professionnel_copropriete import ProfessionnelCopropriete
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.emergency_workflow import EmergencyWorkflow
+from app.models.workflow_instance import WorkflowInstance, WorkflowStep, WorkflowStatus, StepStatus
 
 # Intent System (Centralized)
 from app.models.intent import (
@@ -39,6 +40,10 @@ __all__ = [
     "Conversation",
     "Message",
     "EmergencyWorkflow",
+    "WorkflowInstance",
+    "WorkflowStep",
+    "WorkflowStatus",
+    "StepStatus",
     # Intent System
     "IntentType",
     "Domain",

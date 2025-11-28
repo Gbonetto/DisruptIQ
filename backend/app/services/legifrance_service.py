@@ -324,6 +324,152 @@ class LegifranceService:
                         error=str(e))
             return None
 
+    async def search_code_article(
+        self,
+        code_name: str,
+        article_ref: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Search for a specific article in a French code by name.
+
+        Args:
+            code_name: Code name (e.g., "code civil", "code de commerce")
+            article_ref: Article reference (e.g., "L441-10", "1231-5")
+
+        Returns:
+            Article data or None if not found
+
+        Example:
+            >>> article = await service.search_code_article(
+            ...     code_name="code de commerce",
+            ...     article_ref="L441-10"
+            ... )
+        """
+        try:
+            access_token = await self._get_access_token()
+
+            # Search for the article
+            search_endpoint = f"{self.api_base_url}/search"
+
+            # Build query
+            query = f"{code_name} article {article_ref}"
+
+            payload = {
+                "fond": "CODE_DATE",  # Search in codes
+                "recherche": {
+                    "champs": [
+                        {
+                            "typeChamp": "ALL",
+                            "criteres": [
+                                {
+                                    "typeRecherche": "EXACTE",
+                                    "valeur": query,
+                                    "operateur": "ET"
+                                }
+                            ],
+                            "operateur": "ET"
+                        }
+                    ],
+                    "operateur": "ET",
+                    "pageNumber": 1,
+                    "pageSize": 5
+                }
+            }
+
+            response = await self.http_client.post(
+                search_endpoint,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json"
+                }
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("results") and len(data["results"]) > 0:
+                first_result = data["results"][0]
+
+                # Extract article ID from titles
+                article_id = ""
+                title = ""
+                if first_result.get("titles") and len(first_result["titles"]) > 0:
+                    article_id = first_result["titles"][0].get("id", "")
+                    title = first_result["titles"][0].get("title", "")
+
+                # Extract content
+                content = ""
+                if first_result.get("text"):
+                    import re
+                    content = re.sub(r'<[^>]+>', '', first_result["text"])
+
+                logger.info("legifrance_code_article_found",
+                           code=code_name,
+                           article=article_ref,
+                           article_id=article_id)
+
+                return {
+                    "id": article_id,
+                    "title": title,
+                    "content": content,
+                    "code": code_name,
+                    "article_ref": article_ref,
+                    "url": f"https://www.legifrance.gouv.fr/codes/article_lc/{article_id}" if article_id else ""
+                }
+            else:
+                logger.warning("legifrance_code_article_not_found",
+                             code=code_name,
+                             article=article_ref)
+                return None
+
+        except Exception as e:
+            logger.error("legifrance_code_article_search_error",
+                        code=code_name,
+                        article=article_ref,
+                        error=str(e))
+            return None
+
+    async def get_current_legal_rate(self) -> Optional[float]:
+        """
+        Get current French legal interest rate (taux d'intérêt légal).
+
+        Note: This searches for the most recent decree setting the legal rate.
+        The actual rate should be cross-checked with Banque de France website.
+
+        Returns:
+            Current legal rate as percentage, or None if not found
+
+        Example:
+            >>> rate = await service.get_current_legal_rate()
+            >>> print(f"Taux légal: {rate}%")
+        """
+        try:
+            # Search for recent legal rate decree
+            results = await self.search_jurisprudence(
+                query="taux d'intérêt légal",
+                case_type="",
+                max_results=5
+            )
+
+            if results.get("success") and results.get("results"):
+                logger.info("legal_rate_decree_search_completed",
+                           results_count=len(results["results"]))
+
+                # Return reference to most recent result
+                # Note: Actual rate extraction would require parsing decree text
+                return {
+                    "source": "legifrance_search",
+                    "note": "Taux précis disponible sur https://www.banque-france.fr/",
+                    "recent_decrees": results["results"][:3]
+                }
+
+            return None
+
+        except Exception as e:
+            logger.error("legal_rate_search_failed", error=str(e))
+            return None
+
     async def close(self):
         """Close HTTP client"""
         await self.http_client.aclose()

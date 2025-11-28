@@ -146,6 +146,26 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
     ALLOWED_EXTENSIONS: List[str] = [".pdf", ".docx", ".doc", ".txt"]
 
+    # ========================================
+    # OPTIMISATIONS FRANÇAIS (Feature Flags)
+    # ========================================
+    # Système exclusivement francophone - optimisé pour le français
+
+    # Tokenization spaCy français (vs simple split)
+    USE_SPACY_FRENCH: bool = True  # Active tokenization avancée française
+    SPACY_MODEL: str = "fr_core_news_md"  # Modèle spaCy français (md = moyen, lg = large)
+
+    # Reranker optimisé français (vs multilingual)
+    USE_FRENCH_RERANKER: bool = True  # Active reranker optimisé français
+    FRENCH_RERANKER_MODEL: str = "antoinelouis/colbert-xm-v1"  # ColBERT français (meilleur que Camembert)
+    # Alternatives:
+    # - "antoinelouis/colbert-xm-v1" (Recommandé - ColBERT multilingue optimisé FR)
+    # - "camembert-base" (BERT français baseline)
+    # - "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1" (Multilingual fallback actuel)
+
+    # Fallback automatique si erreur
+    FALLBACK_ON_ERROR: bool = True  # Si spaCy/Camembert échoue, utilise version simple
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

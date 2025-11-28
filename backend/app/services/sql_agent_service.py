@@ -94,8 +94,8 @@ class SQLAgentService:
 - numero_lot (VARCHAR) - "A12", "Bat B - 304"
 - type_lot (VARCHAR) - appartement, garage, cave
 - etage (INTEGER), surface (NUMERIC)
-- statut (VARCHAR) - proprietaire, locataire, usufruitier
-- statut_special (VARCHAR) - président, syndic, gardien
+- statut (VARCHAR) - proprietaire, locataire, usufruitier (NE PAS utiliser pour président!)
+- statut_special (VARCHAR) - IMPORTANT: Utiliser cette colonne pour: president, conseil_syndical, syndic, gardien
 - est_resident (BOOLEAN) - Habite-t-il le lot?
 - tantiemes (INTEGER) - Millièmes de copropriété
 - is_indexed (BOOLEAN)
@@ -141,23 +141,43 @@ class SQLAgentService:
       JOIN professionnels_coproprietes pc ON p.id = pc.professionnel_id
       JOIN coproprietes c ON pc.copropriete_id = c.id
       WHERE c.nom ILIKE '%X%' AND pc.date_fin IS NULL
+
+4. "Qui est le président du conseil syndical de la résidence Y?"
+   → SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot
+      FROM coproprietaires c
+      JOIN coproprietes co ON c.copropriete_id = co.id
+      WHERE co.nom ILIKE '%Y%' AND c.statut_special = 'president'
+   ATTENTION CRITIQUE: statut != statut_special !
+   - statut = proprietaire/locataire/usufruitier (type de propriété)
+   - statut_special = president/conseil_syndical/syndic/gardien (rôle dans la copro)
+   TOUJOURS utiliser statut_special pour chercher président ou membre du conseil!
+
+5. "Liste les membres du conseil syndical"
+   → SELECT c.nom, c.prenom, c.email, c.statut_special, co.nom as copropriete
+      FROM coproprietaires c
+      JOIN coproprietes co ON c.copropriete_id = co.id
+      WHERE c.statut_special IN ('president', 'conseil_syndical')
+
+6. "Trouve le président" (cas générique)
+   → WHERE c.statut_special = 'president'  -- JAMAIS: WHERE c.statut = 'président'
 """
         return schema
 
     async def natural_language_to_sql(
         self,
         query: str,
-        operation_type: str = "SELECT"
+        operation_type: str = "SELECT",
+        previous_error: Optional[str] = None,
+        previous_sql: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Convertit une requête en langage naturel en SQL
-
+        
         Args:
             query: Requête en langage naturel
-            operation_type: Type d'opération (SELECT, INSERT, UPDATE, DELETE)
-
-        Returns:
-            Dict avec sql, explanation, estimated_rows
+            operation_type: Type d'opération
+            previous_error: Erreur précédente (pour correction)
+            previous_sql: SQL précédent (pour correction)
         """
         try:
             # Construire le prompt pour le LLM
@@ -190,9 +210,19 @@ Format de réponse (JSON strict):
 
 "{query}"
 
-Type d'opération demandée: {operation_type}
+Type d'opération demandée: {operation_type}"""
 
-Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans ```json)."""
+            # AJOUT: Contexte d'erreur pour l'auto-correction
+            if previous_error and previous_sql:
+                user_prompt += f"""
+
+⚠️ ATTENTION: Une tentative précédente a échoué.
+SQL généré: {previous_sql}
+Erreur retournée: {previous_error}
+
+CORRIGE la requête pour éviter cette erreur."""
+
+            user_prompt += "\n\nRéponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans ```json)."
 
             # Appeler le LLM via LangChain
             from langchain.schema import SystemMessage, HumanMessage
@@ -219,7 +249,8 @@ Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans ```json)."""
             logger.info(
                 "nl_to_sql_success",
                 query=query[:100],
-                sql=result['sql'][:200]
+                sql=result['sql'][:200],
+                is_retry=bool(previous_error)
             )
 
             return result
@@ -351,61 +382,71 @@ Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans ```json)."""
         self,
         query: str,
         db: AsyncSession,
-        operation_type: str = "SELECT"
+        operation_type: str = "SELECT",
+        max_retries: int = 3
     ) -> Dict[str, Any]:
         """
-        Pipeline complet: NL → SQL → Exécution → Résultats
-
+        Pipeline complet avec AUTO-CORRECTION (Self-Healing)
+        
         Args:
             query: Requête en langage naturel
             db: Session database
             operation_type: Type d'opération
-
-        Returns:
-            Dict avec sql, results, explanation
+            max_retries: Nombre max de tentatives de correction
         """
-        try:
-            # Étape 1: Conversion NL → SQL
-            nl_result = await self.natural_language_to_sql(query, operation_type)
-            sql = nl_result["sql"]
+        last_error = None
+        last_sql = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                # Étape 1: Conversion NL → SQL (avec contexte d'erreur si retry)
+                nl_result = await self.natural_language_to_sql(
+                    query, 
+                    operation_type,
+                    previous_error=last_error,
+                    previous_sql=last_sql
+                )
+                sql = nl_result["sql"]
+                last_sql = sql
 
-            # Étape 2: Validation
-            validation = self._validate_sql(sql)
-            if not validation["is_valid"]:
-                return {
-                    "success": False,
-                    "error": "SQL généré invalide",
-                    "validation_errors": validation["errors"],
-                    "sql": sql
-                }
+                # Étape 2: Validation
+                validation = self._validate_sql(sql)
+                if not validation["is_valid"]:
+                    raise ValueError(f"SQL invalide: {'; '.join(validation['errors'])}")
 
-            # Étape 3: Exécution
-            exec_result = await self.execute_sql(sql, db, validate=False)
+                # Étape 3: Exécution
+                exec_result = await self.execute_sql(sql, db, validate=False)
 
-            # Étape 4: Formater la réponse
-            if exec_result["success"]:
-                return {
-                    "success": True,
-                    "query": query,
-                    "sql": sql,
-                    "explanation": nl_result.get("explanation", ""),
-                    "results": exec_result.get("results", []),
-                    "row_count": exec_result.get("row_count", exec_result.get("rows_affected", 0)),
-                    "columns": exec_result.get("columns", []),
-                    "warnings": validation.get("warnings", [])
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": exec_result["error"],
-                    "sql": sql,
-                    "query": query
-                }
+                if exec_result["success"]:
+                    # SUCCÈS !
+                    if attempt > 0:
+                        logger.info("self_healing_success", attempts=attempt+1)
+                    
+                    return {
+                        "success": True,
+                        "query": query,
+                        "sql": sql,
+                        "explanation": nl_result.get("explanation", ""),
+                        "results": exec_result.get("results", []),
+                        "row_count": exec_result.get("row_count", exec_result.get("rows_affected", 0)),
+                        "columns": exec_result.get("columns", []),
+                        "warnings": validation.get("warnings", []),
+                        "retries": attempt
+                    }
+                else:
+                    # Erreur d'exécution SQL (ex: colonne inexistante)
+                    last_error = exec_result["error"]
+                    logger.warning("sql_execution_error_retry", attempt=attempt+1, error=last_error)
 
-        except Exception as e:
-            logger.error("natural_query_failed", query=query, error=str(e))
-            return {
-                "success": False,
-                "error": str(e),
-                "query": query
-            }
+            except Exception as e:
+                last_error = str(e)
+                logger.warning("pipeline_error_retry", attempt=attempt+1, error=last_error)
+        
+        # Échec après tous les retries
+        logger.error("self_healing_failed_max_retries", query=query, final_error=last_error)
+        return {
+            "success": False,
+            "error": f"Échec après {max_retries} tentatives. Dernière erreur: {last_error}",
+            "query": query,
+            "sql": last_sql
+        }
