@@ -2,6 +2,11 @@
 LLM Service
 Wrapper for Mistral AI (primary), OpenAI/Anthropic (fallback)
 Migrated to Mistral for better French support, GDPR compliance, and lower costs
+
+Phase 1.4 Enhancement: Circuit Breaker for Resilience
+- Prevents cascading failures when LLM API is down
+- Automatic recovery detection
+- Fail-fast behavior for better UX
 """
 
 import structlog
@@ -11,6 +16,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema import HumanMessage, SystemMessage, AIMessage
 
 from app.core.config import settings
+from app.services.circuit_breaker import mistral_breaker, CircuitBreakerError
 
 logger = structlog.get_logger()
 
@@ -280,46 +286,82 @@ Réponse:"""
         prompt: str,
         max_tokens: int = 500,
         temperature: float = 0.7,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None
     ) -> str:
         """
         Generic text generation method using Mistral AI with conversation history support
+
+        Phase 1.4 Enhancement: Protected by Circuit Breaker
+        - Fails fast if Mistral API is down
+        - Auto-recovery after 30 seconds
 
         Args:
             prompt: The input prompt
             max_tokens: Maximum tokens in response
             temperature: Sampling temperature
             conversation_history: Previous conversation messages for context
+            system_prompt: Optional system prompt for LLM context
+            model: Optional model override (e.g., "open-mistral-7b" for faster classification)
 
         Returns:
             Generated text response
         """
+        # Build message history for LLM context
+        messages = []
+
+        # Add system prompt if provided
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+
+        # Add conversation history (last 20 messages for better context preservation)
+        if conversation_history:
+            for msg in conversation_history[-20:]:
+                if msg.get("role") == "user":
+                    messages.append(HumanMessage(content=msg.get("content", "")))
+                elif msg.get("role") == "assistant":
+                    messages.append(AIMessage(content=msg.get("content", "")))
+
+        # Add current prompt
+        messages.append(HumanMessage(content=prompt))
+
+        logger.info("response_generated_with_history",
+                   provider="mistral",
+                   history_messages=len(messages) - 1)
+
+        # Use Circuit Breaker for resilience
         try:
-            # Build message history for LLM context
-            messages = []
+            async def _call_mistral():
+                return await self.chat_model.ainvoke(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                )
 
-            # Add conversation history (last 20 messages for better context preservation)
-            if conversation_history:
-                for msg in conversation_history[-20:]:
-                    if msg.get("role") == "user":
-                        messages.append(HumanMessage(content=msg.get("content", "")))
-                    elif msg.get("role") == "assistant":
-                        messages.append(AIMessage(content=msg.get("content", "")))
-
-            # Add current prompt
-            messages.append(HumanMessage(content=prompt))
-
-            logger.info("response_generated_with_history",
-                       provider="mistral",
-                       history_messages=len(messages) - 1)
-
-            response = await self.chat_model.ainvoke(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature
-            )
+            response = await mistral_breaker.call(_call_mistral)
             logger.info("response_generated", provider="mistral")
             return response.content
+
+        except CircuitBreakerError as cbe:
+            # Circuit is OPEN - Mistral is down, try fallback immediately
+            logger.warning("circuit_breaker_open_using_fallback",
+                          service=cbe.service_name,
+                          retry_after=cbe.retry_after)
+
+            if self.fallback_model:
+                try:
+                    logger.info("using_openai_fallback_circuit_open")
+                    response = await self.fallback_model.ainvoke(
+                        [HumanMessage(content=prompt)],
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+                    return response.content
+                except Exception as fallback_error:
+                    logger.error("fallback_error", error=str(fallback_error))
+
+            raise Exception(f"LLM service unavailable. Retry after {cbe.retry_after:.0f}s")
 
         except Exception as e:
             logger.error("generate_response_error", error=str(e), provider="mistral")

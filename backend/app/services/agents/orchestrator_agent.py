@@ -55,12 +55,14 @@ class OrchestratorAgent:
         from .hybrid_executor import HybridExecutor
         from .response_fusion_agent import ResponseFusionAgent
         from .intent_classifier_v5 import IntentClassifierV5
+        from .llm_intent_classifier import classify_intent_with_llm
 
-        # V5 ACTIVATED (Phase 2): Clean classifier using centralized intent system
-        # - Uses app.models.intent directly
-        # - Simplified logic (70% Quick Rules + 30% LLM)
-        # - Returns IntentClassification model
-        # - No legacy enum complexity
+        # LLM CLASSIFIER ACTIVATED (Phase 3): Intelligent semantic routing
+        # - Uses Mistral LLM for semantic understanding
+        # - Conversation context aware
+        # - Few-shot examples for each intent
+        # - Fallback cascade (fast → accurate)
+        # - Replaces keyword-based V5 for main classification
 
         # SPRINT 1 OPTIMIZATIONS (Phase 2.5): Level 0 Bypass
         # - Template Filter: 10% bypass (greetings, thanks, etc.)
@@ -69,7 +71,8 @@ class OrchestratorAgent:
         from app.services.template_filter import TemplateFilter, UIContextBypass
 
         # Only instantiate what we actually use
-        self.intent_classifier = IntentClassifierV5()  # V5 replaces V4
+        self.intent_classifier = IntentClassifierV5()  # Fallback/quick rules
+        self.llm_classifier = classify_intent_with_llm  # Primary LLM-based classifier
         self.hybrid_executor = HybridExecutor()
         self.fusion_agent = ResponseFusionAgent()
 
@@ -78,8 +81,9 @@ class OrchestratorAgent:
         self.ui_context_bypass = UIContextBypass()
 
         logger.info("orchestrator_agent_initialized",
-                   version="v5.1_sprint1",
-                   classifier="v5",
+                   version="v6.0_llm_classifier",
+                   classifier="llm_mistral",
+                   fallback="v5_keywords",
                    optimizations=["template_filter", "ui_context_bypass"])
 
     async def classify_intention(
@@ -90,7 +94,12 @@ class OrchestratorAgent:
         conversation_history: List[Dict[str, str]] = None
     ) -> IntentType:
         """
-        Classify user intention using Enhanced v3 Classifier
+        Classify user intention using LLM-based classifier (Phase 3)
+
+        Uses Mistral LLM for semantic understanding with:
+        - Conversation context awareness
+        - Few-shot examples for each intent
+        - Fallback cascade (fast model → accurate model)
 
         Args:
             user_input: User's message
@@ -102,15 +111,15 @@ class OrchestratorAgent:
             IntentType enum
         """
         try:
-            # Use v5 simplified classifier with centralized intent system
-            classification_result = await self.intent_classifier.classify(
-                user_input=user_input,
-                context=context,
+            # PRIMARY: Use LLM-based classifier for semantic understanding
+            classification_result = await self.llm_classifier(
+                user_query=user_input,
                 conversation_history=conversation_history,
+                context=context,
             )
 
             # Log detailed classification info
-            logger.info("intention_classified_v5",
+            logger.info("intention_classified_llm",
                        user_input=user_input[:50],
                        intent=classification_result.intent.value,
                        domain=classification_result.domain.value,
@@ -128,8 +137,19 @@ class OrchestratorAgent:
             return classification_result.intent, classification_result
 
         except Exception as e:
-            logger.error("intention_classification_failed", error=str(e), exc_info=True)
-            return IntentType.GENERAL_QUESTION, None
+            logger.error("llm_classification_failed", error=str(e), exc_info=True)
+            # FALLBACK: Use V5 keyword-based classifier if LLM fails
+            logger.info("falling_back_to_v5_classifier")
+            try:
+                classification_result = await self.intent_classifier.classify(
+                    user_input=user_input,
+                    context=context,
+                    conversation_history=conversation_history,
+                )
+                return classification_result.intent, classification_result
+            except Exception as e2:
+                logger.error("v5_fallback_also_failed", error=str(e2))
+                return IntentType.GENERAL_QUESTION, None
 
     async def process(
         self,
@@ -728,14 +748,39 @@ class OrchestratorAgent:
                 }
                 intent_label = intent_labels_fr.get(intent.value, intent.value)
 
+                # Build detailed confidence info for CoT
+                confidence = classification_result.confidence if classification_result else 0.9
+                confidence_level = "haute" if confidence >= 0.85 else "moyenne" if confidence >= 0.70 else "faible"
+                confidence_emoji = "🟢" if confidence >= 0.85 else "🟡" if confidence >= 0.70 else "🔴"
+
+                # Extract reasoning from classification (LLM provides this)
+                reasoning = ""
+                if classification_result and classification_result.reasoning:
+                    # Clean up reasoning for display
+                    reasoning = classification_result.reasoning.replace("[LLM] ", "").replace("[FALLBACK] ", "")
+
+                # Build sources info
+                sources_info = ""
+                if classification_result and classification_result.suggested_sources:
+                    sources_list = [s.value for s in classification_result.suggested_sources]
+                    sources_info = f" | Sources: {', '.join(sources_list)}"
+
+                # Determine if using LLM or fallback
+                classifier_type = "LLM Mistral" if classification_result and "[LLM]" in (classification_result.reasoning or "") else "Fallback keywords"
+
                 await thought_stream.add_thought(
                     ThoughtType.INTENT_DETECTED,
-                    title=f"Intention : {intent_label}",
-                    content=f"Classification terminée avec succès",
-                    agent="intent_classifier",
+                    title=f"{confidence_emoji} {intent_label} ({confidence:.0%})",
+                    content=f"**Confiance {confidence_level}** ({classifier_type})\n\n{reasoning}{sources_info}" if reasoning else f"Classification par {classifier_type} avec confiance {confidence_level}",
+                    agent="llm_classifier",
                     data={
                         "intent": intent.value,
-                        "confidence": classification_result.confidence if classification_result else 0.9
+                        "confidence": confidence,
+                        "confidence_level": confidence_level,
+                        "reasoning": reasoning,
+                        "classifier_type": classifier_type,
+                        "suggested_sources": [s.value for s in classification_result.suggested_sources] if classification_result and classification_result.suggested_sources else [],
+                        "domain": classification_result.domain.value if classification_result else "general"
                     },
                     progress=0.25
                 )
