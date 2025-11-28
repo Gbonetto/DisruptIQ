@@ -468,8 +468,13 @@ class IntentClassifierV5:
             "nom du prestataire": 0.92,
             "nom de l'entreprise": 0.90,
             # Contenu spécifique documents
-            "que dit le": 0.90,
-            "que dit la": 0.90,
+            # NOTE: "que dit le/la" retiré car trop générique - capte aussi "que dit la loi" (LEGAL)
+            # Utiliser des variantes spécifiques ci-dessous
+            "que dit le document": 0.92,
+            "que dit le contrat": 0.92,
+            "que dit le devis": 0.92,
+            "que dit la facture": 0.92,
+            "que dit ce document": 0.92,
             "selon le document": 0.95,
             "selon la facture": 0.95,
             "selon le contrat": 0.95,
