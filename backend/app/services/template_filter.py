@@ -229,12 +229,22 @@ class UIContextBypass:
             'run_automation': IntentType.TRIGGER_WORKFLOW,
         }
 
-    def check(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    # Keywords that should bypass document-based routing to use LLM classifier
+    LEGAL_KEYWORDS = [
+        "loi", "légal", "légale", "légalement", "juridique",
+        "légifrance", "legifrance", "code civil", "article",
+        "réglementation", "obligation légale", "obligations légales",
+        "conforme", "conformité", "droit", "jurisprudence",
+        "loi elan", "loi climat", "décret", "ordonnance"
+    ]
+
+    def check(self, context: Dict[str, Any], user_query: str = None) -> Optional[Dict[str, Any]]:
         """
         Check if UI context provides obvious intent
 
         Args:
             context: Request context from frontend
+            user_query: Optional user query for keyword detection
 
         Returns:
             None: No UI context, continue to classification
@@ -284,8 +294,21 @@ class UIContextBypass:
             }
 
         # Check pre-selected document (high confidence SEARCH_DOCUMENTS)
+        # BUT: if query contains legal keywords, don't bypass - let LLM classifier decide
         if context.get('selected_document_id') or context.get('active_document_id'):
             doc_id = context.get('selected_document_id') or context.get('active_document_id')
+
+            # Check if query contains legal keywords - if so, don't bypass
+            if user_query:
+                query_lower = user_query.lower()
+                has_legal_keywords = any(kw in query_lower for kw in self.LEGAL_KEYWORDS)
+
+                if has_legal_keywords:
+                    logger.info("ui_context_bypass_skipped_legal_keywords",
+                               document_id=doc_id,
+                               query_preview=user_query[:50],
+                               reason="Legal keywords detected, using LLM classifier")
+                    return None  # Don't bypass, use LLM classifier
 
             logger.info("ui_context_bypass_document",
                        document_id=doc_id,

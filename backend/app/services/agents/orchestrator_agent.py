@@ -333,7 +333,7 @@ class OrchestratorAgent:
             if context is None:
                 context = {}
 
-            ui_bypass_result = self.ui_context_bypass.check(context)
+            ui_bypass_result = self.ui_context_bypass.check(context, user_query=user_input)
 
             # Store bypass results for later use in classification
             bypass_intent = None
