@@ -72,7 +72,12 @@ class Settings(BaseSettings):
     QDRANT_URL: str = "http://qdrant:6333"
     QDRANT_COLLECTION_NAME: str = "disruptiq_documents"
 
-    # Mistral AI (Primary - European, GDPR-compliant, French-optimized)
+    # Groq API (Ultra-fast LLM inference - Primary for classification)
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "llama-3.1-8b-instant"  # Ultra-fast, excellent for classification
+    GROQ_MODEL_FALLBACK: str = "llama-3.3-70b-versatile"  # Powerful fallback for complex cases
+
+    # Mistral AI (Fallback - European, GDPR-compliant, French-optimized)
     MISTRAL_API_KEY: str = ""
     MISTRAL_MODEL: str = "mistral-small-latest"  # Fast model with excellent quality (3-4x faster than large)
     MISTRAL_EMBEDDING_MODEL: str = "mistral-embed"  # 1024 dimensions

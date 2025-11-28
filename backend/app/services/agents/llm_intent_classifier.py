@@ -1,13 +1,13 @@
 """
 LLM Intent Classifier - World-Class Multi-Agent Routing
 
-Uses Mistral LLM to intelligently classify user intent with:
+Uses Groq (Llama 3.1 8B) as primary for ultra-fast classification with:
 - Semantic understanding (not just keywords)
 - Conversation context awareness
 - Few-shot examples for each intent type
 - Chain-of-thought reasoning
 - Confidence scoring with calibrated thresholds
-- Fallback cascade (fast model → accurate model)
+- Fallback cascade (Groq → Mistral)
 
 This replaces keyword-based classification for complex/ambiguous cases.
 """
@@ -15,25 +15,55 @@ This replaces keyword-based classification for complex/ambiguous cases.
 import structlog
 import json
 import re
+import os
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 from pydantic import BaseModel
 from datetime import datetime
 
 from app.models.intent import IntentType, Domain, DataSource, IntentClassification
-from app.services.llm_service import LLMService
+from app.core.config import settings
 
 logger = structlog.get_logger()
+
+
+# ============================================================================
+# GROQ CLIENT INITIALIZATION
+# ============================================================================
+
+_groq_client = None
+
+def get_groq_client():
+    """Get or create Groq client singleton."""
+    global _groq_client
+    if _groq_client is None:
+        try:
+            from groq import Groq
+            api_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY")
+            if api_key:
+                _groq_client = Groq(api_key=api_key)
+                logger.info("groq_client_initialized", model=settings.GROQ_MODEL)
+            else:
+                logger.warning("groq_api_key_not_configured")
+        except ImportError:
+            logger.warning("groq_package_not_installed")
+    return _groq_client
 
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-# Models in order of preference (fast → accurate)
-CLASSIFIER_MODELS = [
-    "open-mistral-7b",      # Fast, cheap, good for classification
-    "mistral-small-latest", # Fallback if 7b fails or low confidence
+# Provider preference (Groq primary, Mistral fallback)
+CLASSIFIER_PROVIDER = "groq"  # "groq" or "mistral"
+
+# Groq models
+GROQ_MODEL_FAST = "llama-3.1-8b-instant"  # Primary: ultra-fast
+GROQ_MODEL_ACCURATE = "llama-3.3-70b-versatile"  # Fallback: more accurate
+
+# Legacy Mistral models (fallback)
+MISTRAL_MODELS = [
+    "mistral-small-latest",  # Fallback if Groq fails
 ]
 
 # Confidence thresholds
@@ -122,18 +152,25 @@ EXEMPLES:
 - "Donne-moi les contacts" → query_data (PAS send_email!)
 
 ### 5. WORKFLOW_AGENT (intent: "trigger_workflow")
-Gère les urgences et workflows multi-étapes.
+Gère les urgences et workflows automatisés multi-étapes.
 UTILISER POUR:
 - Situations d'URGENCE (fuite, dégât des eaux, gaz)
 - Coordination multi-professionnels
 - Plans d'action complexes
 - Convocations AG avec workflow complet
+- Processus automatisés ("déclenche", "lance le processus", "appels de fonds")
+
+⚠️ DISTINCTION CRITIQUE workflow vs email:
+- "Déclenche l'envoi des appels de fonds" = WORKFLOW (processus automatisé)
+- "Envoie un email aux copropriétaires" = EMAIL (envoi simple)
 
 EXEMPLES:
 - "URGENT: fuite d'eau apt 12" → trigger_workflow
 - "Dégât des eaux, coordonne les interventions" → trigger_workflow
 - "Odeurs de gaz au 3e étage" → trigger_workflow
 - "Organise l'AG du 15 décembre" → trigger_workflow
+- "Déclenche l'envoi des appels de fonds" → trigger_workflow
+- "Lance le processus de relance" → trigger_workflow
 
 ### 6. DIGEST_AGENT (intent: "generate_digest")
 Génère des résumés d'emails et d'activité.
@@ -141,22 +178,36 @@ UTILISER POUR:
 - Résumés d'emails reçus
 - Digest quotidien/hebdomadaire
 - Vue d'ensemble de l'activité email
+- Questions sur les emails récents/urgents
+
+⚠️ DISTINCTION: Toute question sur les EMAILS → generate_digest (pas query_data)
 
 EXEMPLES:
 - "Génère le digest des emails" → generate_digest
 - "Résumé des emails de la semaine" → generate_digest
 - "Emails urgents du jour" → generate_digest
+- "Quels emails urgents ai-je reçus ?" → generate_digest
+- "Y a-t-il des emails importants ?" → generate_digest
 
 ### 7. WEB_AGENT (intent: "web_search")
-Recherche sur internet (actualités, réglementation externe).
+Recherche sur internet (actualités, tarifs du marché, entreprises externes).
 UTILISER POUR:
-- Recherche d'informations externes
-- Actualités, tarifs du marché
-- Informations non disponibles en interne
+- Recherche d'entreprises/prestataires EXTERNES (pas dans la base)
+- Tarifs du MARCHÉ (prix moyens, estimations)
+- Actualités, informations externes
+- "Trouve-moi", "cherche sur internet", "prix moyen"
+
+⚠️ DISTINCTION CRITIQUE web vs query_data:
+- "Liste des plombiers" = query_data (dans notre base interne)
+- "Trouve-moi des entreprises de ravalement" = web_search (recherche externe)
+- "Prix moyen d'un ascenseur en 2024" = web_search (prix du marché)
 
 EXEMPLES:
 - "Tarifs électriciens à Paris" → web_search
 - "Actualités loi copropriété 2024" → web_search
+- "Trouve-moi des entreprises de ravalement" → web_search
+- "Prix moyen d'un ascenseur en 2024" → web_search
+- "Recherche des devis en ligne" → web_search
 - "Recherche sur internet: isolation thermique" → web_search
 
 ### 8. GENERAL (intent: "general_question")
@@ -417,18 +468,33 @@ class LLMIntentClassifier:
     """
     LLM-based intent classifier for world-class accuracy.
 
-    Uses Mistral models with:
+    Uses Groq (Llama 3.1 8B) as primary with:
+    - Ultra-fast inference (~700ms)
     - Semantic understanding
     - Conversation context
     - Few-shot examples
-    - Fallback cascade
+    - Fallback cascade (Groq → Mistral)
     """
 
     def __init__(self):
-        self.llm_service = LLMService()
+        self.groq_client = get_groq_client()
+        self._mistral_service = None  # Lazy-loaded fallback
         self._call_count = 0
         self._cache: Dict[str, IntentClassification] = {}
-        logger.info("llm_intent_classifier_initialized")
+        self._groq_available = self.groq_client is not None
+        logger.info(
+            "llm_intent_classifier_initialized",
+            provider="groq" if self._groq_available else "mistral",
+            groq_available=self._groq_available
+        )
+
+    @property
+    def mistral_service(self):
+        """Lazy-load Mistral service as fallback."""
+        if self._mistral_service is None:
+            from app.services.llm_service import LLMService
+            self._mistral_service = LLMService()
+        return self._mistral_service
 
     async def classify(
         self,
@@ -467,48 +533,72 @@ class LLMIntentClassifier:
             "llm_classification_started",
             query=user_query[:100],
             history_len=len(conversation_history) if conversation_history else 0,
-            has_context=context is not None
+            has_context=context is not None,
+            provider="groq" if self._groq_available else "mistral"
         )
 
-        # Try models in order (fast → accurate)
+        # Try providers in order: Groq (fast) → Mistral (fallback)
         last_error = None
         result = None
 
-        for model in CLASSIFIER_MODELS:
+        # === STEP 1: Try Groq (primary - ultra fast) ===
+        if self._groq_available:
             try:
-                result = await self._classify_with_model(
-                    model=model,
+                result = await self._classify_with_groq(
+                    model=GROQ_MODEL_FAST,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     user_query=user_query
                 )
 
-                # If confidence is very low with fast model, try accurate model
-                if result.confidence < CONFIDENCE_MEDIUM and model == CLASSIFIER_MODELS[0]:
+                # If low confidence, try more powerful Groq model
+                if result.confidence < CONFIDENCE_MEDIUM:
                     logger.info(
-                        "llm_classifier_low_confidence_retry",
-                        model=model,
+                        "groq_low_confidence_retry",
+                        model=GROQ_MODEL_FAST,
                         confidence=result.confidence,
-                        next_model=CLASSIFIER_MODELS[1] if len(CLASSIFIER_MODELS) > 1 else None
+                        next_model=GROQ_MODEL_ACCURATE
                     )
-                    continue
-
-                # Success - break out of loop
-                break
+                    result = await self._classify_with_groq(
+                        model=GROQ_MODEL_ACCURATE,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        user_query=user_query
+                    )
 
             except Exception as e:
                 last_error = e
                 logger.warning(
-                    "llm_classifier_model_failed",
-                    model=model,
-                    error=str(e)
+                    "groq_classification_failed",
+                    error=str(e),
+                    falling_back_to="mistral"
                 )
-                continue
+                result = None
 
-        # If all models failed, return fallback
+        # === STEP 2: Fallback to Mistral if Groq failed ===
+        if result is None:
+            for model in MISTRAL_MODELS:
+                try:
+                    result = await self._classify_with_mistral(
+                        model=model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        user_query=user_query
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        "mistral_classification_failed",
+                        model=model,
+                        error=str(e)
+                    )
+                    continue
+
+        # === STEP 3: Keyword fallback if all LLMs failed ===
         if result is None:
             logger.error(
-                "llm_classifier_all_models_failed",
+                "llm_classifier_all_providers_failed",
                 error=str(last_error) if last_error else "Unknown"
             )
             result = self._fallback_classification(user_query)
@@ -535,31 +625,86 @@ class LLMIntentClassifier:
 
         return result
 
-    async def _classify_with_model(
+    async def _classify_with_groq(
         self,
         model: str,
         system_prompt: str,
         user_prompt: str,
         user_query: str
     ) -> IntentClassification:
-        """Classify using a specific model."""
+        """Classify using Groq API (ultra-fast)."""
+        import asyncio
 
-        # Call LLM
-        response = await self.llm_service.generate_response(
+        def _call_groq():
+            return self.groq_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=500
+            )
+
+        # Run sync Groq call in executor
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, _call_groq)
+        response_text = response.choices[0].message.content
+
+        # Parse response
+        parsed = _parse_llm_response(response_text)
+
+        if parsed is None:
+            raise ValueError(f"Failed to parse Groq response: {response_text[:200]}")
+
+        # Add provider info to reasoning
+        result = _map_to_intent_classification(parsed, user_query)
+        result.reasoning = result.reasoning.replace("[LLM]", f"[Groq/{model}]")
+
+        logger.debug(
+            "groq_classification_success",
+            model=model,
+            intent=result.intent.value,
+            confidence=result.confidence
+        )
+
+        return result
+
+    async def _classify_with_mistral(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        user_query: str
+    ) -> IntentClassification:
+        """Classify using Mistral API (fallback)."""
+
+        # Call Mistral via LLMService
+        response = await self.mistral_service.generate_response(
             prompt=user_prompt,
             system_prompt=system_prompt,
             max_tokens=500,
-            temperature=0.1  # Low temperature for consistent classification
+            temperature=0.1
         )
 
         # Parse response
         parsed = _parse_llm_response(response)
 
         if parsed is None:
-            raise ValueError(f"Failed to parse LLM response: {response[:200]}")
+            raise ValueError(f"Failed to parse Mistral response: {response[:200]}")
 
-        # Convert to IntentClassification
-        return _map_to_intent_classification(parsed, user_query)
+        # Add provider info to reasoning
+        result = _map_to_intent_classification(parsed, user_query)
+        result.reasoning = result.reasoning.replace("[LLM]", f"[Mistral/{model}]")
+
+        logger.debug(
+            "mistral_classification_success",
+            model=model,
+            intent=result.intent.value,
+            confidence=result.confidence
+        )
+
+        return result
 
     def _fallback_classification(self, user_query: str) -> IntentClassification:
         """Fallback classification when LLM fails."""
