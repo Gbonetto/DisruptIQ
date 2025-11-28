@@ -726,6 +726,25 @@ class IntentClassifierV5:
             "majorité": 0.75,              # FIX 3 (lower, can be ambiguous)
             "vote ag": 0.85,               # FIX 3
             "délai convocation": 0.85,     # FIX 3
+            # FIX - Questions juridiques générales (loi, assemblée générale)
+            "que dit la loi": 0.95,        # FIX - "que dit la loi sur..."
+            "la loi sur": 0.90,            # FIX - "la loi sur les modalités..."
+            "selon la loi": 0.90,          # FIX - "selon la loi..."
+            "d'après la loi": 0.90,        # FIX - "d'après la loi..."
+            "prévoit la loi": 0.90,        # FIX - "que prévoit la loi..."
+            "réglementation": 0.85,        # FIX - questions réglementaires
+            "texte de loi": 0.90,          # FIX - référence à un texte
+            "article de loi": 0.90,        # FIX - référence à un article
+            "assemblée générale": 0.85,    # FIX - AG copropriété (contexte légal)
+            "assemblées générales": 0.85,  # FIX - AG pluriel
+            "règles de vote": 0.88,        # FIX - règles de vote AG
+            "modalités de vote": 0.88,     # FIX - modalités de vote AG
+            "droit de vote": 0.85,         # FIX - droit de vote copropriété
+            "droits de vote": 0.85,        # FIX - droits de vote pluriel
+            "règlement de copropriété": 0.90, # FIX - document légal copro
+            "loi sur la copropriété": 0.92,   # FIX - loi copropriété
+            "législation": 0.88,           # FIX - questions législatives
+            "dispositions légales": 0.90,  # FIX - dispositions légales
         }
 
         for keyword, confidence in legal_strong_keywords.items():
