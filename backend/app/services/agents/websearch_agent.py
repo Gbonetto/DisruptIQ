@@ -25,6 +25,9 @@ import os
 import httpx
 import json
 
+from app.services.agents.thought_stream import ThoughtStream, ThoughtType
+from app.services.agents.world_class_mixin import WorldClassRAGMixin
+
 logger = structlog.get_logger()
 
 # Lazy import for Mistral (only when LLM synthesis is used)
@@ -122,9 +125,13 @@ class SearchResults:
         }
 
 
-class WebSearchAgent:
+class WebSearchAgent(WorldClassRAGMixin):
     """
     Web Search Agent using DuckDuckGo (free) or Tavily (premium)
+
+    World-Class Features (Phase 3.2):
+    - Thought stream integration for CoT transparency
+    - Cross-encoder re-ranking for relevance
 
     Capabilities:
     - General web search with cross-encoder re-ranking
@@ -165,6 +172,10 @@ class WebSearchAgent:
             self.cache_service = None
 
         provider = "brave" if self.use_brave else ("tavily" if self.use_tavily else "duckduckgo")
+
+        # World-Class RAG Mixin initialization
+        self._agent_name = "websearch_agent"
+
         logger.info(
             "websearch_agent_initialized",
             provider=provider,
@@ -178,7 +189,8 @@ class WebSearchAgent:
         search_depth: str = "basic",
         region: str = "fr-fr",
         time_range: Optional[str] = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        thought_stream: Optional[ThoughtStream] = None
     ) -> SearchResults:
         """
         Perform web search with contextual awareness, caching, and re-ranking
@@ -190,16 +202,30 @@ class WebSearchAgent:
             region: Search region (e.g., "fr-fr" for France)
             time_range: Time filter ("d" = day, "w" = week, "m" = month, "y" = year)
             conversation_history: Recent conversation for contextual understanding
+            thought_stream: Optional ThoughtStream for CoT transparency
 
         Returns:
             SearchResults with synthesized answer
         """
+        # Initialize thought stream for CoT
+        self.set_thought_stream(thought_stream, "websearch_agent")
+
+        provider = "brave" if self.use_brave else ("tavily" if self.use_tavily else "duckduckgo")
+
         logger.info(
             "websearch_started",
             query=query[:100],
             num_results=num_results,
-            provider="tavily" if self.use_tavily else "duckduckgo",
+            provider=provider,
             has_conversation_history=conversation_history is not None
+        )
+
+        # Emit start thought
+        await self.emit_thought(
+            content=f"Recherche sur internet: \"{query[:60]}...\"",
+            thought_type="web_searching",
+            title=f"🌐 Recherche web ({provider})",
+            progress=0.1
         )
 
         try:
@@ -274,6 +300,28 @@ class WebSearchAgent:
                 cache_hit=cache_hit,
                 reranked=len(results.results) > 0
             )
+
+            # Emit results thought
+            if results.results:
+                source_names = [r.title[:30] for r in results.results[:3]]
+                await self.emit_thought(
+                    content=f"{len(results.results)} résultat(s) trouvé(s)\nSources: {', '.join(source_names)}...",
+                    thought_type="web_results",
+                    title=f"✅ {len(results.results)} résultat(s) web",
+                    data={
+                        "result_count": len(results.results),
+                        "confidence": results.confidence,
+                        "has_synthesis": results.synthesized_answer is not None
+                    },
+                    progress=0.9
+                )
+            else:
+                await self.emit_thought(
+                    content="Aucun résultat pertinent trouvé",
+                    thought_type="web_results",
+                    title="⚠️ Aucun résultat",
+                    progress=0.9
+                )
 
             return results
 

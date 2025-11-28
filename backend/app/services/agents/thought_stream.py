@@ -82,6 +82,32 @@ class ThoughtType(str, Enum):
     # Fusion multi-sources
     FUSION_COMBINING = "fusion_combining"  # Combinaison des sources
 
+    # === World-Class RAG Pipeline ===
+    # Query Planning
+    QUERY_PLANNING = "query_planning"  # Planification de requête complexe
+    QUERY_DECOMPOSING = "query_decomposing"  # Décomposition en sous-requêtes
+    SUBQUERY_EXECUTING = "subquery_executing"  # Exécution d'une sous-requête
+
+    # Verification Agent
+    VERIFICATION_CHECKING = "verification_checking"  # Vérification de pertinence
+    VERIFICATION_REFINING = "verification_refining"  # Raffinement de la recherche
+    VERIFICATION_COMPLETE = "verification_complete"  # Vérification terminée
+
+    # Reflection Agent
+    REFLECTION_DIAGNOSING = "reflection_diagnosing"  # Diagnostic du problème
+    REFLECTION_IMPROVING = "reflection_improving"  # Amélioration des résultats
+    REFLECTION_COMPLETE = "reflection_complete"  # Réflexion terminée
+
+    # Synthesis Agent
+    SYNTHESIS_STARTING = "synthesis_starting"  # Début de synthèse
+    SYNTHESIS_CITING = "synthesis_citing"  # Citation des sources
+    SYNTHESIS_COMPLETE = "synthesis_complete"  # Synthèse terminée
+
+    # LLM Internal (for debugging)
+    LLM_CALLING = "llm_calling"  # Appel au modèle LLM
+    LLM_REASONING = "llm_reasoning"  # Raisonnement en cours
+    LLM_RESPONSE = "llm_response"  # Réponse LLM reçue
+
     # Alias legacy
     SEARCHING = "searching"  # Déprécié: utiliser les types spécifiques
 
@@ -155,6 +181,32 @@ THOUGHT_LABELS_FR = {
 
     # Legacy
     ThoughtType.SEARCHING: "Recherche",
+
+    # === World-Class RAG Pipeline ===
+    # Query Planning
+    ThoughtType.QUERY_PLANNING: "🧩 Planification de requête",
+    ThoughtType.QUERY_DECOMPOSING: "🔀 Décomposition en sous-requêtes",
+    ThoughtType.SUBQUERY_EXECUTING: "🔍 Exécution sous-requête",
+
+    # Verification
+    ThoughtType.VERIFICATION_CHECKING: "🔍 Vérification de pertinence",
+    ThoughtType.VERIFICATION_REFINING: "🔄 Raffinement de la recherche",
+    ThoughtType.VERIFICATION_COMPLETE: "✅ Vérification terminée",
+
+    # Reflection
+    ThoughtType.REFLECTION_DIAGNOSING: "🤔 Diagnostic du problème",
+    ThoughtType.REFLECTION_IMPROVING: "🔄 Amélioration des résultats",
+    ThoughtType.REFLECTION_COMPLETE: "✅ Réflexion terminée",
+
+    # Synthesis
+    ThoughtType.SYNTHESIS_STARTING: "📝 Début de synthèse",
+    ThoughtType.SYNTHESIS_CITING: "📚 Citation des sources",
+    ThoughtType.SYNTHESIS_COMPLETE: "✅ Synthèse terminée",
+
+    # LLM Internal
+    ThoughtType.LLM_CALLING: "🤖 Appel au modèle LLM",
+    ThoughtType.LLM_REASONING: "💭 Raisonnement en cours",
+    ThoughtType.LLM_RESPONSE: "💬 Réponse LLM reçue",
 }
 
 

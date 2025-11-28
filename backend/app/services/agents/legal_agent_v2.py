@@ -37,17 +37,24 @@ Architecture:
 import structlog
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import re
 
 from app.services.llm_service import LLMService
 from app.services.legal_reference_service import get_legal_reference_service
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
+from app.services.agents.world_class_mixin import WorldClassRAGMixin
 
 logger = structlog.get_logger()
 
 
-class LegalAgentV2:
+class LegalAgentV2(WorldClassRAGMixin):
     """
     Legal Analysis Agent V2 with zero-hallucination guarantee
+
+    World-Class Features (Phase 3.2):
+    - QueryPlanning for legal comparisons ("Compare article X et Y")
+    - Thought stream integration for CoT transparency
+    - Two-stage pipeline: Facts extraction → Legal analysis
 
     Usage:
         agent = LegalAgentV2()
@@ -62,6 +69,7 @@ class LegalAgentV2:
     def __init__(self):
         self.llm_service = LLMService()
         self.legal_ref_service = None
+        self._agent_name = "legal_agent_v2"
 
     async def initialize(self):
         """Initialize agent (must be called before use)"""
@@ -537,3 +545,213 @@ Réponds UNIQUEMENT avec le JSON, rien d'autre."""
         except Exception as e:
             logger.error("synthesis_generation_failed", error=str(e))
             return f"Erreur lors de la génération de la synthèse : {str(e)}"
+
+    # =========================================================================
+    # WORLD-CLASS FEATURES: Legal Comparisons with QueryPlanning
+    # =========================================================================
+
+    async def compare_legal_articles(
+        self,
+        query: str,
+        thought_stream: Optional[ThoughtStream] = None
+    ) -> Dict[str, Any]:
+        """
+        Compare legal articles using QueryPlanning for multi-hop queries
+
+        Handles queries like:
+        - "Compare l'article L.111-1 et L.112-5"
+        - "Différence entre loi Hoguet et loi ALUR"
+
+        Args:
+            query: Legal comparison query
+            thought_stream: Optional ThoughtStream for CoT transparency
+
+        Returns:
+            Comparison result with sources
+        """
+        try:
+            # Initialize thought stream for mixin
+            self.set_thought_stream(thought_stream, "legal_agent_v2")
+
+            # Check if this is a comparison query
+            is_comparison = self._is_legal_comparison_query(query)
+
+            if is_comparison:
+                await self.emit_thought(
+                    content=f"Détection d'une requête de comparaison juridique...",
+                    thought_type="analyzing",
+                    title="🧩 Requête de comparaison juridique",
+                    progress=0.1
+                )
+
+                # Use QueryPlanning for decomposition
+                plan = await self.use_query_planning(query)
+
+                if plan and plan.is_complex:
+                    # Execute sub-queries against Légifrance
+                    results = []
+                    for i, sub_query in enumerate(plan.sub_queries):
+                        await self.emit_thought(
+                            content=f"Recherche: {sub_query.query[:60]}...",
+                            thought_type="legal_searching",
+                            title=f"📚 Sous-requête {i+1}/{len(plan.sub_queries)}",
+                            progress=0.2 + (i * 0.2)
+                        )
+
+                        # Search Légifrance for this article
+                        sub_result = await self._search_legal_article(sub_query.query)
+                        results.append({
+                            "query": sub_query.query,
+                            "result": sub_result
+                        })
+
+                    # Synthesize comparison
+                    await self.emit_thought(
+                        content=f"Synthèse comparative de {len(results)} résultats...",
+                        thought_type="synthesizing",
+                        title="📝 Synthèse comparative",
+                        progress=0.8
+                    )
+
+                    comparison = await self._synthesize_legal_comparison(query, results)
+
+                    await self.emit_thought(
+                        content="Comparaison juridique terminée avec succès",
+                        thought_type="completed",
+                        title="✅ Comparaison terminée",
+                        progress=1.0
+                    )
+
+                    return {
+                        "success": True,
+                        "query": query,
+                        "comparison": comparison,
+                        "sub_results": results,
+                        "sources": [r["result"].get("source") for r in results if r["result"].get("source")]
+                    }
+
+            # Not a comparison - use standard search
+            if thought_stream:
+                await thought_stream.add_thought(
+                    thought_type=ThoughtType.LEGAL_SEARCHING,
+                    title="Recherche juridique",
+                    content=f"Recherche: {query[:60]}...",
+                    agent="legal_agent_v2",
+                    progress=0.3
+                )
+
+            result = await self._search_legal_article(query)
+
+            return {
+                "success": True,
+                "query": query,
+                "result": result
+            }
+
+        except Exception as e:
+            logger.error("legal_comparison_failed", error=str(e), exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "query": query
+            }
+
+    def _is_legal_comparison_query(self, query: str) -> bool:
+        """Detect if query is asking for legal comparison"""
+        patterns = [
+            r'compare[rz]?\s+',
+            r'différence\s+entre',
+            r'article.*et\s+article',
+            r'loi.*et\s+loi',
+            r'versus|vs\.?',
+        ]
+
+        query_lower = query.lower()
+        return any(re.search(p, query_lower) for p in patterns)
+
+    async def _search_legal_article(self, query: str) -> Dict[str, Any]:
+        """Search for a specific legal article in Légifrance"""
+        try:
+            if self.legal_ref_service:
+                # Try to find the article
+                result = await self.legal_ref_service.find_reference(query)
+                if result:
+                    return result
+
+            # Fallback to LLM with legal knowledge
+            prompt = f"""Tu es un expert juridique. Réponds à cette question juridique de manière précise et sourcée:
+
+Question: {query}
+
+Fournis:
+1. La réponse synthétique
+2. Les références légales pertinentes (articles de loi, décrets)
+3. Les sources (Légifrance si applicable)
+
+Réponds en JSON:
+{{
+  "answer": "...",
+  "legal_references": ["Article L.xxx-xx du Code..."],
+  "source": "Légifrance / Code de la copropriété",
+  "confidence": 0.8
+}}"""
+
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=800
+            )
+
+            # Parse JSON response
+            import json
+            try:
+                cleaned = response.strip()
+                if cleaned.startswith("```"):
+                    cleaned = re.sub(r'^```(?:json)?\s*\n', '', cleaned)
+                    cleaned = re.sub(r'\n```\s*$', '', cleaned)
+                return json.loads(cleaned)
+            except:
+                return {"answer": response, "confidence": 0.5}
+
+        except Exception as e:
+            logger.warning("legal_article_search_failed", error=str(e))
+            return {"error": str(e), "confidence": 0}
+
+    async def _synthesize_legal_comparison(
+        self,
+        original_query: str,
+        results: List[Dict[str, Any]]
+    ) -> str:
+        """Synthesize a comparison between legal articles"""
+        try:
+            results_text = "\n\n".join([
+                f"### {r['query']}\n{r['result'].get('answer', 'N/A')}"
+                for r in results
+            ])
+
+            prompt = f"""Tu es un expert juridique. Compare les éléments juridiques suivants pour répondre à cette question:
+
+**Question originale**: {original_query}
+
+**Éléments à comparer**:
+{results_text}
+
+Fournis une comparaison structurée en format Markdown avec:
+1. **Tableau comparatif** des points clés
+2. **Différences principales**
+3. **Points communs**
+4. **Conclusion** et recommandation
+
+Sois précis et cite les références légales."""
+
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.2,
+                max_tokens=1200
+            )
+
+            return response
+
+        except Exception as e:
+            logger.error("legal_comparison_synthesis_failed", error=str(e))
+            return f"Erreur lors de la synthèse comparative: {str(e)}"
