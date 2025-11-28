@@ -111,11 +111,44 @@ class OrchestratorAgent:
             IntentType enum
         """
         try:
+            # Enrich context with last_intent for cascading queries
+            enriched_context = dict(context) if context else {}
+
+            # Extract last_intent from conversation history if available
+            if conversation_history and len(conversation_history) >= 2:
+                # Look for assistant response with intent info in metadata
+                for msg in reversed(conversation_history):
+                    if msg.get('role') == 'assistant':
+                        # Check if message has metadata with intent
+                        metadata = msg.get('metadata', {})
+                        if metadata.get('intent'):
+                            enriched_context['last_intent'] = metadata['intent']
+                            logger.debug("last_intent_extracted", intent=metadata['intent'])
+                            break
+
+                # FALLBACK: Infer last_intent from previous user message keywords
+                if 'last_intent' not in enriched_context:
+                    for msg in reversed(conversation_history):
+                        if msg.get('role') == 'user':
+                            prev_msg = msg.get('content', '').lower()
+                            # Simple heuristic inference
+                            if any(kw in prev_msg for kw in ['règlement', 'contrat', 'document', 'facture', 'pv']):
+                                enriched_context['last_intent'] = 'search_documents'
+                            elif any(kw in prev_msg for kw in ['combien', 'liste', 'qui', 'email de', 'contact']):
+                                enriched_context['last_intent'] = 'query_data'
+                            elif any(kw in prev_msg for kw in ['loi', 'légal', 'article', 'juridique']):
+                                enriched_context['last_intent'] = 'legal'
+                            elif any(kw in prev_msg for kw in ['envoie', 'mail', 'contacte', 'préviens']):
+                                enriched_context['last_intent'] = 'send_email'
+                            if 'last_intent' in enriched_context:
+                                logger.debug("last_intent_inferred", intent=enriched_context['last_intent'])
+                                break
+
             # PRIMARY: Use LLM-based classifier for semantic understanding
             classification_result = await self.llm_classifier(
                 user_query=user_input,
                 conversation_history=conversation_history,
-                context=context,
+                context=enriched_context,
             )
 
             # Log detailed classification info

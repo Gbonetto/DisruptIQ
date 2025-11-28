@@ -186,6 +186,18 @@ UTILISER POUR:
    - "et pour les autres ?" → se réfère à la question précédente
    - "envoie-leur" → se réfère aux personnes mentionnées avant
 
+6. **QUESTIONS FOLLOW-UP** (TRÈS IMPORTANT):
+   Si la question est COURTE et commence par "Et...", "Aussi...", "Et pour...", "Qu'en est-il de...":
+   - C'est probablement un FOLLOW-UP de la question précédente
+   - PRIVILÉGIER le même intent que la question précédente
+   - Exemples:
+     * Historique: "Que dit le règlement sur les animaux?" (search_documents)
+       Follow-up: "Et pour les chiens?" → search_documents (pas legal!)
+     * Historique: "Combien de copropriétaires?" (query_data)
+       Follow-up: "Et ceux en impayé?" → query_data
+     * Historique: "Liste des plombiers" (query_data)
+       Follow-up: "Contacte le premier" → send_email (changement d'action explicite)
+
 ## FORMAT DE RÉPONSE
 
 Réponds UNIQUEMENT avec un JSON valide (pas de texte avant/après):
@@ -256,6 +268,11 @@ def _build_context_section(
                 context_parts.append(f"- Niveau d'urgence: {bc['urgency']}")
             if bc.get('incident_type'):
                 context_parts.append(f"- Type d'incident: {bc['incident_type']}")
+
+        # Last intent (for cascading/follow-up questions)
+        if context.get('last_intent'):
+            context_parts.append(f"- Dernière intention détectée: {context['last_intent']}")
+            context_parts.append("  ⚠️ Si la question est un follow-up court (Et..., Aussi..., précision), privilégier cette intention")
 
         if context_parts:
             sections.append("## CONTEXTE ACTUEL\n" + "\n".join(context_parts))
