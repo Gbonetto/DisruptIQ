@@ -2341,7 +2341,8 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 num_results=5,
                 search_depth="basic",
                 region="fr-fr",
-                conversation_history=conversation_history
+                conversation_history=conversation_history,
+                thought_stream=thought_stream  # Pass thought_stream for CoT
             )
 
             # Thought 2: Results found with structured data
