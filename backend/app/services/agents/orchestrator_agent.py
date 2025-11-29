@@ -201,6 +201,100 @@ class OrchestratorAgent:
                 logger.error("v5_fallback_also_failed", error=str(e2))
                 return IntentType.GENERAL_QUESTION, None
 
+    def _is_ambiguous(
+        self,
+        query: str,
+        conversation_history: List[Dict[str, str]] = None
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Detect if a query is too ambiguous to process directly.
+
+        Ambiguity types detected:
+        1. Short queries (<3 words without context)
+        2. Isolated pronouns (il, elle, ça, lui, son) without referent
+        3. Incomplete actions (envoie, trouve, cherche without object)
+
+        Args:
+            query: User's query
+            conversation_history: Previous messages for context
+
+        Returns:
+            (is_ambiguous, clarification_question) tuple
+        """
+        query_lower = query.lower().strip()
+        words = query_lower.split()
+        has_context = conversation_history and len(conversation_history) > 0
+
+        # ================================================================
+        # Type 1: Very short queries without context
+        # ================================================================
+        if len(words) <= 2 and not has_context:
+            # Exception: Common complete questions
+            complete_short_queries = [
+                "bonjour", "salut", "hello", "merci", "oui", "non",
+                "ok", "aide", "help", "quoi de neuf"
+            ]
+            if query_lower not in complete_short_queries:
+                logger.info("ambiguity_detected_short_query", query=query[:50])
+                return True, f"Votre question « {query} » est un peu courte. Pouvez-vous préciser ce que vous recherchez ?"
+
+        # ================================================================
+        # Type 2: Isolated pronouns without referent (no context)
+        # ================================================================
+        isolated_pronouns = ["son", "sa", "ses", "lui", "elle", "il", "eux", "leur", "leurs"]
+        pronoun_patterns = [
+            # "son email", "sa facture", "son numéro"
+            r"^(quel|quelle|quels|quelles|où|donne|trouve|cherche)\s+(est\s+)?(son|sa|ses|leur|leurs)\s+",
+            # "combien lui", "envoie lui"
+            r"(à|pour|chez|avec)\s+(lui|elle|eux)$",
+            # Queries starting with just pronoun reference
+            r"^(il|elle|ça|cela)\s+(a|est|fait|veut)",
+        ]
+
+        if not has_context:
+            import re
+            for pattern in pronoun_patterns:
+                if re.search(pattern, query_lower):
+                    logger.info("ambiguity_detected_pronoun", query=query[:50], pattern=pattern)
+                    return True, "Je ne suis pas sûr de comprendre à qui ou à quoi vous faites référence. Pouvez-vous préciser le nom de la personne ou du document ?"
+
+        # ================================================================
+        # Type 3: Incomplete actions (verbe sans complément)
+        # ================================================================
+        incomplete_action_patterns = [
+            # "envoie" without destination
+            (r"^envoie(\s+un)?$", "Envoyer quoi et à qui ?"),
+            (r"^envoie\s+(un\s+)?(email|mail|message)$", "À qui souhaitez-vous envoyer cet email ?"),
+            # "trouve" without object
+            (r"^trouve$", "Que souhaitez-vous que je trouve ?"),
+            (r"^cherche$", "Que souhaitez-vous que je cherche ?"),
+            # "liste" without object
+            (r"^liste$", "Que souhaitez-vous lister ?"),
+            # "combien" alone
+            (r"^combien\s*\?*$", "Combien de quoi ? Précisez ce que vous souhaitez compter."),
+            # "montre" without object
+            (r"^montre$", "Que souhaitez-vous voir ?"),
+        ]
+
+        import re
+        for pattern, clarification in incomplete_action_patterns:
+            if re.match(pattern, query_lower):
+                logger.info("ambiguity_detected_incomplete_action", query=query[:50], pattern=pattern)
+                return True, clarification
+
+        # ================================================================
+        # Type 4: Questions with only interrogative words
+        # ================================================================
+        only_interrogative = [
+            "quoi", "qui", "où", "quand", "comment", "pourquoi", "lequel", "laquelle"
+        ]
+        if query_lower.rstrip("?") in only_interrogative:
+            logger.info("ambiguity_detected_interrogative_only", query=query[:50])
+            return True, f"Pouvez-vous compléter votre question ? « {query} » seul ne me permet pas de comprendre ce que vous cherchez."
+
+        # Not ambiguous
+        return False, None
+
     async def process(
         self,
         user_input: str,
@@ -385,6 +479,48 @@ class OrchestratorAgent:
                 logger.info("level_0_bypass_classification_ui",
                            intent=bypass_intent.value,
                            method=ui_bypass_result.get('method'))
+
+            # ================================================================
+            # AMBIGUITY DETECTION (P1 Improvement)
+            # Check if query is too vague before processing
+            # ================================================================
+            is_ambiguous, clarification_question = self._is_ambiguous(
+                user_input,
+                conversation_history
+            )
+
+            if is_ambiguous and clarification_question:
+                logger.info("ambiguity_detected_returning_clarification",
+                           query=user_input[:50],
+                           clarification=clarification_question[:50])
+
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.ANALYZING,
+                        title="Demande de précision",
+                        content="La requête est ambiguë, je demande une clarification.",
+                        agent="orchestrator",
+                        progress=0.1
+                    )
+
+                return AgentResponse(
+                    success=True,
+                    message=clarification_question,
+                    data={
+                        "needs_clarification": True,
+                        "ambiguity_type": "detected",
+                        "original_query": user_input
+                    },
+                    agents_used=["orchestrator"],
+                    sources_used=[],
+                    confidence=0.3,
+                    suggestions=[
+                        "Précisez le nom de la copropriété",
+                        "Ajoutez plus de détails",
+                        "Reformulez votre question"
+                    ],
+                    warnings=[]
+                )
 
             # ================================================================
             # WORLD-CLASS ROUTER MODE (Phase 4 - Perplexity-style)
@@ -3213,11 +3349,13 @@ Réponds uniquement avec le contenu, sans préambule."""
                 )
 
             # 1. Route and retrieve using World-Class Router
+            # Pass thought_stream for progress emissions (Option C streaming)
             router_result = await self.world_class_router.route_and_retrieve(
                 query=user_input,
                 db=db,
                 context=context,
-                top_k=5
+                top_k=5,
+                thought_stream=thought_stream  # Enable progress streaming
             )
 
             # Thought: Sources determined and retrieved
@@ -3322,23 +3460,45 @@ Réponds uniquement avec le contenu, sans préambule."""
                 )
 
             # 4. Full synthesis for hybrid/complex queries
-            chunks = []
+            # Convert documents to multi-source format for optimized synthesis
+            documents = []
             for doc in router_result.documents:
-                chunks.append({
+                documents.append({
                     "content": doc.content,
                     "score": doc.score,
                     "source": doc.source.value,
-                    "metadata": doc.metadata,
-                    "citation_id": doc.citation_id
+                    "metadata": doc.metadata
                 })
 
-            # Use SynthesisAgent for response generation (uses Mistral)
+            # Use SynthesisAgent with multi-source synthesis (SINGLE LLM CALL)
             from app.services.agents.synthesis_agent import SynthesisAgent
+            from app.services.agents.thought_stream import PROGRESS_MESSAGES
             synthesis_agent = SynthesisAgent()
 
-            synthesized = await synthesis_agent.synthesize_with_citations(
+            # Build router metrics for synthesis context
+            router_metrics = {
+                "complexity": router_result.complexity.value,
+                "sources_queried": [s.value for s in router_result.sources_queried],
+                "sources_used": [s.value for s in router_result.sources_used],
+                "is_legal_query": router_result.is_legal_query,
+                "is_pure_legal": router_result.is_pure_legal
+            }
+
+            # === PROGRESS: Synthesis (emit before LLM call) ===
+            if thought_stream:
+                msg = PROGRESS_MESSAGES["synthesis"]
+                await thought_stream.add_thought(
+                    msg["type"],
+                    title=msg["title"],
+                    content=msg["content"],
+                    agent="synthesis",
+                    progress=msg["progress"]
+                )
+
+            synthesized = await synthesis_agent.synthesize_multi_source(
                 query=user_input,
-                chunks=chunks,
+                documents=documents,
+                router_metrics=router_metrics,
                 conversation_context=str(conversation_history[-3:]) if conversation_history else None
             )
 

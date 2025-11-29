@@ -541,6 +541,58 @@ GÉNÈRE LE SQL (retourne UNIQUEMENT la requête SQL, rien d'autre):
         question_lower = original_question.lower()
 
         # ================================================================
+        # SPECIAL CASE: COUNT(*) queries - display the count value directly
+        # ================================================================
+        if count == 1 and len(results[0]) == 1:
+            # Single row, single column = likely a COUNT query
+            first_col = list(results[0].keys())[0]
+            first_val = results[0][first_col]
+
+            # Check if this is a COUNT result (column name contains 'count' or value is integer)
+            if 'count' in first_col.lower() or (isinstance(first_val, (int, float)) and first_col in ['count', 'nb', 'total', 'nombre']):
+                count_value = int(first_val) if first_val else 0
+
+                # Detect what we're counting from the original question
+                entity = "éléments"
+                if "copropriétaire" in question_lower:
+                    entity = "copropriétaires"
+                elif "professionnel" in question_lower or "plombier" in question_lower or "électricien" in question_lower:
+                    entity = "professionnels"
+                elif "email" in question_lower or "mail" in question_lower:
+                    entity = "emails"
+                elif "document" in question_lower:
+                    entity = "documents"
+                elif "lot" in question_lower:
+                    entity = "lots"
+                elif "copropriété" in question_lower or "immeuble" in question_lower:
+                    entity = "copropriétés"
+
+                # Extract copropriété name if present
+                copro_name = ""
+                import re
+                copro_match = re.search(r'(aux?|des?|chez|dans|pour)\s+(les?\s+)?([A-Z][a-zA-Zéèêëàâäîïôöùûüç]+)', original_question)
+                if copro_match:
+                    copro_name = f" aux {copro_match.group(3)}"
+
+                return f"Il y a **{count_value} {entity}**{copro_name}."
+
+        # ================================================================
+        # SPECIAL CASE: Single scalar value (SUM, AVG, etc.)
+        # ================================================================
+        if count == 1 and len(results[0]) == 1:
+            first_col = list(results[0].keys())[0]
+            first_val = results[0][first_col]
+
+            if first_val is not None:
+                # Format numbers nicely
+                if isinstance(first_val, float):
+                    return f"Le résultat est **{first_val:,.2f}**."
+                elif isinstance(first_val, int):
+                    return f"Le résultat est **{first_val:,}**."
+                else:
+                    return f"Le résultat est : **{first_val}**"
+
+        # ================================================================
         # SPECIAL CASE: Quorum calculation - add explanatory context
         # ================================================================
         if any(kw in question_lower for kw in ["quorum", "assemblée générale", "ag "]):
@@ -730,3 +782,242 @@ Les tantièmes sont calculés selon la formule:
 """)
 
         return "\n".join(response_parts)
+
+    # ========================================================================
+    # LIGHT MODE - NO LLM (for WorldClassRouter optimization)
+    # ========================================================================
+
+    # SQL Templates for common queries - NO LLM CALL
+    SQL_TEMPLATES = {
+        # Counting queries
+        "count_coproprietaires": {
+            "patterns": [
+                r"combien\s+(de\s+)?copropri[ée]taires?\s+(dans|aux?|chez|de)?\s*(.+)",
+                r"nombre\s+(de\s+)?copropri[ée]taires?\s+(dans|aux?|chez|de)?\s*(.+)",
+            ],
+            "sql": """SELECT COUNT(*) as count FROM coproprietaires c
+                      JOIN coproprietes co ON c.copropriete_id = co.id
+                      WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%{entity}%'))""",
+            "extract_group": 3
+        },
+        "count_lots": {
+            "patterns": [
+                r"combien\s+(de\s+)?lots?\s+(dans|aux?|chez|de)?\s*(.+)",
+                r"nombre\s+(de\s+)?lots?\s+(dans|aux?|chez|de)?\s*(.+)",
+            ],
+            "sql": """SELECT nombre_lots as count FROM coproprietes
+                      WHERE unaccent(LOWER(nom)) LIKE unaccent(LOWER('%{entity}%'))""",
+            "extract_group": 3
+        },
+        "count_professionnels": {
+            "patterns": [
+                r"combien\s+(de\s+)?(plombiers?|[ée]lectriciens?|professionnels?|prestataires?)",
+                r"nombre\s+(de\s+)?(plombiers?|[ée]lectriciens?|professionnels?|prestataires?)",
+            ],
+            "sql": """SELECT COUNT(*) as count FROM professionnels
+                      WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%{entity}%'))""",
+            "extract_group": 2
+        },
+        # List queries
+        "list_coproprietaires": {
+            "patterns": [
+                r"liste\s+(des?\s+)?copropri[ée]taires?\s+(de|aux?|chez)?\s*(.+)",
+                r"copropri[ée]taires?\s+(de|aux?|chez)\s+(.+)",
+                r"qui\s+(habite|vit|est)\s+(aux?|dans|chez)\s+(.+)",
+            ],
+            "sql": """SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot
+                      FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id
+                      WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%{entity}%'))
+                      LIMIT {limit}""",
+            "extract_group": -1  # Last group
+        },
+        "list_professionnels": {
+            "patterns": [
+                r"liste\s+(des?\s+)?(plombiers?|[ée]lectriciens?|chauffagistes?|serruriers?|jardiniers?|professionnels?)",
+                r"(plombiers?|[ée]lectriciens?|chauffagistes?|serruriers?|jardiniers?)\s+disponibles?",
+                r"(donne|trouve)[- ]moi\s+(un|des|les)\s+(plombiers?|[ée]lectriciens?|professionnels?)",
+            ],
+            "sql": """SELECT name, company_name, email, phone, city, rating
+                      FROM professionnels
+                      WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%{entity}%'))
+                      AND statut = 'active'
+                      ORDER BY rating DESC NULLS LAST
+                      LIMIT {limit}""",
+            "extract_group": -1
+        },
+        # Who is queries
+        "who_is_person": {
+            "patterns": [
+                r"qui\s+est\s+(\w+\s+\w+)",
+                r"contact\s+(de|du)\s+(\w+\s+\w+)",
+                r"email\s+(de|du)\s+(\w+\s+\w+)",
+            ],
+            "sql": """SELECT * FROM professionnels
+                      WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%{entity}%'))
+                      UNION ALL
+                      SELECT c.*, NULL as company_name, NULL as category,
+                             NULL as siret, NULL as description, NULL as address,
+                             NULL as city, NULL as postal_code, NULL as rating,
+                             NULL as is_indexed, NULL as statut
+                      FROM coproprietaires c
+                      WHERE unaccent(LOWER(CONCAT(prenom, ' ', nom))) LIKE unaccent(LOWER('%{entity}%'))
+                      LIMIT {limit}""",
+            "extract_group": -1
+        },
+        # Lot queries
+        "lot_info": {
+            "patterns": [
+                r"lot\s+(\d+)",
+                r"qui\s+(habite|vit|poss[èe]de)\s+(le\s+)?lot\s+(\d+)",
+                r"propri[ée]taire\s+(du\s+)?lot\s+(\d+)",
+            ],
+            "sql": """SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot,
+                             c.type_lot, c.etage, c.surface, co.nom as copropriete
+                      FROM coproprietaires c
+                      JOIN coproprietes co ON c.copropriete_id = co.id
+                      WHERE c.numero_lot = '{entity}'
+                      LIMIT {limit}""",
+            "extract_group": -1
+        },
+        # Copropriete info
+        "copropriete_info": {
+            "patterns": [
+                r"(infos?|informations?)\s+(sur|de)\s+(la\s+)?copropri[ée]t[ée]?\s+(.+)",
+                r"adresse\s+(de|du|des)\s+(.+)",
+                r"o[uù]\s+(se\s+trouve|est\s+situ[ée]e?)\s+(la\s+)?copropri[ée]t[ée]?\s+(.+)",
+            ],
+            "sql": """SELECT * FROM coproprietes
+                      WHERE unaccent(LOWER(nom)) LIKE unaccent(LOWER('%{entity}%'))
+                      LIMIT {limit}""",
+            "extract_group": -1
+        },
+    }
+
+    async def retrieve_light(
+        self,
+        query: str,
+        db,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        LIGHT MODE retrieval - Uses SQL templates WITHOUT LLM call.
+
+        This method is optimized for WorldClassRouter to reduce latency.
+        It uses pattern matching to select the right SQL template.
+
+        Args:
+            query: User's question
+            db: Database session
+            limit: Max results
+
+        Returns:
+            List of documents with raw SQL results and metadata.
+            Returns empty list if no template matches (fallback to full mode).
+        """
+        import re
+
+        query_lower = query.lower()
+
+        try:
+            # Try each template
+            for template_name, template_config in self.SQL_TEMPLATES.items():
+                for pattern in template_config["patterns"]:
+                    match = re.search(pattern, query_lower, re.IGNORECASE)
+                    if match:
+                        # Extract entity from the matched group
+                        extract_idx = template_config.get("extract_group", -1)
+                        groups = match.groups()
+
+                        if groups:
+                            if extract_idx == -1:
+                                entity = groups[-1] if groups[-1] else ""
+                            elif extract_idx < len(groups):
+                                entity = groups[extract_idx] if groups[extract_idx] else ""
+                            else:
+                                entity = groups[-1] if groups[-1] else ""
+                        else:
+                            entity = ""
+
+                        # Clean entity
+                        entity = entity.strip().strip('"\'')
+
+                        # Build SQL from template
+                        sql = template_config["sql"].format(
+                            entity=entity,
+                            limit=limit
+                        )
+
+                        logger.info("sql_light_template_matched",
+                                   template=template_name,
+                                   entity=entity[:30],
+                                   query=query[:50])
+
+                        # Validate SQL
+                        is_valid, error = self._validate_sql(sql)
+                        if not is_valid:
+                            logger.warning("sql_light_validation_failed",
+                                         error=error, sql=sql[:100])
+                            continue
+
+                        # Execute SQL
+                        results = await self._execute_sql(sql, db)
+
+                        if results is None:
+                            continue
+
+                        # Format as document list for WorldClassRouter
+                        documents = []
+
+                        # Build content from results
+                        if results:
+                            # Format results as JSON-like content for synthesis
+                            content_lines = []
+                            tables_used = self._extract_table_names(sql)
+
+                            for i, row in enumerate(results[:limit], 1):
+                                # Build readable content
+                                row_parts = []
+                                for key, value in row.items():
+                                    if value is not None and str(value).strip():
+                                        row_parts.append(f"{key}: {value}")
+                                if row_parts:
+                                    content_lines.append(f"  {i}. " + " | ".join(row_parts))
+
+                            content = f"Résultats SQL ({len(results)} lignes):\n" + "\n".join(content_lines)
+
+                            documents.append({
+                                "content": content,
+                                "source": "sql",
+                                "score": 0.85,
+                                "metadata": {
+                                    "template_used": template_name,
+                                    "sql_query": sql,
+                                    "row_count": len(results),
+                                    "tables": tables_used,
+                                    "raw_results": results  # Keep raw data for synthesis
+                                }
+                            })
+                        else:
+                            # No results but query was valid
+                            documents.append({
+                                "content": f"Aucun résultat trouvé dans la base de données pour: {entity}",
+                                "source": "sql",
+                                "score": 0.5,
+                                "metadata": {
+                                    "template_used": template_name,
+                                    "sql_query": sql,
+                                    "row_count": 0,
+                                    "tables": self._extract_table_names(sql),
+                                    "raw_results": []
+                                }
+                            })
+
+                        return documents
+
+            # No template matched - return empty (WorldClassRouter will skip SQL)
+            logger.debug("sql_light_no_template_match", query=query[:50])
+            return []
+
+        except Exception as e:
+            logger.error("sql_light_retrieval_failed", error=str(e), query=query[:50])
+            return []

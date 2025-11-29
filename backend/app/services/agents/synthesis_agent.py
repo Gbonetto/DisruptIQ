@@ -722,3 +722,223 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
             overall_confidence=0.5,
             warnings=["Fallback response used due to synthesis error"]
         )
+
+    # ========================================================================
+    # WORLD-CLASS ROUTER OPTIMIZATION: Multi-Source Synthesis (Single LLM Pass)
+    # ========================================================================
+
+    async def synthesize_multi_source(
+        self,
+        query: str,
+        documents: List[Dict[str, Any]],
+        router_metrics: Optional[Dict[str, Any]] = None,
+        conversation_context: Optional[str] = None
+    ) -> SynthesizedResponse:
+        """
+        OPTIMIZED multi-source synthesis for WorldClassRouter.
+
+        This method receives RAW documents from multiple sources (SQL, RAG, Legal, Web)
+        and performs a SINGLE LLM call for synthesis, replacing multiple agent syntheses.
+
+        Architecture:
+        - SQL Agent retrieve_light() -> raw SQL results
+        - RAG Service search() -> raw document chunks
+        - Legal Agent retrieve_light() -> raw legal articles
+        - Web Agent retrieve_light() -> raw search results
+        -> THIS METHOD: Single LLM synthesis
+
+        Args:
+            query: User's question
+            documents: List of documents from all sources
+            router_metrics: Metrics from WorldClassRouter (sources_queried, complexity, etc.)
+            conversation_context: Optional conversation history
+
+        Returns:
+            SynthesizedResponse with text, sources, and metadata
+        """
+        try:
+            if not documents:
+                return self._generate_empty_response(query)
+
+            # Group documents by source type
+            sql_docs = [d for d in documents if d.get("source") == "sql"]
+            rag_docs = [d for d in documents if d.get("source") == "rag"]
+            legal_docs = [d for d in documents if d.get("source") in ["legifrance", "legal"]]
+            web_docs = [d for d in documents if d.get("source") == "web"]
+
+            # Build multi-source prompt
+            prompt = self._build_multi_source_prompt(
+                query=query,
+                sql_docs=sql_docs,
+                rag_docs=rag_docs,
+                legal_docs=legal_docs,
+                web_docs=web_docs,
+                router_metrics=router_metrics,
+                conversation_context=conversation_context
+            )
+
+            logger.info("multi_source_synthesis_started",
+                       query=query[:50],
+                       sql_count=len(sql_docs),
+                       rag_count=len(rag_docs),
+                       legal_count=len(legal_docs),
+                       web_count=len(web_docs))
+
+            # Single LLM call for synthesis
+            response_text = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.2,
+                max_tokens=1000
+            )
+
+            # Build sources for response
+            all_sources = []
+            source_id = 1
+
+            for doc in documents:
+                source_type = doc.get("source", "unknown")
+                source_label = {
+                    "sql": "Base de données",
+                    "rag": doc.get("metadata", {}).get("filename", "Document"),
+                    "legifrance": "Légifrance",
+                    "legal": "Légifrance",
+                    "web": doc.get("metadata", {}).get("title", "Web")
+                }.get(source_type, "Source")
+
+                all_sources.append(Source(
+                    id=source_id,
+                    document_id=doc.get("metadata", {}).get("document_id", 0),
+                    title=f"[{source_type.upper()}] {source_label}",
+                    page=doc.get("metadata", {}).get("page"),
+                    excerpt=doc.get("content", "")[:200],
+                    confidence=doc.get("score", 0.7),
+                    chunk_text=doc.get("content", "")
+                ))
+                source_id += 1
+
+            # Parse sentences (simplified for speed)
+            sentences = self._parse_sentences_with_citations(response_text)
+
+            # Compute confidence
+            overall_confidence = sum(d.get("score", 0.5) for d in documents) / len(documents) if documents else 0.5
+
+            logger.info("multi_source_synthesis_complete",
+                       query=query[:50],
+                       sources_count=len(all_sources),
+                       response_length=len(response_text))
+
+            return SynthesizedResponse(
+                text=response_text,
+                sources=all_sources,
+                sentences=sentences,
+                has_contradictions=False,  # Skip contradiction detection for speed
+                overall_confidence=overall_confidence
+            )
+
+        except Exception as e:
+            logger.error("multi_source_synthesis_failed", error=str(e), exc_info=True)
+            return self._generate_fallback_response(query, documents)
+
+    def _build_multi_source_prompt(
+        self,
+        query: str,
+        sql_docs: List[Dict],
+        rag_docs: List[Dict],
+        legal_docs: List[Dict],
+        web_docs: List[Dict],
+        router_metrics: Optional[Dict] = None,
+        conversation_context: Optional[str] = None
+    ) -> str:
+        """
+        Build optimized multi-source synthesis prompt.
+
+        Key features:
+        - Clear source type labels
+        - Priority weighting (SQL facts > Documents > Legal > Web)
+        - Conflict resolution instructions
+        - Citation requirements
+        """
+        # Build source sections
+        source_sections = []
+        source_id = 1
+
+        # SQL sources (highest priority for factual data)
+        if sql_docs:
+            sql_section = "## (SQL) Données structurées de la base de données\n"
+            for doc in sql_docs:
+                sql_section += f"[{source_id}] {doc.get('content', '')}\n\n"
+                source_id += 1
+            source_sections.append(sql_section)
+
+        # RAG sources (documents, contracts, PV)
+        if rag_docs:
+            rag_section = "## (DOC) Documents internes (PV, règlements, contrats)\n"
+            for doc in rag_docs:
+                filename = doc.get("metadata", {}).get("filename", "Document")
+                rag_section += f"[{source_id}] **{filename}**\n{doc.get('content', '')[:1500]}\n\n"
+                source_id += 1
+            source_sections.append(rag_section)
+
+        # Legal sources (Légifrance)
+        if legal_docs:
+            legal_section = "## (LOI) Textes de loi et jurisprudence\n"
+            for doc in legal_docs:
+                legal_section += f"[{source_id}] {doc.get('content', '')}\n\n"
+                source_id += 1
+            source_sections.append(legal_section)
+
+        # Web sources (external information)
+        if web_docs:
+            web_section = "## (WEB) Informations externes\n"
+            for doc in web_docs:
+                url = doc.get("metadata", {}).get("url", "")
+                title = doc.get("metadata", {}).get("title", "Source web")
+                web_section += f"[{source_id}] **{title}** ({url})\n{doc.get('content', '')[:800]}\n\n"
+                source_id += 1
+            source_sections.append(web_section)
+
+        all_sources_text = "\n".join(source_sections)
+
+        # Context section
+        context_section = ""
+        if conversation_context:
+            context_section = f"\n## Contexte conversationnel\n{conversation_context}\n"
+
+        # Build prompt
+        prompt = f"""Tu es un assistant expert en copropriété. Tu réponds de manière précise et structurée en citant TOUJOURS tes sources.
+
+# SOURCES DISPONIBLES
+{all_sources_text}
+{context_section}
+
+# RÈGLES DE SYNTHÈSE
+
+1. **Priorité des sources** (en cas de conflit) :
+   - (SQL) > (DOC) > (LOI) > (WEB)
+   - Les données SQL sont des faits vérifiés
+   - Les documents sont des sources primaires
+   - Les lois donnent le cadre juridique
+   - Le web est informatif mais à vérifier
+
+2. **Citations obligatoires** :
+   - Chaque information doit être citée [N]
+   - Format : "Il y a 12 copropriétaires[1]."
+   - Si conflit : mentionner les deux sources
+
+3. **Structure de réponse** :
+   - Réponse directe et synthétique
+   - Markdown sobre (**, listes à puces)
+   - Pas de section "Sources" (ajoutée automatiquement)
+
+4. **Limitations** :
+   - Si une source manque : signale-le
+   - Si pas d'info : dis-le clairement
+   - N'invente JAMAIS
+
+# QUESTION
+{query}
+
+# RÉPONSE
+Réponds en français, de manière professionnelle et structurée."""
+
+        return prompt

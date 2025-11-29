@@ -2242,3 +2242,239 @@ Rédige une synthèse jurisprudentielle professionnelle avec citations [1], [2],
             ],
             "disclaimer": "Cet outil fournit une assistance informative uniquement. Il ne remplace pas les conseils d'un avocat qualifié."
         }
+
+    # ========================================================================
+    # LIGHT MODE - NO LLM (for WorldClassRouter optimization)
+    # ========================================================================
+
+    async def retrieve_light(
+        self,
+        query: str,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        LIGHT MODE retrieval - Uses Légifrance API directly WITHOUT LLM synthesis.
+
+        This method is optimized for WorldClassRouter to reduce latency.
+        Returns raw legal data from Légifrance API for later synthesis.
+
+        Args:
+            query: User's question
+            limit: Max results
+
+        Returns:
+            List of documents with raw legal results and metadata.
+        """
+        try:
+            documents = []
+
+            # Get Légifrance service
+            legifrance_service = get_legifrance_service()
+
+            if not legifrance_service:
+                logger.warning("legal_light_no_legifrance_service")
+                return []
+
+            # Extract legal keywords for better search
+            legal_keywords = self._extract_legal_keywords(query)
+            search_query = " ".join(legal_keywords) if legal_keywords else query
+
+            logger.info("legal_light_retrieval_started",
+                       query=query[:50],
+                       search_query=search_query[:50])
+
+            # Search jurisprudence via Légifrance API
+            try:
+                jurisprudence_result = await legifrance_service.search_jurisprudence(
+                    query=search_query,
+                    case_type="copropriete",
+                    max_results=limit
+                )
+
+                if jurisprudence_result and jurisprudence_result.get("results"):
+                    for result in jurisprudence_result["results"][:limit]:
+                        # Extract content from result
+                        title = result.get("titre", result.get("title", "Décision juridique"))
+                        text = result.get("texte", result.get("text", result.get("excerpt", "")))
+                        date = result.get("date", "")
+                        numero = result.get("numero", result.get("id", ""))
+                        juridiction = result.get("juridiction", "")
+
+                        content = f"""**{title}**
+Juridiction: {juridiction}
+Date: {date}
+Numéro: {numero}
+
+{text[:1000]}"""
+
+                        documents.append({
+                            "content": content,
+                            "source": "legifrance",
+                            "score": 0.8,
+                            "metadata": {
+                                "type": "jurisprudence",
+                                "title": title,
+                                "date": date,
+                                "numero": numero,
+                                "juridiction": juridiction,
+                                "api": "legifrance"
+                            }
+                        })
+
+            except Exception as e:
+                logger.warning("legal_light_jurisprudence_failed", error=str(e))
+
+            # If no results from API, use local legal knowledge base
+            if not documents:
+                documents = self._get_local_legal_knowledge(query, limit)
+
+            logger.info("legal_light_retrieval_complete",
+                       query=query[:50],
+                       documents_count=len(documents))
+
+            return documents
+
+        except Exception as e:
+            logger.error("legal_light_retrieval_failed", error=str(e), query=query[:50])
+            return []
+
+    def _extract_legal_keywords(self, query: str) -> List[str]:
+        """
+        Extract legal keywords from query for better Légifrance search.
+        """
+        import re
+
+        query_lower = query.lower()
+        keywords = []
+
+        # Legal topic keywords
+        legal_topics = {
+            "majorité": ["majorité", "vote", "assemblée générale"],
+            "syndic": ["syndic", "obligation", "responsabilité"],
+            "charges": ["charges", "copropriété", "répartition"],
+            "travaux": ["travaux", "autorisation", "copropriété"],
+            "assemblée": ["assemblée générale", "convocation", "quorum"],
+            "règlement": ["règlement", "copropriété", "parties communes"],
+            "article 24": ["article 24", "majorité simple"],
+            "article 25": ["article 25", "majorité absolue"],
+            "article 26": ["article 26", "double majorité"],
+        }
+
+        for topic, topic_keywords in legal_topics.items():
+            if topic in query_lower:
+                keywords.extend(topic_keywords)
+
+        # Extract specific articles mentions
+        article_pattern = r"article\s+(\d+)"
+        articles = re.findall(article_pattern, query_lower)
+        for art in articles:
+            keywords.append(f"article {art}")
+
+        # Extract law references
+        law_pattern = r"loi\s+(?:de\s+)?(\d{4})"
+        laws = re.findall(law_pattern, query_lower)
+        for law in laws:
+            keywords.append(f"loi {law}")
+
+        # Add copropriété context if not present
+        if "copropriété" not in query_lower and "copropriete" not in query_lower:
+            keywords.append("copropriété")
+
+        return list(set(keywords))
+
+    def _get_local_legal_knowledge(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        """
+        Fallback: Return relevant legal knowledge from local knowledge base.
+        Used when Légifrance API is unavailable or returns no results.
+        """
+        documents = []
+        query_lower = query.lower()
+
+        # Local knowledge base (key legal info for copropriété)
+        local_knowledge = {
+            "majorité": {
+                "content": """**Règles de majorité en copropriété (Loi du 10 juillet 1965)**
+
+**Article 24 - Majorité simple:**
+- Décisions courantes (budget prévisionnel, approbation des comptes)
+- Majorité des voix des copropriétaires présents ou représentés
+
+**Article 25 - Majorité absolue:**
+- Travaux d'amélioration, modification du règlement
+- Majorité des voix de tous les copropriétaires (présents + absents)
+
+**Article 26 - Double majorité:**
+- Modifications des parties communes, aliénation
+- 2/3 des voix des copropriétaires représentant 2/3 des tantièmes""",
+                "keywords": ["majorité", "vote", "article 24", "article 25", "article 26", "quorum"]
+            },
+            "syndic": {
+                "content": """**Obligations du syndic (Loi du 10 juillet 1965)**
+
+**Missions principales:**
+- Exécution des décisions d'AG
+- Administration et conservation de l'immeuble
+- Gestion financière (budget, appels de fonds)
+- Représentation du syndicat
+
+**Responsabilités:**
+- Tenue des comptes
+- Convocation des AG (au moins 1/an)
+- Mise en concurrence des contrats
+- Archivage des documents""",
+                "keywords": ["syndic", "obligation", "responsabilité", "mission"]
+            },
+            "charges": {
+                "content": """**Répartition des charges de copropriété**
+
+**Charges générales (art. 10 loi 1965):**
+- Entretien, conservation des parties communes
+- Réparties selon les tantièmes de copropriété
+
+**Charges spéciales:**
+- Services collectifs (ascenseur, chauffage)
+- Réparties selon l'utilité pour chaque lot
+
+**Impayés:**
+- Mise en demeure obligatoire
+- Procédure de recouvrement après 30 jours
+- Privilège spécial du syndicat""",
+                "keywords": ["charges", "répartition", "tantièmes", "impayé"]
+            },
+            "assemblée": {
+                "content": """**Assemblée Générale de copropriété**
+
+**Convocation:**
+- Délai minimum: 21 jours avant l'AG
+- Par lettre recommandée avec AR
+- Ordre du jour détaillé obligatoire
+
+**Quorum:**
+- Pas de quorum minimum en copropriété
+- Mais 2ème convocation si article 25 non atteint
+
+**Procès-verbal:**
+- Obligatoire sous 1 mois
+- Notifié aux absents
+- Contestation possible sous 2 mois""",
+                "keywords": ["assemblée", "ag", "convocation", "quorum", "procès-verbal"]
+            }
+        }
+
+        # Find relevant topics
+        for topic, knowledge in local_knowledge.items():
+            if any(kw in query_lower for kw in knowledge["keywords"]):
+                documents.append({
+                    "content": knowledge["content"],
+                    "source": "legifrance",
+                    "score": 0.7,
+                    "metadata": {
+                        "type": "local_knowledge",
+                        "topic": topic,
+                        "api": "local_fallback"
+                    }
+                })
+                if len(documents) >= limit:
+                    break
+
+        return documents

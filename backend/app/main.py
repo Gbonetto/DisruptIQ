@@ -14,7 +14,7 @@ import structlog
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.monitoring import init_sentry, is_sentry_enabled
-from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, conversations, n8n_callback, emergency_workflows  # removed export - file doesn't exist
+from app.api.endpoints import auth, digest, email_generator, emails, documents, chat, webhooks, admin, webhook_test, health, assistant, coproprietes, coproprietaires, cache, assistant_v2, assistant_v2_stream, sql_tables, conversations, n8n_callback, emergency_workflows, test_fixtures  # removed export - file doesn't exist
 # from app.api.routes import invoices  # TODO: Create invoices route
 # Import all models to ensure they're registered with SQLAlchemy
 from app.models import User, Email, Vendor, Document, Conversation, Message
@@ -233,4 +233,5 @@ app.include_router(emergency_workflows.router, prefix="/api/emergency-workflows"
 app.include_router(webhook_test.router, prefix="/api/webhook-test", tags=["Webhook Testing"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Administration"])
 app.include_router(sql_tables.router, prefix="/api/sql", tags=["SQL Table Management"])
+app.include_router(test_fixtures.router, prefix="/api/test", tags=["Test Fixtures"])
 # app.include_router(export.router, prefix="/api", tags=["Data Export"])  # TODO: Create export endpoint

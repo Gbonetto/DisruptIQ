@@ -111,6 +111,16 @@ class ThoughtType(str, Enum):
     # Alias legacy
     SEARCHING = "searching"  # Déprécié: utiliser les types spécifiques
 
+    # === PROGRESS STAGES (Option C - Streaming Optimization) ===
+    # Pre-defined progress messages (NO LLM call to generate these)
+    PROGRESS_ROUTING = "progress_routing"          # Analyse et sélection des sources
+    PROGRESS_RETRIEVAL_SQL = "progress_retrieval_sql"    # Récupération SQL
+    PROGRESS_RETRIEVAL_RAG = "progress_retrieval_rag"    # Récupération RAG
+    PROGRESS_RETRIEVAL_LEGAL = "progress_retrieval_legal"  # Récupération Legal
+    PROGRESS_RETRIEVAL_WEB = "progress_retrieval_web"    # Récupération Web
+    PROGRESS_RERANKING = "progress_reranking"        # Reranking des résultats
+    PROGRESS_SYNTHESIS = "progress_synthesis"        # Synthèse finale
+
 
 # === Labels français pour l'affichage frontend ===
 THOUGHT_LABELS_FR = {
@@ -207,6 +217,67 @@ THOUGHT_LABELS_FR = {
     ThoughtType.LLM_CALLING: "🤖 Appel au modèle LLM",
     ThoughtType.LLM_REASONING: "💭 Raisonnement en cours",
     ThoughtType.LLM_RESPONSE: "💬 Réponse LLM reçue",
+
+    # === PROGRESS STAGES (Option C - Streaming) ===
+    ThoughtType.PROGRESS_ROUTING: "🔀 Analyse de la requête",
+    ThoughtType.PROGRESS_RETRIEVAL_SQL: "🗄️ Récupération des données",
+    ThoughtType.PROGRESS_RETRIEVAL_RAG: "📚 Recherche dans les documents",
+    ThoughtType.PROGRESS_RETRIEVAL_LEGAL: "⚖️ Consultation juridique",
+    ThoughtType.PROGRESS_RETRIEVAL_WEB: "🌐 Recherche sur internet",
+    ThoughtType.PROGRESS_RERANKING: "📊 Classement des résultats",
+    ThoughtType.PROGRESS_SYNTHESIS: "✍️ Rédaction de la réponse",
+}
+
+
+# ========================================================================
+# PROGRESS MESSAGES - Pre-defined messages (NO LLM call)
+# ========================================================================
+# These messages are used by WorldClassRouter to emit progress without LLM
+# IMPORTANT: NEVER call an LLM to generate these messages
+
+PROGRESS_MESSAGES = {
+    "routing": {
+        "type": ThoughtType.PROGRESS_ROUTING,
+        "title": "Analyse de la requête",
+        "content": "Analyse de la requête et sélection des meilleures sources de données…",
+        "progress": 0.1,
+    },
+    "retrieval_sql": {
+        "type": ThoughtType.PROGRESS_RETRIEVAL_SQL,
+        "title": "Récupération SQL",
+        "content": "Récupération des données structurées (copropriétaires, lots, charges)…",
+        "progress": 0.3,
+    },
+    "retrieval_rag": {
+        "type": ThoughtType.PROGRESS_RETRIEVAL_RAG,
+        "title": "Recherche documentaire",
+        "content": "Recherche dans vos documents (règlement, PV, contrats)…",
+        "progress": 0.3,
+    },
+    "retrieval_legal": {
+        "type": ThoughtType.PROGRESS_RETRIEVAL_LEGAL,
+        "title": "Consultation juridique",
+        "content": "Consultation des textes de loi et jurisprudences (Légifrance)…",
+        "progress": 0.3,
+    },
+    "retrieval_web": {
+        "type": ThoughtType.PROGRESS_RETRIEVAL_WEB,
+        "title": "Recherche web",
+        "content": "Recherche d'informations actualisées sur internet…",
+        "progress": 0.3,
+    },
+    "reranking": {
+        "type": ThoughtType.PROGRESS_RERANKING,
+        "title": "Classement des résultats",
+        "content": "Analyse et classement des résultats par pertinence…",
+        "progress": 0.6,
+    },
+    "synthesis": {
+        "type": ThoughtType.PROGRESS_SYNTHESIS,
+        "title": "Synthèse",
+        "content": "Rédaction de la réponse en cours…",
+        "progress": 0.8,
+    },
 }
 
 

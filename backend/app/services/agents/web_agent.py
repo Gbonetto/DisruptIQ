@@ -444,3 +444,72 @@ Réponds maintenant :
                 "Limité par les quotas API" if self.search_provider != "duckduckgo" else "Gratuit mais plus lent"
             ]
         }
+
+    # ========================================================================
+    # LIGHT MODE - NO LLM (for WorldClassRouter optimization)
+    # ========================================================================
+
+    async def retrieve_light(
+        self,
+        query: str,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        LIGHT MODE retrieval - Performs web search WITHOUT LLM synthesis.
+
+        This method is optimized for WorldClassRouter to reduce latency.
+        Returns raw search results for later synthesis by SynthesisAgent.
+
+        Args:
+            query: User's search query
+            limit: Max results
+
+        Returns:
+            List of documents with raw web results and metadata.
+        """
+        try:
+            logger.info("web_light_retrieval_started", query=query[:50])
+
+            # Perform web search using existing method
+            search_results = await self._perform_search(query, limit, "web")
+
+            if not search_results:
+                logger.info("web_light_no_results", query=query[:50])
+                return []
+
+            # Convert to document format for WorldClassRouter
+            documents = []
+            for idx, result in enumerate(search_results[:limit]):
+                title = result.get("title", "Sans titre")
+                snippet = result.get("snippet", "")
+                url = result.get("url", "")
+
+                # Build content from search result
+                content = f"""**{title}**
+Source: {url}
+
+{snippet}"""
+
+                documents.append({
+                    "content": content,
+                    "source": "web",
+                    "score": 0.7 - (idx * 0.05),  # Decreasing score by rank
+                    "metadata": {
+                        "title": title,
+                        "url": url,
+                        "snippet": snippet,
+                        "rank": idx + 1,
+                        "provider": self.search_provider,
+                        "search_type": "web"
+                    }
+                })
+
+            logger.info("web_light_retrieval_complete",
+                       query=query[:50],
+                       documents_count=len(documents))
+
+            return documents
+
+        except Exception as e:
+            logger.error("web_light_retrieval_failed", error=str(e), query=query[:50])
+            return []

@@ -34,6 +34,7 @@ class AssistantRequest(BaseModel):
     session_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
     selected_sources: Optional[List[str]] = None  # ['sql', 'rag', 'web'] or None for auto
+    use_world_class_router: bool = True  # Enable Perplexity-style multi-source routing (ACTIVATED BY DEFAULT)
 
 
 class AssistantResponseModel(BaseModel):
@@ -79,7 +80,8 @@ async def assistant_chat(
                     context=request.context,
                     conversation_history=[msg.dict() for msg in request.conversation_history],
                     selected_sources=request.selected_sources,  # User-controlled source selection
-                    session_id=request.session_id  # Pass session_id for context_store
+                    session_id=request.session_id,  # Pass session_id for context_store
+                    use_world_class_router=request.use_world_class_router  # Perplexity-style routing
                 ),
                 timeout=90.0
             )

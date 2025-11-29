@@ -868,32 +868,53 @@ class ParallelRetriever:
         db,
         limit: int
     ) -> List[RetrievedDocument]:
-        """Retrieve from SQL database."""
+        """
+        Retrieve from SQL database using LIGHT MODE (no LLM).
+
+        OPTIMIZATION: Uses SQLAgent.retrieve_light() with SQL templates
+        instead of SQLAgent.process() which calls LLM for SQL generation.
+        """
         try:
-            # SQLAgent.process returns Dict with 'success', 'message', 'data', 'sql_query'
+            # Use light mode (template-based SQL, no LLM call)
+            light_results = await self.sql_agent.retrieve_light(query, db, limit)
+
+            if light_results:
+                # Convert light results to RetrievedDocument
+                documents = []
+                for result in light_results:
+                    documents.append(RetrievedDocument(
+                        content=result.get("content", ""),
+                        source=SourceType.SQL,
+                        score=result.get("score", 0.8),
+                        metadata=result.get("metadata", {})
+                    ))
+                logger.info("sql_light_retrieval_success", docs_count=len(documents))
+                return documents
+
+            # Light mode didn't match any template - fallback to full mode (with LLM)
+            logger.debug("sql_light_no_match_fallback_full")
             result = await self.sql_agent.process(query, db)
 
             if not result or not result.get("success"):
                 logger.debug("sql_retrieval_no_success", result_keys=list(result.keys()) if result else None)
                 return []
 
-            # Convert SQL result to documents
-            content = result.get("message", "")  # SQLAgent uses 'message' not 'response'
+            content = result.get("message", "")
             if not content:
                 logger.debug("sql_retrieval_no_content", result_keys=list(result.keys()) if result else None)
                 return []
 
-            # Get data for metadata
             data = result.get("data", {})
 
             return [RetrievedDocument(
                 content=content,
                 source=SourceType.SQL,
-                score=0.8,  # Base score, will be reranked
+                score=0.8,
                 metadata={
                     "query_executed": result.get("sql_query", ""),
                     "row_count": data.get("row_count", 0),
-                    "tables": data.get("tables", [])
+                    "tables": data.get("tables", []),
+                    "mode": "full"  # Flag that full mode was used
                 }
             )]
 
@@ -944,43 +965,30 @@ class ParallelRetriever:
         query: str,
         limit: int = 5
     ) -> List[RetrievedDocument]:
-        """Retrieve from web search."""
+        """
+        Retrieve from web search using LIGHT MODE (no LLM synthesis).
+
+        OPTIMIZATION: Uses WebAgent.retrieve_light() which performs web search
+        without LLM synthesis. Synthesis is done later by SynthesisAgent.
+        """
         try:
-            result = await self.web_agent.search(query, max_results=limit)
+            # Use light mode (web search without LLM synthesis)
+            light_results = await self.web_agent.retrieve_light(query, limit)
 
-            if not result:
-                return []
+            if light_results:
+                documents = []
+                for result in light_results:
+                    documents.append(RetrievedDocument(
+                        content=result.get("content", ""),
+                        source=SourceType.WEB,
+                        score=result.get("score", 0.7),
+                        metadata=result.get("metadata", {})
+                    ))
+                logger.info("web_light_retrieval_success", docs_count=len(documents))
+                return documents
 
-            documents = []
-
-            # WebAgent returns {answer, sources, metadata}
-            # First, add the synthesized answer as main document
-            answer = result.get("answer", "")
-            if answer:
-                documents.append(RetrievedDocument(
-                    content=answer,
-                    source=SourceType.WEB,
-                    score=0.9,  # High score for synthesized answer
-                    metadata={
-                        "type": "synthesized_answer",
-                        "provider": result.get("metadata", {}).get("provider", "web")
-                    }
-                ))
-
-            # Also add individual sources for reference
-            for item in result.get("sources", [])[:limit]:
-                documents.append(RetrievedDocument(
-                    content=f"{item.get('title', '')}\n{item.get('snippet', '')}",
-                    source=SourceType.WEB,
-                    score=0.6,  # Base score for raw results
-                    metadata={
-                        "url": item.get("url", ""),
-                        "title": item.get("title", ""),
-                        "type": "source"
-                    }
-                ))
-
-            return documents
+            # No results from light mode
+            return []
 
         except Exception as e:
             logger.error("web_retrieval_failed", error=str(e))
@@ -991,41 +999,30 @@ class ParallelRetriever:
         query: str,
         limit: int = 5
     ) -> List[RetrievedDocument]:
-        """Retrieve from legal sources (Legifrance)."""
+        """
+        Retrieve from legal sources using LIGHT MODE (no LLM synthesis).
+
+        OPTIMIZATION: Uses LegalAgent.retrieve_light() which queries Légifrance API
+        directly without LLM classification or synthesis. Synthesis is done later.
+        """
         try:
-            result = await self.legal_agent.process_request(
-                user_input=query,  # Correct parameter name
-                context=None
-            )
+            # Use light mode (Légifrance API without LLM)
+            light_results = await self.legal_agent.retrieve_light(query, limit)
 
-            if not result or not result.get("success"):
-                logger.debug("legal_retrieval_no_success", result_keys=list(result.keys()) if result else None)
-                return []
+            if light_results:
+                documents = []
+                for result in light_results:
+                    documents.append(RetrievedDocument(
+                        content=result.get("content", ""),
+                        source=SourceType.LEGAL,
+                        score=result.get("score", 0.8),
+                        metadata=result.get("metadata", {})
+                    ))
+                logger.info("legal_light_retrieval_success", docs_count=len(documents))
+                return documents
 
-            # Get response from result - handle different response structures
-            # LegalAgent returns {"message": "...", "success": True, "action": "...", "result": {...}}
-            content = result.get("message", "")
-            if not content:
-                content = result.get("response", "")
-            if not content:
-                content = result.get("result", {}).get("content", "")
-            if not content:
-                content = result.get("result", {}).get("response", "")
-
-            if not content:
-                logger.debug("legal_retrieval_no_content")
-                return []
-
-            return [RetrievedDocument(
-                content=content,
-                source=SourceType.LEGAL,
-                score=0.85,  # Legal sources are high quality
-                metadata={
-                    "action": result.get("action", "search"),
-                    "articles": result.get("articles", []),
-                    "laws": result.get("laws", [])
-                }
-            )]
+            # No results from light mode
+            return []
 
         except Exception as e:
             logger.error("legal_retrieval_failed", error=str(e))
@@ -1219,6 +1216,10 @@ class WorldClassRouter:
     - SQL simple → skip rerank + skip synthesis (template response)
     - RAG simple → skip rerank + light LLM
     - < 3 docs ou 1 source → skip cross-encoder
+
+    Streaming (Option C):
+    - Emits progress messages at each stage via thought_stream
+    - NO LLM calls for progress messages (pre-defined)
     """
 
     def __init__(self):
@@ -1232,7 +1233,8 @@ class WorldClassRouter:
         query: str,
         db = None,
         context: Dict[str, Any] = None,
-        top_k: int = 5
+        top_k: int = 5,
+        thought_stream = None  # Optional: for streaming progress
     ) -> RouterResult:
         """
         Route la requete et recupere les documents pertinents.
@@ -1242,11 +1244,26 @@ class WorldClassRouter:
             db: Session de base de donnees
             context: Contexte additionnel (documents selectionnes, etc.)
             top_k: Nombre de documents a retourner
+            thought_stream: Optional thought stream for progress messages
 
         Returns:
             RouterResult avec les documents et metriques
         """
         total_start = datetime.now()
+
+        # Import progress messages (no LLM call)
+        from app.services.agents.thought_stream import PROGRESS_MESSAGES, ThoughtType
+
+        # === PROGRESS: Routing ===
+        if thought_stream:
+            msg = PROGRESS_MESSAGES["routing"]
+            await thought_stream.add_thought(
+                msg["type"],
+                title=msg["title"],
+                content=msg["content"],
+                agent="world_class_router",
+                progress=msg["progress"]
+            )
 
         # 0. FAST-PATH DETECTION (Étape 1)
         complexity, fast_path_sources, fp_confidence = self.fast_path.detect(query, context)
@@ -1264,6 +1281,27 @@ class WorldClassRouter:
             prefilter_start = datetime.now()
             sources, confidence = self.prefilter.prefilter(query)
             prefilter_time = (datetime.now() - prefilter_start).total_seconds() * 1000
+
+        # === PROGRESS: Retrieval (emit progress for each source) ===
+        if thought_stream and sources:
+            # Map SourceType to progress message key
+            source_to_progress_key = {
+                SourceType.SQL: "retrieval_sql",
+                SourceType.RAG: "retrieval_rag",
+                SourceType.LEGAL: "retrieval_legal",
+                SourceType.WEB: "retrieval_web",
+            }
+            for source in sources:
+                progress_key = source_to_progress_key.get(source)
+                if progress_key and progress_key in PROGRESS_MESSAGES:
+                    msg = PROGRESS_MESSAGES[progress_key]
+                    await thought_stream.add_thought(
+                        msg["type"],
+                        title=msg["title"],
+                        content=msg["content"],
+                        agent="world_class_router",
+                        progress=msg["progress"]
+                    )
 
         # 2. PARALLEL RETRIEVAL
         retrieval_start = datetime.now()
@@ -1283,6 +1321,17 @@ class WorldClassRouter:
         # 3. CROSS-ENCODER RERANK (with skip logic - Étape 2)
         # Force skip for simple queries (all SIMPLE_* types skip cross-encoder)
         force_skip_rerank = complexity in (QueryComplexity.SIMPLE_SQL, QueryComplexity.SIMPLE_RAG, QueryComplexity.SIMPLE_WEB, QueryComplexity.SIMPLE_LEGAL)
+
+        # === PROGRESS: Reranking (only if not skipped) ===
+        if thought_stream and not force_skip_rerank and len(documents) >= 3:
+            msg = PROGRESS_MESSAGES["reranking"]
+            await thought_stream.add_thought(
+                msg["type"],
+                title=msg["title"],
+                content=msg["content"],
+                agent="world_class_router",
+                progress=msg["progress"]
+            )
 
         rerank_start = datetime.now()
         reranked = self.reranker.rerank(query, documents, top_k=top_k, force_skip=force_skip_rerank)

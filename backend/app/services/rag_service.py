@@ -1001,6 +1001,101 @@ class RAGService:
             logger.error("search_error", query=query, error=str(e))
             raise
 
+    async def search_with_timeout(
+        self,
+        query: str,
+        timeout_seconds: float = 5.0,
+        limit: int = 5,
+        filter_conditions: Optional[Dict[str, Any]] = None,
+        document_ids: Optional[List[int]] = None,
+        use_reranker: bool = True,
+        use_hybrid: bool = True,
+        fallback_empty: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for documents with a configurable timeout.
+
+        This is a wrapper around the standard search method that adds
+        timeout protection for user-facing queries. If the search takes
+        too long, it returns an empty result (or raises TimeoutError).
+
+        Args:
+            query: Search query
+            timeout_seconds: Maximum time to wait for results (default: 5s)
+            limit: Maximum results to return
+            filter_conditions: Optional metadata filters
+            document_ids: Optional document IDs filter
+            use_reranker: Use cross-encoder re-ranking
+            use_hybrid: Use hybrid BM25 + Vector search
+            fallback_empty: If True, return empty list on timeout instead of raising
+
+        Returns:
+            List of search results, or empty list on timeout (if fallback_empty=True)
+
+        Raises:
+            asyncio.TimeoutError: If timeout occurs and fallback_empty=False
+
+        Note:
+            - Default timeout is 5 seconds (P2 requirement)
+            - No web fallback for explicit RAG queries
+            - Useful for user-facing queries where latency matters
+        """
+        import asyncio
+
+        try:
+            # Execute search with timeout
+            results = await asyncio.wait_for(
+                self.search(
+                    query=query,
+                    limit=limit,
+                    filter_conditions=filter_conditions,
+                    document_ids=document_ids,
+                    use_reranker=use_reranker,
+                    use_hybrid=use_hybrid,
+                    use_query_expansion=False,  # Disable for speed
+                    use_query_planning=False,   # Disable for speed
+                    use_verification=False,     # Disable for speed
+                    use_reflection=False        # Disable for speed
+                ),
+                timeout=timeout_seconds
+            )
+
+            logger.info("search_with_timeout_success",
+                       query=query[:50],
+                       results_count=len(results),
+                       timeout_seconds=timeout_seconds)
+
+            return results
+
+        except asyncio.TimeoutError:
+            logger.warning("search_with_timeout_exceeded",
+                         query=query[:50],
+                         timeout_seconds=timeout_seconds)
+
+            if fallback_empty:
+                # Return empty results with warning metadata
+                return [{
+                    "text": "",
+                    "score": 0.0,
+                    "metadata": {
+                        "timeout": True,
+                        "timeout_seconds": timeout_seconds,
+                        "message": f"La recherche a dépassé le délai de {timeout_seconds}s. Essayez avec une requête plus simple."
+                    }
+                }]
+            else:
+                raise
+
+        except Exception as e:
+            logger.error("search_with_timeout_error",
+                        query=query[:50],
+                        error=str(e))
+
+            if fallback_empty:
+                return []
+            else:
+                raise
+
     async def delete_document(self, document_id: int):
         """
         Delete all chunks of a document from Qdrant
