@@ -16,11 +16,12 @@ class EmailSenderService:
     """Service for sending emails via SMTP"""
 
     def __init__(self):
-        self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-        self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        self.smtp_host = os.getenv("SMTP_HOST", "localhost")  # Défaut MailHog
+        self.smtp_port = int(os.getenv("SMTP_PORT", "1025"))  # Port MailHog
         self.smtp_user = os.getenv("SMTP_USER", "")
         self.smtp_password = os.getenv("SMTP_PASSWORD", "")
-        self.from_email = os.getenv("SMTP_FROM_EMAIL", self.smtp_user)
+        self.use_tls = os.getenv("SMTP_USE_TLS", "false").lower() == "true"
+        self.from_email = os.getenv("SMTP_FROM_EMAIL", self.smtp_user or "noreply@disruptiq.local")
         self.from_name = os.getenv("SMTP_FROM_NAME", "DisruptIQ")
 
     def send_digest_email(
@@ -43,11 +44,7 @@ class EmailSenderService:
             True if email sent successfully, False otherwise
         """
         try:
-            # Validate configuration
-            if not self.smtp_user or not self.smtp_password:
-                logger.error("smtp_not_configured", message="SMTP credentials not set")
-                return False
-
+            # Validate configuration - credentials optional for MailHog
             if not to_emails:
                 logger.error("no_recipients", message="No recipients specified")
                 return False
@@ -76,8 +73,12 @@ class EmailSenderService:
 
             # Connect to SMTP server and send
             with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                server.starttls()
-                server.login(self.smtp_user, self.smtp_password)
+                # TLS only if configured (not needed for MailHog)
+                if self.use_tls:
+                    server.starttls()
+                # Login only if credentials provided (not needed for MailHog)
+                if self.smtp_user and self.smtp_password:
+                    server.login(self.smtp_user, self.smtp_password)
                 server.send_message(msg)
 
             logger.info("email_sent_successfully", recipients=len(to_emails))

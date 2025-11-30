@@ -777,7 +777,8 @@ class RAGService:
                     formatted_results = await hybrid_search.hybrid_search(
                         query=bm25_query,  # Use optimized query for BM25
                         vector_results=formatted_results,
-                        top_k=limit * 3 if use_reranker else limit  # Get more for reranking
+                        top_k=limit * 3 if use_reranker else limit,  # Get more for reranking
+                        document_ids=document_ids  # Pass filter to BM25 search
                     )
                     logger.info("hybrid_search_applied", result_count=len(formatted_results))
                 except Exception as e:

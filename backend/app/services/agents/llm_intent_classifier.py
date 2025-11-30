@@ -101,6 +101,10 @@ EXEMPLES:
 - "Qui habite au lot 305 ?" → query_data
 - "Email de M. Dupont" → query_data
 - "Quels sont les lots vacants ?" → query_data
+- "Donne-moi les coordonnées de Paul Peintre" → query_data
+- "Quelles sont les coordonnées du plombier ?" → query_data
+- "Qui est Laurent Moussu ?" → query_data
+- "Contact de l'électricien" → query_data
 
 ### 2. RAG_AGENT (intent: "search_documents")
 Recherche dans les DOCUMENTS UPLOADÉS (factures, contrats, PV, devis).

@@ -210,7 +210,8 @@ class HybridSearchService:
     async def bm25_search(
         self,
         query: str,
-        top_k: int = 20
+        top_k: int = 20,
+        document_ids: Optional[List[int]] = None
     ) -> List[Dict[str, Any]]:
         """
         Perform BM25 search (with lazy initialization)
@@ -218,6 +219,7 @@ class HybridSearchService:
         Args:
             query: Search query
             top_k: Number of results to return
+            document_ids: Optional list of document IDs to filter results
 
         Returns:
             List of documents with BM25 scores
@@ -240,18 +242,27 @@ class HybridSearchService:
             # Get top_k indices
             top_indices = np.argsort(scores)[::-1][:top_k]
 
-            # Format results
-            results = [
-                {
-                    "id": self._documents[idx].get("id"),
-                    "text": self._documents[idx].get("text"),
-                    "metadata": {k: v for k, v in self._documents[idx].items() if k not in ["id", "text"]},
+            # Format results with optional document_ids filter
+            results = []
+            for idx in top_indices:
+                if scores[idx] <= 0:
+                    continue  # Skip zero scores
+
+                doc = self._documents[idx]
+
+                # Apply document_ids filter if provided
+                if document_ids is not None:
+                    doc_id = doc.get("document_id") or doc.get("metadata", {}).get("document_id")
+                    if doc_id is not None and int(doc_id) not in document_ids:
+                        continue  # Skip documents not in selection
+
+                results.append({
+                    "id": doc.get("id"),
+                    "text": doc.get("text"),
+                    "metadata": {k: v for k, v in doc.items() if k not in ["id", "text"]},
                     "score": float(scores[idx]),
                     "source": "bm25"
-                }
-                for idx in top_indices
-                if scores[idx] > 0  # Filter out zero scores
-            ]
+                })
 
             logger.info(
                 "bm25_search_completed",
@@ -368,7 +379,8 @@ class HybridSearchService:
         self,
         query: str,
         vector_results: List[Dict[str, Any]],
-        top_k: int = 10
+        top_k: int = 10,
+        document_ids: Optional[List[int]] = None
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search (BM25 + Vector + RRF)
@@ -377,6 +389,7 @@ class HybridSearchService:
             query: Search query
             vector_results: Results from vector search (from RAGService)
             top_k: Number of final results to return
+            document_ids: Optional list of document IDs to filter BM25 results
 
         Returns:
             List of hybrid search results
@@ -386,8 +399,8 @@ class HybridSearchService:
             It performs BM25 search and fuses both using RRF.
         """
         try:
-            # Step 1: BM25 search
-            bm25_results = await self.bm25_search(query, top_k=top_k * 2)
+            # Step 1: BM25 search (with optional document_ids filter)
+            bm25_results = await self.bm25_search(query, top_k=top_k * 2, document_ids=document_ids)
 
             # Step 2: Reciprocal Rank Fusion
             fused_results = await self.reciprocal_rank_fusion(

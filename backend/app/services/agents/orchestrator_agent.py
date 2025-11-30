@@ -390,13 +390,81 @@ class OrchestratorAgent:
                             warnings=[]
                         )
 
-                    # Check modification request
+                    # Check modification request - with direct modification support
                     elif any(pattern in user_input_lower for pattern in modification_patterns):
                         logger.info("email_modification_detected", user_input=user_input[:50])
 
+                        # Check for direct modifications with content
+                        import re
+                        current_draft = state_manager.state.email_draft
+                        modified = False
+                        modification_msg = []
+
+                        # Pattern: "modifier l'objet: nouveau titre" or "objet: nouveau titre"
+                        subject_patterns = [
+                            r"(?:modifier\s+)?(?:l')?objet\s*[:=]\s*(.+?)(?:\n|$)",
+                            r"(?:modifier\s+)?(?:le\s+)?sujet\s*[:=]\s*(.+?)(?:\n|$)",
+                            r"nouveau\s+(?:objet|sujet)\s*[:=]?\s*(.+?)(?:\n|$)"
+                        ]
+                        for pattern in subject_patterns:
+                            match = re.search(pattern, user_input, re.IGNORECASE)
+                            if match:
+                                new_subject = match.group(1).strip().strip('"\'')
+                                if new_subject and len(new_subject) > 3:
+                                    current_draft["subject"] = new_subject
+                                    modified = True
+                                    modification_msg.append(f"Objet modifié: \"{new_subject}\"")
+                                    logger.info("email_subject_modified", new_subject=new_subject)
+                                    break
+
+                        # Pattern: "modifier le message: nouveau contenu" or "contenu: nouveau texte"
+                        body_patterns = [
+                            r"(?:modifier\s+)?(?:le\s+)?(?:message|contenu|corps)\s*[:=]\s*(.+?)(?:\n\n|$)",
+                            r"nouveau\s+(?:message|contenu)\s*[:=]?\s*(.+?)(?:\n\n|$)"
+                        ]
+                        for pattern in body_patterns:
+                            match = re.search(pattern, user_input, re.IGNORECASE | re.DOTALL)
+                            if match:
+                                new_body = match.group(1).strip().strip('"\'')
+                                if new_body and len(new_body) > 10:
+                                    current_draft["body"] = new_body
+                                    modified = True
+                                    modification_msg.append("Contenu de l'email modifié")
+                                    logger.info("email_body_modified", new_body_length=len(new_body))
+                                    break
+
+                        # Update state if modified
+                        if modified:
+                            state_manager.state.email_draft = current_draft
+
+                            # Build preview message
+                            preview = f"✅ {' | '.join(modification_msg)}\n\n"
+                            preview += f"**Objet:** {current_draft.get('subject', 'Sans objet')}\n\n"
+                            preview += f"**À:** {', '.join([r.get('email', r.get('name', '?')) for r in current_draft.get('recipients', [])])}\n\n"
+                            preview += f"{current_draft.get('body', '')[:500]}"
+                            if len(current_draft.get('body', '')) > 500:
+                                preview += "..."
+
+                            return AgentResponse(
+                                success=True,
+                                message=preview,
+                                data={"email_draft": current_draft},
+                                agents_used=["orchestrator"],
+                                sources_used=[],
+                                confidence=1.0,
+                                suggestions=[
+                                    "Envoyer l'email",
+                                    "Modifier l'objet",
+                                    "Modifier le message",
+                                    "Annuler"
+                                ],
+                                warnings=[]
+                            )
+
+                        # No direct content found - ask for details
                         return AgentResponse(
                             success=True,
-                            message="✏️ Pour modifier l'email, veuillez préciser :\n- \"Modifier l'objet\" pour changer le sujet\n- \"Modifier le message\" pour changer le contenu\n- Ou reformulez votre demande complète",
+                            message="✏️ Pour modifier l'email, veuillez préciser :\n- \"Modifier l'objet: nouveau titre\"\n- \"Modifier le message: nouveau contenu\"\n- Ou reformulez votre demande complète",
                             data={"email_draft": state_manager.state.email_draft},
                             agents_used=["orchestrator"],
                             sources_used=[],

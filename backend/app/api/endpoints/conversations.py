@@ -2,7 +2,7 @@
 Conversation Management API Endpoints
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from pydantic import BaseModel
@@ -106,6 +106,7 @@ async def create_conversation(
 
 @router.get("/", response_model=List[ConversationResponse])
 async def list_conversations(
+    response: Response,
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db)
@@ -113,6 +114,11 @@ async def list_conversations(
     """
     List all conversations ordered by most recent
     """
+    # Disable HTTP caching to prevent stale data after deletion
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
     try:
         # Get conversations with message count
         query = select(Conversation).order_by(desc(Conversation.updated_at)).limit(limit).offset(offset)

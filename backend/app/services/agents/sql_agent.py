@@ -792,50 +792,53 @@ Les tantièmes sont calculés selon la formule:
         # Counting queries
         "count_coproprietaires": {
             "patterns": [
-                r"combien\s+(de\s+)?copropri[ée]taires?\s+(dans|aux?|chez|de)?\s*(.+)",
-                r"nombre\s+(de\s+)?copropri[ée]taires?\s+(dans|aux?|chez|de)?\s*(.+)",
+                r"combien\s+(?:de\s+)?copropri[ée]taires?\s+(?:y\s+a[- ]t[- ]il\s+)?(?:dans|aux?|chez|de|pour)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
+                r"nombre\s+(?:de\s+)?copropri[ée]taires?\s+(?:dans|aux?|chez|de|pour)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
+                r"copropri[ée]taires?\s+(?:des?|aux?)\s+(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
             ],
             "sql": """SELECT COUNT(*) as count FROM coproprietaires c
                       JOIN coproprietes co ON c.copropriete_id = co.id
                       WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%{entity}%'))""",
-            "extract_group": 3
+            "extract_group": 1
         },
         "count_lots": {
             "patterns": [
-                r"combien\s+(de\s+)?lots?\s+(dans|aux?|chez|de)?\s*(.+)",
-                r"nombre\s+(de\s+)?lots?\s+(dans|aux?|chez|de)?\s*(.+)",
+                r"combien\s+(?:de\s+)?lots?\s+(?:y\s+a[- ]t[- ]il\s+)?(?:dans|aux?|chez|de|pour)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
+                r"nombre\s+(?:de\s+)?lots?\s+(?:dans|aux?|chez|de|pour)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
+                r"lots?\s+(?:des?|aux?)\s+(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
             ],
             "sql": """SELECT nombre_lots as count FROM coproprietes
                       WHERE unaccent(LOWER(nom)) LIKE unaccent(LOWER('%{entity}%'))""",
-            "extract_group": 3
+            "extract_group": 1
         },
         "count_professionnels": {
             "patterns": [
-                r"combien\s+(de\s+)?(plombiers?|[ée]lectriciens?|professionnels?|prestataires?)",
-                r"nombre\s+(de\s+)?(plombiers?|[ée]lectriciens?|professionnels?|prestataires?)",
+                r"combien\s+(?:de\s+)?(plombiers?|[ée]lectriciens?|professionnels?|prestataires?|chauffagistes?|serruriers?|jardiniers?)",
+                r"nombre\s+(?:de\s+)?(plombiers?|[ée]lectriciens?|professionnels?|prestataires?|chauffagistes?|serruriers?|jardiniers?)",
             ],
             "sql": """SELECT COUNT(*) as count FROM professionnels
                       WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%{entity}%'))""",
-            "extract_group": 2
+            "extract_group": 1
         },
         # List queries
         "list_coproprietaires": {
             "patterns": [
-                r"liste\s+(des?\s+)?copropri[ée]taires?\s+(de|aux?|chez)?\s*(.+)",
-                r"copropri[ée]taires?\s+(de|aux?|chez)\s+(.+)",
-                r"qui\s+(habite|vit|est)\s+(aux?|dans|chez)\s+(.+)",
+                r"liste\s+(?:des?\s+)?copropri[ée]taires?\s+(?:de|aux?|chez|pour)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
+                r"copropri[ée]taires?\s+(?:de|aux?|chez)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
+                r"qui\s+(?:habite|vit|est)\s+(?:aux?|dans|chez)\s+(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
             ],
             "sql": """SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot
                       FROM coproprietaires c JOIN coproprietes co ON c.copropriete_id = co.id
                       WHERE unaccent(LOWER(co.nom)) LIKE unaccent(LOWER('%{entity}%'))
                       LIMIT {limit}""",
-            "extract_group": -1  # Last group
+            "extract_group": 1
         },
         "list_professionnels": {
             "patterns": [
-                r"liste\s+(des?\s+)?(plombiers?|[ée]lectriciens?|chauffagistes?|serruriers?|jardiniers?|professionnels?)",
-                r"(plombiers?|[ée]lectriciens?|chauffagistes?|serruriers?|jardiniers?)\s+disponibles?",
-                r"(donne|trouve)[- ]moi\s+(un|des|les)\s+(plombiers?|[ée]lectriciens?|professionnels?)",
+                r"liste\s+(?:des?\s+)?(plombiers?|[ée]lectriciens?|chauffagistes?|serruriers?|jardiniers?|professionnels?|menuisiers?|ma[çc]ons?|peintres?)",
+                r"(plombiers?|[ée]lectriciens?|chauffagistes?|serruriers?|jardiniers?|menuisiers?|ma[çc]ons?|peintres?)\s+disponibles?",
+                r"(?:donne|trouve)[- ]moi\s+(?:un|des|les)\s+(plombiers?|[ée]lectriciens?|professionnels?|chauffagistes?|serruriers?)",
+                r"nos?\s+(plombiers?|[ée]lectriciens?|chauffagistes?|serruriers?|jardiniers?)",
             ],
             "sql": """SELECT name, company_name, email, phone, city, rating
                       FROM professionnels
@@ -843,14 +846,18 @@ Les tantièmes sont calculés selon la formule:
                       AND statut = 'active'
                       ORDER BY rating DESC NULLS LAST
                       LIMIT {limit}""",
-            "extract_group": -1
+            "extract_group": 1
         },
         # Who is queries
         "who_is_person": {
             "patterns": [
-                r"qui\s+est\s+(\w+\s+\w+)",
-                r"contact\s+(de|du)\s+(\w+\s+\w+)",
-                r"email\s+(de|du)\s+(\w+\s+\w+)",
+                r"qui\s+est\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
+                r"contact\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
+                r"email\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
+                # Patterns coordonnées
+                r"(?:donne|donnes|donne[- ]moi)\s+(?:les?\s+)?coordonn[ée]es\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
+                r"(?:quelles?\s+)?(?:sont\s+)?les?\s+coordonn[ée]es\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
+                r"coordonn[ée]es\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
             ],
             "sql": """SELECT * FROM professionnels
                       WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%{entity}%'))
@@ -862,14 +869,14 @@ Les tantièmes sont calculés selon la formule:
                       FROM coproprietaires c
                       WHERE unaccent(LOWER(CONCAT(prenom, ' ', nom))) LIKE unaccent(LOWER('%{entity}%'))
                       LIMIT {limit}""",
-            "extract_group": -1
+            "extract_group": 1
         },
         # Lot queries
         "lot_info": {
             "patterns": [
-                r"lot\s+(\d+)",
-                r"qui\s+(habite|vit|poss[èe]de)\s+(le\s+)?lot\s+(\d+)",
-                r"propri[ée]taire\s+(du\s+)?lot\s+(\d+)",
+                r"lot\s+(\d+[A-Za-z]?)",
+                r"qui\s+(?:habite|vit|poss[èe]de)\s+(?:le\s+)?lot\s+(\d+[A-Za-z]?)",
+                r"propri[ée]taire\s+(?:du\s+)?lot\s+(\d+[A-Za-z]?)",
             ],
             "sql": """SELECT c.nom, c.prenom, c.email, c.telephone, c.numero_lot,
                              c.type_lot, c.etage, c.surface, co.nom as copropriete
@@ -877,19 +884,30 @@ Les tantièmes sont calculés selon la formule:
                       JOIN coproprietes co ON c.copropriete_id = co.id
                       WHERE c.numero_lot = '{entity}'
                       LIMIT {limit}""",
-            "extract_group": -1
+            "extract_group": 1
         },
         # Copropriete info
         "copropriete_info": {
             "patterns": [
-                r"(infos?|informations?)\s+(sur|de)\s+(la\s+)?copropri[ée]t[ée]?\s+(.+)",
-                r"adresse\s+(de|du|des)\s+(.+)",
-                r"o[uù]\s+(se\s+trouve|est\s+situ[ée]e?)\s+(la\s+)?copropri[ée]t[ée]?\s+(.+)",
+                r"(?:infos?|informations?)\s+(?:sur|de)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
+                r"parle[sz]?[- ]moi\s+(?:de|des?)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)",
+                r"(?:la\s+)?copropri[ée]t[ée]?\s+(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ\-]+)*)\s*[\?$]",
+                r"o[uù]\s+(?:se\s+trouve|est\s+situ[ée]e?)\s+(?:la\s+)?(?:copropri[ée]t[ée]?\s+)?(?:les?\s+)?([A-ZÀ-Ÿa-zà-ÿ\-]+)",
             ],
             "sql": """SELECT * FROM coproprietes
                       WHERE unaccent(LOWER(nom)) LIKE unaccent(LOWER('%{entity}%'))
                       LIMIT {limit}""",
-            "extract_group": -1
+            "extract_group": 1
+        },
+        # Simple count of coproprietes
+        "count_coproprietes": {
+            "patterns": [
+                r"combien\s+(?:de\s+)?copropri[ée]t[ée]s?\s*[\?]?$",
+                r"nombre\s+(?:de\s+)?copropri[ée]t[ée]s?",
+                r"(?:liste|toutes?)\s+(?:les?\s+)?copropri[ée]t[ée]s?",
+            ],
+            "sql": """SELECT COUNT(*) as count FROM coproprietes""",
+            "extract_group": 0
         },
     }
 
@@ -940,6 +958,25 @@ Les tantièmes sont calculés selon la formule:
 
                         # Clean entity
                         entity = entity.strip().strip('"\'')
+
+                        # Normalize profession names (remove French plural 's')
+                        if template_name in ("list_professionnels", "count_professionnels"):
+                            # Remove trailing 's' for plural professions to match singular category in DB
+                            profession_roots = {
+                                'plombiers': 'plombier',
+                                'électriciens': 'électricien',
+                                'electriciens': 'electricien',
+                                'chauffagistes': 'chauffagiste',
+                                'serruriers': 'serrurier',
+                                'jardiniers': 'jardinier',
+                                'menuisiers': 'menuisier',
+                                'peintres': 'peintre',
+                                'maçons': 'maçon',
+                                'masons': 'macon',
+                            }
+                            entity_lower = entity.lower()
+                            if entity_lower in profession_roots:
+                                entity = profession_roots[entity_lower]
 
                         # Build SQL from template
                         sql = template_config["sql"].format(

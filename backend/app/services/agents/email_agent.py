@@ -758,6 +758,26 @@ JSON:
                     return recipients
 
             # ================================================================
+            # PRIORITY 2b: Check resolved_references from context (SQL query results)
+            # ================================================================
+            if context:
+                resolved_refs = context.get("resolved_references")
+                if resolved_refs and isinstance(resolved_refs, dict):
+                    for ref_name, ref_data in resolved_refs.items():
+                        if isinstance(ref_data, dict) and ref_data.get("email"):
+                            logger.info("email_from_resolved_references",
+                                       name=ref_data.get("name", ref_name),
+                                       email=ref_data.get("email"))
+                            recipients.append({
+                                "name": ref_data.get("name", ref_name),
+                                "email": ref_data["email"],
+                                "id": ref_data.get("id"),
+                                "type": ref_data.get("type", "professionnel")
+                            })
+                    if recipients:
+                        return recipients
+
+            # ================================================================
             # PRIORITY 3: DETECT RECIPIENT TYPE - prestataire vs copropriétaires
             # ================================================================
             # Check if we're emailing a PRESTATAIRE (not copropriétaires)
@@ -791,23 +811,26 @@ JSON:
                         break
 
                 # Source 1: Check in resolved_references from context
-                if not prestataire_name and context and "resolved_references" in context:
-                    for ref, data in context["resolved_references"].items():
-                        if data.get("type") == "professionnel":
-                            prestataire_name = data.get("name")
-                            prestataire_email = data.get("email")
-                            break
+                if not prestataire_name and context:
+                    resolved_refs = context.get("resolved_references")
+                    if resolved_refs and isinstance(resolved_refs, dict):
+                        for ref, data in resolved_refs.items():
+                            if isinstance(data, dict) and data.get("type") == "professionnel":
+                                prestataire_name = data.get("name")
+                                prestataire_email = data.get("email")
+                                break
 
                 # Source 2: Check in context extracted_data (from RAG or previous queries)
-                if not prestataire_name and context and context.get("extracted_data"):
-                    extracted = context["extracted_data"]
-                    prestataire_name = extracted.get("prestataire") or extracted.get("vendor")
-                    if not prestataire_name:
-                        # Check for company patterns in extracted data
-                        for key, value in extracted.items():
-                            if isinstance(value, str) and any(kw in key.lower() for kw in ["prestataire", "entreprise", "fournisseur"]):
-                                prestataire_name = value
-                                break
+                if not prestataire_name and context:
+                    extracted = context.get("extracted_data")
+                    if extracted and isinstance(extracted, dict):
+                        prestataire_name = extracted.get("prestataire") or extracted.get("vendor")
+                        if not prestataire_name:
+                            # Check for company patterns in extracted data
+                            for key, value in extracted.items():
+                                if isinstance(value, str) and any(kw in key.lower() for kw in ["prestataire", "entreprise", "fournisseur"]):
+                                    prestataire_name = value
+                                    break
 
                 # Source 3: Extract from conversation history with improved patterns
                 if not prestataire_name and conversation_history:

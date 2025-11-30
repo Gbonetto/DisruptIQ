@@ -620,6 +620,20 @@ class IntentClassifierV5:
             "qui sont les": 0.85,
             "qui a": 0.80,
             "qui ont": 0.80,
+            # Patterns de contact/coordonnées
+            "coordonnées": 0.92,
+            "coordonnées de": 0.93,
+            "les coordonnées": 0.91,
+            "les coordonnées de": 0.94,
+            "donne-moi les coordonnées": 0.95,
+            "donne moi les coordonnées": 0.95,
+            "contact de": 0.90,
+            "contact du": 0.90,
+            "email de": 0.88,
+            "téléphone de": 0.88,
+            "adresse de": 0.85,
+            "qui est": 0.88,
+            "c'est qui": 0.85,
         }
 
         for keyword, confidence in sql_strong_keywords.items():
@@ -637,6 +651,29 @@ class IntentClassifierV5:
                         reasoning=f"SQL keyword '{keyword}' + database entity detected",
                         keywords_matched=[keyword]
                     )
+
+        # ================================================================
+        # 2b. CONTACT REQUESTS - Detect "coordonnées de [Nom Propre]"
+        # ================================================================
+        contact_keywords = ["coordonnées", "contact de", "email de", "téléphone de", "qui est"]
+        has_contact_keyword = any(kw in query_lower for kw in contact_keywords)
+
+        if has_contact_keyword:
+            import re
+            # Chercher noms propres (commence par majuscule) dans la requête originale
+            names = re.findall(r'\b[A-ZÀ-Ÿ][a-zà-ÿ]+(?:\s+[A-ZÀ-Ÿ][a-zà-ÿ]+)*\b', user_input)
+            # Filtrer les mots génériques qui peuvent commencer par majuscule
+            generic_words = {"Donne", "Les", "La", "Le", "De", "Du", "Des", "Un", "Une", "Qui", "Quel", "Quelle"}
+            names = [n for n in names if n not in generic_words and len(n) > 2]
+            if names:
+                return IntentClassification(
+                    intent=IntentType.QUERY_DATA,
+                    domain=Domain.PROPERTY_MGMT,
+                    confidence=0.94,
+                    suggested_sources=[DataSource.SQL],
+                    reasoning=f"Contact request for '{names[0]}'",
+                    keywords_matched=["contact_request", names[0]]
+                )
 
         # ================================================================
         # 3. EMAIL ACTIONS - Additional patterns (if not caught by priority check)
