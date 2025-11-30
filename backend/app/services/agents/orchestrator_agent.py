@@ -2435,14 +2435,79 @@ Réponse courte et directe (2-3 phrases maximum):"""
         """
         Handle workflow automation triggers with intelligent to-do list generation
 
-        V2 Architecture (inspired by LegalAgent):
-        - WorkflowAgent V2 analyzes the problem
-        - Classifies workflow type (emergency, communication, maintenance, etc.)
-        - Extracts context entities
-        - Generates intelligent to-do list
-        - Returns enriched workflow for user validation
+        V3 Architecture - Simplified Emergency Handling:
+        - First check if this is an emergency using EmergencyChecklistAgent
+        - If emergency: generate checklist template (no N8N, no auto-emails)
+        - If not emergency: use WorkflowAgent V2 for other workflows
+
+        The user receives a checklist and decides what actions to take.
         """
         try:
+            # ===== NEW V3: Check for emergency first =====
+            from .emergency_checklist_agent import get_emergency_checklist_agent
+
+            emergency_agent = get_emergency_checklist_agent()
+
+            # Check if this looks like an emergency
+            if emergency_agent.is_emergency_query(user_input):
+                logger.info("emergency_detected", query=user_input[:100])
+
+                # Add thought for CoT
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.ANALYZING,
+                        title="Situation d'urgence détectée",
+                        content="Génération de la checklist de gestion...",
+                        agent="emergency_checklist_agent",
+                        progress=0.3
+                    )
+
+                # Build context from session
+                checklist_context = {}
+                if context:
+                    checklist_context = {
+                        "copropriete": context.get("copropriete_name"),
+                        "adresse": context.get("adresse"),
+                    }
+
+                # Generate checklist (template or LLM fallback)
+                result = await emergency_agent.generate_checklist(
+                    user_input=user_input,
+                    context=checklist_context
+                )
+
+                # Add completion thought
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.COMPLETED,
+                        title=f"Checklist: {result.template_name}",
+                        content=f"Niveau d'urgence: {result.urgency_level}",
+                        agent="emergency_checklist_agent",
+                        progress=1.0
+                    )
+
+                # Return the checklist as the response
+                return AgentResponse(
+                    success=result.success,
+                    message=result.checklist_markdown,
+                    data={
+                        "type": "emergency_checklist",
+                        "template_id": result.template_id,
+                        "template_name": result.template_name,
+                        "urgency_level": result.urgency_level,
+                        "category": result.category,
+                        "is_llm_generated": result.is_llm_generated
+                    },
+                    agents_used=["emergency_checklist_agent"],
+                    confidence=0.95 if not result.is_llm_generated else 0.80,
+                    suggestions=[
+                        "Générer un email pour les parties concernées",
+                        "Rechercher un professionnel à contacter",
+                        "Consulter les documents de la copropriété"
+                    ]
+                )
+
+            # ===== Not an emergency - use standard workflow handling =====
             from .workflow_agent_v2 import WorkflowAgentV2
 
             # Initialize WorkflowAgent V2
@@ -3369,29 +3434,73 @@ Réponds uniquement avec le contenu, sans préambule."""
                     progress=0.5
                 )
 
-            # 2. If no documents found, fallback to general response
+            # 2. If no documents found, handle based on scenario
             if not router_result.documents:
                 logger.warning("world_class_router_no_results", query=user_input[:50])
 
-                if thought_stream:
-                    await thought_stream.add_thought(
-                        ThoughtType.COMPLETED,
-                        title="Aucun résultat trouvé",
-                        content="Je n'ai pas trouvé d'information pertinente dans les sources consultées.",
-                        agent="world_class_router",
-                        progress=1.0
+                # SCENARIO 2: Sources were queried but no data found
+                # → Use LLM to generate intelligent alternatives
+                if router_result.sources_queried:
+                    logger.info("no_data_scenario", sources_queried=[s.value for s in router_result.sources_queried])
+
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.THINKING,
+                            title="Aucune donnée trouvée",
+                            content="Génération d'une réponse intelligente avec alternatives...",
+                            agent="world_class_router",
+                            progress=0.8
+                        )
+
+                    # Use SynthesisAgent's smart empty response
+                    from app.services.agents.synthesis_agent import SynthesisAgent
+                    synthesis_agent = SynthesisAgent()
+                    smart_response = await synthesis_agent._generate_empty_response_smart(user_input)
+
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.COMPLETED,
+                            title="Alternatives proposées",
+                            content="Réponse générée avec suggestions d'actions.",
+                            agent="world_class_router",
+                            progress=1.0
+                        )
+
+                    return AgentResponse(
+                        success=True,
+                        message=smart_response.text,
+                        data={},
+                        agents_used=["world_class_router", "synthesis_agent"],
+                        sources_used=[s.value for s in router_result.sources_queried],
+                        confidence=0.5,
+                        suggestions=[],
+                        warnings=smart_response.warnings
                     )
 
-                return AgentResponse(
-                    success=True,
-                    message="Je n'ai pas trouvé d'information pertinente pour répondre à votre question. Pouvez-vous reformuler ou préciser votre demande ?",
-                    data={},
-                    agents_used=["world_class_router"],
-                    sources_used=[s.value for s in router_result.sources_queried],
-                    confidence=0.3,
-                    suggestions=["Reformuler la question", "Préciser le contexte"],
-                    warnings=[]
-                )
+                # SCENARIO 1: No sources identified → Routing ambiguity
+                # → Ask user to clarify
+                else:
+                    logger.info("routing_ambiguity_scenario")
+
+                    if thought_stream:
+                        await thought_stream.add_thought(
+                            ThoughtType.COMPLETED,
+                            title="Demande peu claire",
+                            content="Demande de clarification à l'utilisateur.",
+                            agent="world_class_router",
+                            progress=1.0
+                        )
+
+                    return AgentResponse(
+                        success=True,
+                        message="Je n'ai pas bien compris votre demande. Pouvez-vous préciser ce que vous recherchez ?",
+                        data={},
+                        agents_used=["world_class_router"],
+                        sources_used=[],
+                        confidence=0.3,
+                        suggestions=["Reformuler la question", "Préciser le contexte", "Donner un exemple"],
+                        warnings=[]
+                    )
 
             # 3. ÉTAPE 3: Adaptive response - Skip synthesis for simple queries
             if router_result.skip_synthesis:

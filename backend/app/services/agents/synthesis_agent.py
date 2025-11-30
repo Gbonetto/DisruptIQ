@@ -105,7 +105,7 @@ class SynthesisAgent:
             sources = self._prepare_sources(chunks)
 
             if not sources:
-                return self._generate_empty_response(query)
+                return await self._generate_empty_response_smart(query)
 
             # Step 2: Detect contradictions
             contradictions = await self._detect_contradictions(sources)
@@ -681,7 +681,7 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
         return overall
 
     def _generate_empty_response(self, query: str) -> SynthesizedResponse:
-        """Generate response when no sources found"""
+        """Generate response when no sources found (legacy sync version)"""
         return SynthesizedResponse(
             text="Je n'ai pas trouvé de documents pertinents pour répondre à votre question. Pouvez-vous reformuler ou préciser votre demande ?",
             sources=[],
@@ -689,6 +689,65 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
             has_contradictions=False,
             overall_confidence=0.0
         )
+
+    async def _generate_empty_response_smart(self, query: str) -> SynthesizedResponse:
+        """
+        Generate intelligent response when no data found.
+
+        Uses LLM to understand user intent and propose helpful alternatives.
+        This is the "agile, non-deterministic" approach requested by the user.
+        """
+        try:
+            prompt = f"""Tu es DisruptIQ, assistant intelligent pour syndics de copropriété.
+
+L'utilisateur a posé cette question : "{query}"
+
+MAIS je n'ai trouvé AUCUNE donnée correspondante dans :
+- La base de données SQL (copropriétaires, lots, professionnels)
+- Les documents uploadés (règlements, PV, contrats)
+- Les sources légales
+
+CONSIGNES :
+1. Reconnaître l'intention de l'utilisateur
+2. Expliquer poliment que ces données ne sont pas disponibles
+3. Proposer 2-3 alternatives utiles et ACTIONNABLES :
+   - Actions que l'utilisateur pourrait faire
+   - Questions connexes auxquelles tu pourrais répondre
+   - Suggestions pour enrichir les données
+4. Rester professionnel et positif
+5. Ne PAS inventer de données
+
+EXEMPLE de réponse pour "Combien de dégâts des eaux cette année ?" :
+"Je n'ai pas trouvé de données sur les dégâts des eaux dans votre base.
+
+Voici ce que je peux vous proposer :
+- **Déclarer un sinistre** : Si vous avez un dégât des eaux en cours, je peux vous guider avec une checklist d'urgence
+- **Importer vos données** : Vous pouvez uploader vos documents de sinistres passés
+- **Consulter les procédures** : Je peux vous expliquer la procédure légale en cas de dégât des eaux"
+
+Réponds de manière concise et professionnelle (max 150 mots)."""
+
+            response = await self.llm_service.generate_response(
+                prompt=prompt,
+                temperature=0.5,  # Un peu de créativité pour les suggestions
+                max_tokens=400
+            )
+
+            logger.info("smart_empty_response_generated", query=query[:50])
+
+            return SynthesizedResponse(
+                text=response,
+                sources=[],
+                sentences=[],
+                has_contradictions=False,
+                overall_confidence=0.0,
+                warnings=["Réponse générée sans données sources - suggestions proposées"]
+            )
+
+        except Exception as e:
+            # Fallback to static response if LLM fails
+            logger.error("smart_empty_response_failed", error=str(e))
+            return self._generate_empty_response(query)
 
     def _generate_fallback_response(
         self,
@@ -758,7 +817,7 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
         """
         try:
             if not documents:
-                return self._generate_empty_response(query)
+                return await self._generate_empty_response_smart(query)
 
             # Group documents by source type
             sql_docs = [d for d in documents if d.get("source") == "sql"]
