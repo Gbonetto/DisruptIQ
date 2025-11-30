@@ -758,24 +758,39 @@ JSON:
                     return recipients
 
             # ================================================================
-            # PRIORITY 2b: Check resolved_references from context (SQL query results)
+            # PRIORITY 2b: DETECT RECIPIENT TYPE FIRST (before using context)
             # ================================================================
-            if context:
-                resolved_refs = context.get("resolved_references")
-                if resolved_refs and isinstance(resolved_refs, dict):
-                    for ref_name, ref_data in resolved_refs.items():
-                        if isinstance(ref_data, dict) and ref_data.get("email"):
-                            logger.info("email_from_resolved_references",
-                                       name=ref_data.get("name", ref_name),
-                                       email=ref_data.get("email"))
-                            recipients.append({
-                                "name": ref_data.get("name", ref_name),
-                                "email": ref_data["email"],
-                                "id": ref_data.get("id"),
-                                "type": ref_data.get("type", "professionnel")
-                            })
-                    if recipients:
-                        return recipients
+            # Check if user explicitly mentions "copropriétaires" - this overrides context
+            copro_keywords = ["copropriétaire", "copropriétaires", "coproprietaire", "coproprietaires",
+                             "résidents", "residents", "habitants", "propriétaires", "proprietaires"]
+            is_copro_target = any(kw in user_request_lower for kw in copro_keywords)
+
+            # Check if user mentions a specific residence/copropriété
+            residence_match = re.search(r"(?:résidence|residence|copropriété|copropriete)\s+(?:les?\s+)?([A-Za-zÀ-ÿ\s]+?)(?:\s+pour|\s*$|,)", user_request, re.IGNORECASE)
+
+            # If targeting copropriétaires explicitly, skip prestataire context
+            if is_copro_target:
+                logger.info("recipient_type_coproprietaires_detected_explicit")
+                # Don't use resolved_references from previous prestataire queries
+                # Go directly to copropriétaires search below
+            else:
+                # Use resolved_references only if NOT targeting copropriétaires
+                if context:
+                    resolved_refs = context.get("resolved_references")
+                    if resolved_refs and isinstance(resolved_refs, dict):
+                        for ref_name, ref_data in resolved_refs.items():
+                            if isinstance(ref_data, dict) and ref_data.get("email"):
+                                logger.info("email_from_resolved_references",
+                                           name=ref_data.get("name", ref_name),
+                                           email=ref_data.get("email"))
+                                recipients.append({
+                                    "name": ref_data.get("name", ref_name),
+                                    "email": ref_data["email"],
+                                    "id": ref_data.get("id"),
+                                    "type": ref_data.get("type", "professionnel")
+                                })
+                        if recipients:
+                            return recipients
 
             # ================================================================
             # PRIORITY 3: DETECT RECIPIENT TYPE - prestataire vs copropriétaires
@@ -784,7 +799,7 @@ JSON:
             prestataire_keywords = ["lui", "prestataire", "artisan", "fournisseur", "entreprise",
                                     "plombier", "électricien", "devis", "facture détaillée",
                                     "rapport d'intervention", "rapport intervention", "maintenance"]
-            is_prestataire_target = any(kw in user_request_lower for kw in prestataire_keywords)
+            is_prestataire_target = any(kw in user_request_lower for kw in prestataire_keywords) and not is_copro_target
 
             if is_prestataire_target:
                 logger.info("recipient_type_prestataire_detected")

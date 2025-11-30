@@ -660,20 +660,42 @@ class IntentClassifierV5:
 
         if has_contact_keyword:
             import re
-            # Chercher noms propres (commence par majuscule) dans la requête originale
-            names = re.findall(r'\b[A-ZÀ-Ÿ][a-zà-ÿ]+(?:\s+[A-ZÀ-Ÿ][a-zà-ÿ]+)*\b', user_input)
-            # Filtrer les mots génériques qui peuvent commencer par majuscule
-            generic_words = {"Donne", "Les", "La", "Le", "De", "Du", "Des", "Un", "Une", "Qui", "Quel", "Quelle"}
-            names = [n for n in names if n not in generic_words and len(n) > 2]
-            if names:
-                return IntentClassification(
-                    intent=IntentType.QUERY_DATA,
-                    domain=Domain.PROPERTY_MGMT,
-                    confidence=0.94,
-                    suggested_sources=[DataSource.SQL],
-                    reasoning=f"Contact request for '{names[0]}'",
-                    keywords_matched=["contact_request", names[0]]
-                )
+            # Méthode 1: Extraire le nom après "qui est", "coordonnées de", etc. (case-insensitive)
+            name_patterns = [
+                r"qui\s+est\s+(?:le\s+|la\s+|l['\s])?(?:professionnel\s+|coproprietaire\s+)?([a-zà-ÿA-ZÀ-Ÿ][a-zà-ÿA-ZÀ-Ÿ\s\-]+)",
+                r"coordonn[ée]es\s+(?:de|du)\s+([a-zà-ÿA-ZÀ-Ÿ][a-zà-ÿA-ZÀ-Ÿ\s\-]+)",
+                r"contact\s+(?:de|du)\s+([a-zà-ÿA-ZÀ-Ÿ][a-zà-ÿA-ZÀ-Ÿ\s\-]+)",
+                r"email\s+(?:de|du)\s+([a-zà-ÿA-ZÀ-Ÿ][a-zà-ÿA-ZÀ-Ÿ\s\-]+)",
+            ]
+            extracted_name = None
+            for pattern in name_patterns:
+                match = re.search(pattern, user_input, re.IGNORECASE)
+                if match:
+                    extracted_name = match.group(1).strip()
+                    # Nettoyer les mots génériques à la fin
+                    extracted_name = re.sub(r'\s*(le|la|les|de|du|des|un|une|s\'il|svp|stp|merci|\?|!).*$', '', extracted_name, flags=re.IGNORECASE).strip()
+                    break
+
+            # Méthode 2 (fallback): Chercher noms propres avec majuscule
+            if not extracted_name or len(extracted_name) < 3:
+                names = re.findall(r'\b[A-ZÀ-Ÿ][a-zà-ÿ]+(?:\s+[A-ZÀ-Ÿ][a-zà-ÿ]+)*\b', user_input)
+                generic_words = {"Donne", "Les", "La", "Le", "De", "Du", "Des", "Un", "Une", "Qui", "Quel", "Quelle"}
+                names = [n for n in names if n not in generic_words and len(n) > 2]
+                if names:
+                    extracted_name = names[0]
+
+            # Si un nom valide est trouvé, router vers SQL
+            if extracted_name and len(extracted_name) > 2:
+                generic_lower = {"le", "la", "les", "de", "du", "des", "un", "une", "qui", "quel", "quelle"}
+                if extracted_name.lower() not in generic_lower:
+                    return IntentClassification(
+                        intent=IntentType.QUERY_DATA,
+                        domain=Domain.PROPERTY_MGMT,
+                        confidence=0.94,
+                        suggested_sources=[DataSource.SQL],
+                        reasoning=f"Contact request for '{extracted_name}'",
+                        keywords_matched=["contact_request", extracted_name]
+                    )
 
         # ================================================================
         # 3. EMAIL ACTIONS - Additional patterns (if not caught by priority check)

@@ -256,7 +256,17 @@ class HybridExecutor:
         INTERGALACTIC_MODE = True
 
         if INTERGALACTIC_MODE:
-            limit = 10  # Final chunks (reduced from 15 to focus on best quality)
+            # 🔴 FIX: When documents are selected, increase limit to ensure coverage
+            # If user selected 5 docs, we want at least 2 chunks per doc = 10 minimum
+            if document_ids and len(document_ids) > 0:
+                # Ensure at least 2 chunks per selected document
+                limit = max(10, len(document_ids) * 2)
+                logger.info("rag_limit_adjusted_for_selection",
+                           original_limit=10,
+                           adjusted_limit=limit,
+                           selected_docs=len(document_ids))
+            else:
+                limit = 10  # Final chunks (reduced from 15 to focus on best quality)
             use_expansion = False  # DISABLED: Query expansion conflicts with score filtering
         else:
             limit = 15  # Standard mode
@@ -337,6 +347,52 @@ class HybridExecutor:
                 use_reranker=True,  # Enable cross-encoder re-ranking
                 use_query_expansion=use_expansion  # INTERGALACTIC: Enable controlled expansion
             )
+
+            # 🔴 FIX: Ensure ALL selected documents are represented in results
+            # If user selected 5 docs and we only got chunks from 3, fetch missing ones
+            if document_ids and len(document_ids) > 1 and chunks:
+                # Find which documents are represented
+                represented_docs = set()
+                for chunk in chunks:
+                    doc_id = chunk.get('document_id') or chunk.get('metadata', {}).get('document_id')
+                    if doc_id:
+                        represented_docs.add(int(doc_id))
+
+                # Find missing documents
+                missing_docs = set(document_ids) - represented_docs
+
+                if missing_docs:
+                    logger.warning("rag_missing_documents_in_results",
+                                  selected=document_ids,
+                                  represented=list(represented_docs),
+                                  missing=list(missing_docs))
+
+                    # Fetch at least 1 chunk from each missing document
+                    for missing_doc_id in missing_docs:
+                        try:
+                            additional_chunks = await rag_service.search(
+                                query=query,
+                                limit=2,  # Get top 2 chunks from this doc
+                                document_ids=[missing_doc_id],
+                                use_hybrid=True,
+                                use_reranker=False  # Skip reranking for speed
+                            )
+                            if additional_chunks:
+                                chunks.extend(additional_chunks)
+                                logger.info("rag_added_chunks_from_missing_doc",
+                                           document_id=missing_doc_id,
+                                           chunks_added=len(additional_chunks))
+                        except Exception as e:
+                            logger.warning("rag_failed_to_fetch_missing_doc",
+                                         document_id=missing_doc_id,
+                                         error=str(e))
+
+                    # Re-sort all chunks by score
+                    chunks = sorted(
+                        chunks,
+                        key=lambda x: x.get('cross_encoder_score', x.get('score', 0)),
+                        reverse=True
+                    )
 
         search_duration = time.time() - start_time
         logger.info("rag_search_returned", chunks_count=len(chunks), query=query[:50], filtered_by_docs=document_ids is not None, duration=search_duration)
