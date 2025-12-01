@@ -28,7 +28,7 @@ interface ChainOfThoughtsProps {
 }
 
 export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
-  thoughts,
+  thoughts = [],
   isThinking,
   collapsed = false
 }) => {
@@ -36,10 +36,10 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
 
   // Auto-expand when new thoughts arrive
   useEffect(() => {
-    if (thoughts.length > 0 && isThinking) {
+    if (thoughts && thoughts.length > 0 && isThinking) {
       setIsCollapsed(false);
     }
-  }, [thoughts.length, isThinking]);
+  }, [thoughts?.length, isThinking]);
 
   const getThoughtIcon = (type: Thought['type']) => {
     switch (type) {
@@ -93,7 +93,7 @@ export const ChainOfThoughts: React.FC<ChainOfThoughtsProps> = ({
     return colors[agent] || 'bg-retro-gray/50 text-gray-400 border border-gray-600';
   };
 
-  if (thoughts.length === 0 && !isThinking) {
+  if (!thoughts || (thoughts.length === 0 && !isThinking)) {
     return null;
   }
 

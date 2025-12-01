@@ -293,7 +293,7 @@ const ThoughtStepItem: React.FC<ThoughtStepItemProps> = ({ step, isLast, isStrea
   const [copied, setCopied] = useState(false);
   const agentConfig = getAgentConfig(step.type, step.agent);
 
-  const hasExpandableContent = step.data?.query || step.data?.documents?.length;
+  const hasExpandableContent = step.data?.query || (Array.isArray(step.data?.documents) && step.data.documents.length > 0);
 
   const handleCopy = () => {
     const text = step.data?.query || step.content;
@@ -350,7 +350,7 @@ const ThoughtStepItem: React.FC<ThoughtStepItemProps> = ({ step, isLast, isStrea
                   <ChevronRight className="w-3 h-3" />
                 )}
                 <span>
-                  {step.data?.query ? 'Voir la requête SQL' : `${step.data?.documents?.length} document(s)`}
+                  {step.data?.query ? 'Voir la requête SQL' : `${step.data?.documents?.length || 0} document(s)`}
                 </span>
               </button>
 
