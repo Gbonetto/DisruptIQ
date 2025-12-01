@@ -97,11 +97,14 @@ function useTypewriter(text: string, speed: number = 20) {
 }
 
 export const CollapsibleCoT: React.FC<CollapsibleCoTProps> = ({
-  steps,
+  steps: rawSteps,
   isCollapsed: controlledCollapsed,
   onToggle,
   autoCollapse = true, // Default to DeepSeek behavior
 }) => {
+  // Ensure steps is always a valid array (before any hooks)
+  const steps = Array.isArray(rawSteps) ? rawSteps : [];
+
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const [visibleCount, setVisibleCount] = useState(0); // Combien de steps sont visibles
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());

@@ -99,12 +99,21 @@ export const MainChatPageV2: React.FC = () => {
     }
   };
 
+  // Normalize message to ensure all arrays are defined (not null)
+  const normalizeMessage = (msg: Message): Message => ({
+    ...msg,
+    thoughts: Array.isArray(msg.thoughts) ? msg.thoughts : [],
+    sources: Array.isArray(msg.sources) ? msg.sources : [],
+    suggestions: Array.isArray(msg.suggestions) ? msg.suggestions : [],
+  });
+
   // Load a specific conversation
   const loadConversation = async (conversationId: number) => {
     try {
       const data = await conversationsApi.get(conversationId);
       setCurrentConversationId(conversationId);
-      setMessages(data.messages);
+      // Normalize messages to ensure arrays are never null
+      setMessages(data.messages.map(normalizeMessage));
     } catch (error) {
       console.error('Failed to load conversation:', error);
       toast.error('Erreur lors du chargement de la conversation');
@@ -215,7 +224,8 @@ export const MainChatPageV2: React.FC = () => {
         'user',
         userMessage
       );
-      setMessages(prev => [...prev, userMsg]);
+      // Normalize even user messages for consistency
+      setMessages(prev => [...prev, normalizeMessage(userMsg)]);
 
       // Prepare conversation history for backend
       const history = messages.map(m => ({
@@ -266,8 +276,9 @@ export const MainChatPageV2: React.FC = () => {
         onResponse: async (response) => {
           // Save assistant message to database
           try {
-            // Transform sources to Citation format
-            const formattedSources = response.sources?.map((source: any, index: number) => {
+            // Transform sources to Citation format (defensive: ensure array)
+            const sourcesArray = Array.isArray(response.sources) ? response.sources : [];
+            const formattedSources = sourcesArray.map((source: any, index: number) => {
               // Determine a descriptive title - check ALL possible fields
               let title = 'Document';
               if (source.type === 'sql') {
@@ -295,10 +306,11 @@ export const MainChatPageV2: React.FC = () => {
                 content: source.excerpt || source.text || '',
                 metadata: metadata
               };
-            }) || [];
+            });
 
             // Use ref to get current thoughts (avoids stale closure issue)
-            const thoughtsToSave = thoughtsRef.current;
+            const thoughtsToSave = thoughtsRef.current || [];
+            const suggestionsArray = Array.isArray(response.suggestions) ? response.suggestions : [];
             console.log('[MainChatPageV2] Saving message with thoughts:', thoughtsToSave.length);
 
             const assistantMsg = await conversationsApi.addMessage(
@@ -307,10 +319,11 @@ export const MainChatPageV2: React.FC = () => {
               response.message,
               thoughtsToSave,
               formattedSources,
-              response.suggestions,
+              suggestionsArray,
               response.data
             );
-            setMessages(prev => [...prev, assistantMsg]);
+            // Normalize the message to ensure arrays are never null
+            setMessages(prev => [...prev, normalizeMessage(assistantMsg)]);
           } catch (error) {
             console.error('Failed to save assistant message:', error);
           }

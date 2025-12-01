@@ -163,11 +163,14 @@ const getAgentConfig = (type: ThoughtType, agent?: string) => {
 
 // === Composant principal ===
 export const ChainOfThought: React.FC<ChainOfThoughtProps> = ({
-  steps,
+  steps: rawSteps,
   isStreaming = false,
   startTime,
   className = ''
 }) => {
+  // Ensure steps is always a valid array
+  const steps = Array.isArray(rawSteps) ? rawSteps : [];
+
   const [isExpanded, setIsExpanded] = useState(true);
   const [elapsedTime, setElapsedTime] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);

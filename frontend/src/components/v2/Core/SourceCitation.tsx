@@ -96,10 +96,10 @@ const getConfidenceInfo = (score?: number) => {
   return { label: 'Faible', color: 'bg-orange-500', textColor: 'text-orange-700' };
 };
 
-export const SourceCitationFooter: React.FC<SourceCitationProps> = ({ citations }) => {
+export const SourceCitationFooter: React.FC<SourceCitationProps> = ({ citations = [] }) => {
   const [isExpanded, setIsExpanded] = useState(true); // Expanded by default for better UX
 
-  if (citations.length === 0) return null;
+  if (!citations || citations.length === 0) return null;
 
   // Calculate average confidence
   const avgConfidence = citations.reduce((sum, c) => sum + (c.metadata?.score || 0), 0) / citations.length;
