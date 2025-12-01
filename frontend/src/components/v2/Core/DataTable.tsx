@@ -20,12 +20,16 @@ export interface DataTableProps {
 
 export const DataTable: React.FC<DataTableProps> = ({
   title,
-  headers,
-  rows,
+  headers: rawHeaders,
+  rows: rawRows,
   sortable = true,
   paginate = true,
   pageSize = 10,
 }) => {
+  // Ensure headers and rows are always valid arrays (before any hooks)
+  const headers = Array.isArray(rawHeaders) ? rawHeaders : [];
+  const rows = Array.isArray(rawRows) ? rawRows : [];
+
   const [sortConfig, setSortConfig] = useState<{
     key: number;
     direction: 'asc' | 'desc';
@@ -33,8 +37,9 @@ export const DataTable: React.FC<DataTableProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
 
-  // Sort logic
+  // Sort logic - with safeguard for empty rows
   const sortedRows = React.useMemo(() => {
+    if (rows.length === 0) return [];
     if (!sortConfig) return rows;
 
     return [...rows].sort((a, b) => {
@@ -54,11 +59,13 @@ export const DataTable: React.FC<DataTableProps> = ({
   // Pagination logic with adaptive page size
   const effectivePageSize = React.useMemo(() => {
     // If total rows <= 20, show all rows on first page
+    if (!sortedRows || sortedRows.length === 0) return pageSize;
     if (sortedRows.length <= 20) return sortedRows.length;
     return pageSize;
-  }, [sortedRows.length, pageSize]);
+  }, [sortedRows, pageSize]);
 
   const paginatedRows = React.useMemo(() => {
+    if (!sortedRows || sortedRows.length === 0) return [];
     if (!paginate || sortedRows.length <= effectivePageSize) return sortedRows;
 
     const startIndex = (currentPage - 1) * effectivePageSize;
@@ -66,7 +73,9 @@ export const DataTable: React.FC<DataTableProps> = ({
     return sortedRows.slice(startIndex, endIndex);
   }, [sortedRows, currentPage, paginate, effectivePageSize]);
 
-  const totalPages = Math.ceil(sortedRows.length / effectivePageSize);
+  const totalPages = sortedRows.length > 0 && effectivePageSize > 0
+    ? Math.ceil(sortedRows.length / effectivePageSize)
+    : 1;
 
   const handleSort = (columnIndex: number) => {
     if (!sortable) return;
@@ -181,6 +190,11 @@ export const DataTable: React.FC<DataTableProps> = ({
       setIsExporting(false);
     }
   };
+
+  // Early return if no data to display (after all hooks)
+  if (headers.length === 0 && rows.length === 0) {
+    return null;
+  }
 
   return (
     <div className="border border-border rounded-xl overflow-hidden bg-card">

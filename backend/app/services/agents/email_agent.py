@@ -1252,6 +1252,8 @@ CONTEXTE EXTRAIT:
 ❌ JAMAIS répéter l'objet dans le corps du message
 ❌ JAMAIS de mise en forme markdown (**, ##, -, etc.)
 ❌ JAMAIS de texte générique comme "dans les prochains jours" si la date est connue
+❌ JAMAIS INVENTER d'adresse ou de nom d'immeuble/résidence qui n'est pas explicitement fourni
+❌ L'adresse du PRESTATAIRE (42 Boulevard des Peintres) n'est PAS l'adresse de la copropriété - NE PAS la mentionner comme lieu des travaux
 
 === FORMAT DE RÉPONSE ===
 Réponds EXACTEMENT dans ce format (2 lignes séparées par SUBJECT_BODY_SEPARATOR):
