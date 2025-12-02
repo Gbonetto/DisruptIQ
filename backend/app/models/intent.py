@@ -132,10 +132,32 @@ class IntentClassification(BaseModel):
         use_enum_values = False
 
 
+class FollowUpSuggestion(BaseModel):
+    """
+    Suggestion contextuelle pour follow-up (Legal/Web)
+
+    Phase Core-First: Ces suggestions sont affichées APRÈS la réponse Core,
+    permettant à l'utilisateur de demander un complément sans persistance d'état.
+
+    UX: L'UI affiche ces suggestions comme boutons one-shot:
+    - Un clic = un appel backend avec action spécifique
+    - Pas de mode persistant, pas de checkbox
+    """
+    id: str = Field(..., description="Identifiant unique (ex: 'legal_followup')")
+    icon: str = Field(..., description="Emoji pour l'UI (ex: '⚖️')")
+    label: str = Field(..., description="Texte du bouton métier (ex: 'Consulter la loi')")
+    action: str = Field(..., description="Action backend (ex: 'legal_lookup', 'web_search')")
+    priority: str = Field(default="normal", description="Priorité d'affichage: 'high' | 'normal' | 'low'")
+    reason: Optional[str] = Field(None, description="Explication pour l'utilisateur (optionnel)")
+    payload: Dict[str, Any] = Field(default_factory=dict, description="Données pour l'action")
+
+
 class AgentResponse(BaseModel):
     """
     Standardized agent response format
     All agents return this structure for consistency
+
+    Phase Core-First: Ajout de structured_suggestions pour les follow-ups
     """
     success: bool = Field(..., description="Did the operation succeed?")
     message: str = Field(..., description="Human-readable response")
@@ -146,9 +168,15 @@ class AgentResponse(BaseModel):
     sources_used: List[DataSource] = Field(default_factory=list, description="Which data sources were accessed?")
     confidence: float = Field(default=1.0, description="Response confidence (can be negative for reranker scores)")
 
-    # User guidance
-    suggestions: List[str] = Field(default_factory=list, description="Follow-up action suggestions")
+    # User guidance (legacy)
+    suggestions: List[str] = Field(default_factory=list, description="Follow-up action suggestions (legacy text)")
     warnings: List[str] = Field(default_factory=list, description="Important warnings/caveats")
+
+    # NOUVEAU: Suggestions structurées pour follow-up (Phase Core-First)
+    structured_suggestions: List[FollowUpSuggestion] = Field(
+        default_factory=list,
+        description="Boutons d'action contextuels (Legal/Web) - one-shot, non persistants"
+    )
 
     class Config:
         # Keep enum types intact for consistency with IntentClassification

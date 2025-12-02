@@ -35,14 +35,29 @@ class QueryComplexity(Enum):
 
 @dataclass
 class QueryAnalysis:
-    """Résultat de l'analyse de requête"""
+    """
+    Résultat de l'analyse de requête - Version enrichie avec scores
+
+    Phase Core-First: Ajout de scores de confiance pour routing intelligent
+    et détection de requêtes "pures" (Legal/Web sans entités métier)
+    """
     original_query: str
 
-    # 4 flags principaux
+    # 4 flags principaux (legacy, conservés pour compatibilité)
     is_table_query: bool = False
     is_amount_query: bool = False
     is_legal_query: bool = False
     needs_hybrid: bool = False
+
+    # NOUVEAUX: Scores de confiance (0.0 à 1.0)
+    legal_confidence: float = 0.0      # Probabilité que la requête nécessite Legal
+    web_confidence: float = 0.0        # Probabilité que la requête nécessite Web
+    core_confidence: float = 1.0       # Probabilité que Core (SQL+RAG) suffise
+
+    # NOUVEAUX: Détection de requêtes "pures" (sans entités métier)
+    pure_legal_query: bool = False     # Requête purement légale (article X, loi Y)
+    pure_web_query: bool = False       # Requête purement web (prix 2025, actualités)
+    has_business_entities: bool = False  # Contient copro/lot/personne/etc.
 
     # Métadonnées supplémentaires
     complexity: QueryComplexity = QueryComplexity.SIMPLE
@@ -55,6 +70,26 @@ class QueryAnalysis:
             self.detected_entities = []
         if self.suggested_filters is None:
             self.suggested_filters = {}
+
+    @property
+    def should_shortcircuit_legal(self) -> bool:
+        """Short-circuit vers Legal si requête purement légale avec haute confiance"""
+        return self.pure_legal_query and self.legal_confidence >= 0.85 and not self.has_business_entities
+
+    @property
+    def should_shortcircuit_web(self) -> bool:
+        """Short-circuit vers Web si requête purement web avec haute confiance"""
+        return self.pure_web_query and self.web_confidence >= 0.85 and not self.has_business_entities
+
+    @property
+    def should_suggest_legal(self) -> bool:
+        """Suggérer Legal en follow-up si confiance modérée"""
+        return self.legal_confidence >= 0.5 and not self.should_shortcircuit_legal
+
+    @property
+    def should_suggest_web(self) -> bool:
+        """Suggérer Web en follow-up si confiance modérée"""
+        return self.web_confidence >= 0.5 and not self.should_shortcircuit_web
 
     @property
     def needs_multi_query(self) -> bool:
@@ -140,6 +175,35 @@ class QueryAnalyzer:
         r"\bconseil\s+syndical\b",
     ]
 
+    # NOUVEAUX: Patterns pour détection Web (prix marché, actualités)
+    WEB_PATTERNS = [
+        r"\bprix\s+(moyen|actuel|du\s+marché)\b",
+        r"\btarif\s+(moyen|actuel|standard)\b",
+        r"\ben\s+202[4-9]\b",  # Années récentes
+        r"\bactualité[s]?\b",
+        r"\bévolution[s]?\s+récente[s]?\b",
+        r"\bdernier[s]?\s+(chiffre|donnée|statistique)\b",
+        r"\btendance[s]?\s+(actuelle|du\s+marché)\b",
+        r"\bcompar(er|aison)\s+.*\s+marché\b",
+        r"\bbenchmark\b",
+        r"\baide[s]?\s+(de\s+l'état|gouvernement|maprimerénov)\b",
+        r"\bsubvention[s]?\s+(actuelle|disponible|202)\b",
+        r"\brecherche[r]?\s+(sur\s+)?(internet|le\s+web)\b",
+    ]
+
+    # NOUVEAUX: Patterns pour Legal "pur" (sans contexte métier)
+    PURE_LEGAL_PATTERNS = [
+        r"\bque\s+dit\s+la\s+loi\b",
+        r"\bloi\s+du\s+\d+\s+\w+\s+\d{4}\b",  # "loi du 10 juillet 1965"
+        r"\bcode\s+civil\b",
+        r"\bjurisprudence\b",
+        r"\blégifrance\b",
+        r"\barticle\s+\d+\s+(de\s+la\s+loi|du\s+code)\b",
+        r"\bquelle\s+majorité\s+(pour|requise|nécessaire)\b",
+        r"\bobligations?\s+légales?\b",
+        r"\bprocédure\s+(légale|juridique)\b",
+    ]
+
     # Patterns hybrides (nécessitent SQL + RAG)
     # Agile: patterns bidirectionnels pour capturer les deux ordres de mots
     HYBRID_PATTERNS = [
@@ -178,23 +242,31 @@ class QueryAnalyzer:
         self._legal_re = [re.compile(p, re.IGNORECASE) for p in self.LEGAL_PATTERNS]
         self._hybrid_re = [re.compile(p, re.IGNORECASE) for p in self.HYBRID_PATTERNS]
         self._entity_re = {k: re.compile(v, re.IGNORECASE) for k, v in self.ENTITY_PATTERNS.items()}
+        # NOUVEAUX patterns
+        self._web_re = [re.compile(p, re.IGNORECASE) for p in self.WEB_PATTERNS]
+        self._pure_legal_re = [re.compile(p, re.IGNORECASE) for p in self.PURE_LEGAL_PATTERNS]
 
     def analyze(self, query: str) -> QueryAnalysis:
         """
-        Analyse une requête et retourne les flags.
+        Analyse une requête et retourne les flags + scores de confiance.
+
+        Phase Core-First: Cette analyse détermine si la requête doit:
+        - Passer par le Core (SQL+RAG) - par défaut
+        - Short-circuit vers Legal/Web (rare, haute confiance)
+        - Suggérer Legal/Web en follow-up (confiance modérée)
 
         Args:
             query: Requête utilisateur
 
         Returns:
-            QueryAnalysis avec les 4 flags et métadonnées
+            QueryAnalysis avec flags, scores et détection pure_legal/pure_web
         """
         if not query or not query.strip():
             return QueryAnalysis(original_query=query, confidence=0.0)
 
         query_lower = query.lower()
 
-        # Détection des 4 flags
+        # Détection des 4 flags legacy
         is_table = self._detect_table_query(query_lower)
         is_amount = self._detect_amount_query(query_lower)
         is_legal = self._detect_legal_query(query_lower)
@@ -202,6 +274,19 @@ class QueryAnalyzer:
 
         # Extraction des entités
         entities = self._extract_entities(query)
+
+        # NOUVEAU: Détection entités métier (copro, lot, personne)
+        has_business_entities = any(
+            e.startswith(("copropriete:", "lot:", "personne:"))
+            for e in entities
+        )
+
+        # NOUVEAU: Calcul des scores de confiance
+        legal_confidence, pure_legal = self._calculate_legal_score(query_lower, has_business_entities)
+        web_confidence, pure_web = self._calculate_web_score(query_lower, has_business_entities)
+
+        # Core confidence = inverse des autres (si pas legal ni web, c'est Core)
+        core_confidence = 1.0 - max(legal_confidence * 0.5, web_confidence * 0.5)
 
         # Déterminer la complexité
         complexity = self._determine_complexity(
@@ -211,17 +296,26 @@ class QueryAnalyzer:
         # Suggérer des filtres basés sur les entités
         filters = self._suggest_filters(entities)
 
-        # Calculer la confiance
+        # Calculer la confiance globale (legacy)
         confidence = self._calculate_confidence(
             is_table, is_amount, is_legal, needs_hybrid
         )
 
         result = QueryAnalysis(
             original_query=query,
+            # Legacy flags
             is_table_query=is_table,
             is_amount_query=is_amount,
             is_legal_query=is_legal,
             needs_hybrid=needs_hybrid,
+            # NOUVEAUX scores
+            legal_confidence=legal_confidence,
+            web_confidence=web_confidence,
+            core_confidence=core_confidence,
+            pure_legal_query=pure_legal,
+            pure_web_query=pure_web,
+            has_business_entities=has_business_entities,
+            # Metadata
             complexity=complexity,
             detected_entities=entities,
             suggested_filters=filters,
@@ -234,9 +328,13 @@ class QueryAnalyzer:
                    is_amount=is_amount,
                    is_legal=is_legal,
                    needs_hybrid=needs_hybrid,
+                   legal_conf=f"{legal_confidence:.0%}",
+                   web_conf=f"{web_confidence:.0%}",
+                   pure_legal=pure_legal,
+                   pure_web=pure_web,
+                   has_biz_entities=has_business_entities,
                    complexity=complexity.value,
-                   entities_count=len(entities),
-                   confidence=f"{confidence:.0%}")
+                   entities_count=len(entities))
 
         return result
 
@@ -351,6 +449,57 @@ class QueryAnalyzer:
             return 0.9
         else:
             return 0.7
+
+    def _calculate_legal_score(self, query: str, has_business_entities: bool) -> Tuple[float, bool]:
+        """
+        Calcule le score de confiance Legal et détecte si requête purement légale.
+
+        Returns:
+            (legal_confidence, pure_legal_query)
+        """
+        # Compter les patterns legal matchés
+        legal_pattern_count = sum(1 for p in self._legal_re if p.search(query))
+        pure_legal_count = sum(1 for p in self._pure_legal_re if p.search(query))
+
+        # Score basé sur le nombre de patterns
+        if pure_legal_count >= 2:
+            score = 0.95
+        elif pure_legal_count >= 1:
+            score = 0.85
+        elif legal_pattern_count >= 2:
+            score = 0.7
+        elif legal_pattern_count >= 1:
+            score = 0.5
+        else:
+            score = 0.0
+
+        # Pure legal = patterns legal forts ET pas d'entités métier
+        pure_legal = pure_legal_count >= 1 and not has_business_entities
+
+        return score, pure_legal
+
+    def _calculate_web_score(self, query: str, has_business_entities: bool) -> Tuple[float, bool]:
+        """
+        Calcule le score de confiance Web et détecte si requête purement web.
+
+        Returns:
+            (web_confidence, pure_web_query)
+        """
+        # Compter les patterns web matchés
+        web_pattern_count = sum(1 for p in self._web_re if p.search(query))
+
+        # Score basé sur le nombre de patterns
+        if web_pattern_count >= 2:
+            score = 0.9
+        elif web_pattern_count >= 1:
+            score = 0.7
+        else:
+            score = 0.0
+
+        # Pure web = patterns web forts ET pas d'entités métier
+        pure_web = web_pattern_count >= 1 and not has_business_entities
+
+        return score, pure_web
 
 
 # Singleton

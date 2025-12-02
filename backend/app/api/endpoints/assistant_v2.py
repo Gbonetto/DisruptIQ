@@ -44,7 +44,22 @@ class AssistantResponseModel(BaseModel):
     data: Optional[Dict[str, Any]] = None
     agents_used: List[str] = []
     suggestions: List[str] = []
+    structured_suggestions: Optional[List[Dict[str, Any]]] = []  # Phase Core-First: boutons follow-up
     session_id: str
+
+
+class ActionRequest(BaseModel):
+    """
+    Requête de follow-up action (Phase Core-First).
+
+    Appelé quand l'utilisateur clique sur un bouton suggestion:
+    - "Consulter la loi" → action="legal_lookup"
+    - "Prix du marché" → action="web_search"
+    """
+    action: str  # "legal_lookup" | "web_search"
+    payload: Dict[str, Any] = {}  # {"original_query": "..."}
+    session_id: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None
 
 
 @router.post("/chat", response_model=AssistantResponseModel)
@@ -93,12 +108,29 @@ async def assistant_chat(
             )
 
         # Build response
+        # Phase Core-First: inclure les structured_suggestions pour les boutons follow-up
+        structured_suggestions = []
+        if hasattr(result, 'structured_suggestions') and result.structured_suggestions:
+            structured_suggestions = [
+                {
+                    "id": s.id,
+                    "icon": s.icon,
+                    "label": s.label,
+                    "action": s.action,
+                    "priority": s.priority,
+                    "reason": s.reason,
+                    "payload": s.payload
+                }
+                for s in result.structured_suggestions
+            ]
+
         response = AssistantResponseModel(
             success=result.success,
             message=result.message,
             data=result.data,
             agents_used=result.agents_used,
             suggestions=result.suggestions,
+            structured_suggestions=structured_suggestions,
             session_id=request.session_id or "default"
         )
 
@@ -115,6 +147,96 @@ async def assistant_chat(
         raise HTTPException(
             status_code=500,
             detail=f"Assistant error: {str(e)}"
+        )
+
+
+@router.post("/action", response_model=AssistantResponseModel)
+async def process_action(
+    request: ActionRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Process a follow-up action (Phase Core-First).
+
+    Appelé quand l'utilisateur clique sur un bouton de suggestion:
+    - "Consulter la loi" → action="legal_lookup"
+    - "Prix du marché" → action="web_search"
+
+    C'est un appel séparé, one-shot, sans modifier l'état global.
+    L'UI garde le contexte de la conversation mais cette action
+    est indépendante et non persistante.
+
+    Example:
+        POST /api/assistant-v2/action
+        {
+            "action": "legal_lookup",
+            "payload": {"original_query": "Quelle majorité pour les travaux?"},
+            "session_id": "abc123"
+        }
+    """
+    try:
+        logger.info("action_request_received",
+                   action=request.action,
+                   payload=str(request.payload)[:100])
+
+        # Import le CoreFirstOrchestrator
+        from app.services.agents.core_first_orchestrator import get_core_first_orchestrator
+
+        orchestrator = get_core_first_orchestrator()
+
+        if not orchestrator:
+            # Fallback: utiliser l'orchestrateur legacy avec les agents appropriés
+            from app.services.agents.orchestrator_factory import get_orchestrator
+            legacy_orchestrator = get_orchestrator()
+
+            if request.action == "legal_lookup":
+                # Appeler directement le LegalAgent via l'orchestrateur legacy
+                original_query = request.payload.get("original_query", "")
+                result = await legacy_orchestrator.process(
+                    user_input=f"[LEGAL] {original_query}",
+                    db=db,
+                    context=request.context or {},
+                    selected_sources=["legal"],
+                    session_id=request.session_id
+                )
+            elif request.action == "web_search":
+                original_query = request.payload.get("original_query", "")
+                result = await legacy_orchestrator.process(
+                    user_input=f"[WEB] {original_query}",
+                    db=db,
+                    context=request.context or {},
+                    selected_sources=["web"],
+                    session_id=request.session_id
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Action inconnue: {request.action}"
+                )
+        else:
+            # Utiliser le CoreFirstOrchestrator
+            result = await orchestrator.process_action(
+                action=request.action,
+                payload=request.payload,
+                context=request.context or {},
+                db=db
+            )
+
+        return AssistantResponseModel(
+            success=result.success,
+            message=result.message,
+            data=result.data,
+            agents_used=result.agents_used,
+            suggestions=result.suggestions if hasattr(result, 'suggestions') else [],
+            structured_suggestions=[],  # Pas de suggestions récursives sur une action
+            session_id=request.session_id or "default"
+        )
+
+    except Exception as e:
+        logger.error("action_request_failed", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Action error: {str(e)}"
         )
 
 
