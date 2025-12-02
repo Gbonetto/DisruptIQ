@@ -26,6 +26,7 @@ async def list_emails(
     search: Optional[str] = Query(None, description="Search in subject and sender"),
     processed: Optional[bool] = Query(None, description="Filter by processed status"),
     included_in_digest: Optional[bool] = Query(None, description="Filter by digest inclusion"),
+    is_read: Optional[bool] = Query(None, description="Filter by read status"),
     from_date: Optional[str] = Query(None, description="Filter emails from this date (ISO format)"),
     to_date: Optional[str] = Query(None, description="Filter emails to this date (ISO format)"),
     db: AsyncSession = Depends(get_db)
@@ -70,6 +71,9 @@ async def list_emails(
 
         if included_in_digest is not None:
             conditions.append(Email.included_in_digest == included_in_digest)
+
+        if is_read is not None:
+            conditions.append(Email.is_read == is_read)
 
         if from_date:
             try:
@@ -125,6 +129,7 @@ async def list_emails(
                 "attachments": email.attachments or [],
                 "processed": email.processed,
                 "included_in_digest": email.included_in_digest,
+                "is_read": email.is_read or False,
                 "received_at": email.received_at.isoformat() if email.received_at else None,
                 "processed_at": email.processed_at.isoformat() if email.processed_at else None,
                 "created_at": email.created_at.isoformat() if email.created_at else None
@@ -180,6 +185,12 @@ async def get_email(
                 detail=f"Email {email_id} not found"
             )
 
+        # Enhanced digest fields (Phase 4 - MailDigest Pro)
+        summary = getattr(email, 'summary', None)
+        suggested_action = getattr(email, 'suggested_action', None)
+        has_attachments = getattr(email, 'has_attachments', len(email.attachments or []) > 0)
+        attachment_summary = getattr(email, 'attachment_summary', None)
+
         return {
             "id": email.id,
             "message_id": email.message_id,
@@ -192,14 +203,23 @@ async def get_email(
             "category": email.category,
             "attachments": email.attachments or [],
             "llm_analysis": email.llm_analysis,
+            # Enhanced fields
+            "summary": summary,
+            "suggested_action": suggested_action,
+            "has_attachments": has_attachments,
+            "attachment_summary": attachment_summary,
+            # Relations
             "professionnel_id": email.professionnel_id,
             "copropriete_id": email.copropriete_id,
             "coproprietaire_id": email.coproprietaire_id,
             "processed": email.processed,
             "included_in_digest": email.included_in_digest,
+            "is_read": email.is_read or False,
             "received_at": email.received_at.isoformat() if email.received_at else None,
             "processed_at": email.processed_at.isoformat() if email.processed_at else None,
-            "created_at": email.created_at.isoformat() if email.created_at else None
+            "created_at": email.created_at.isoformat() if email.created_at else None,
+            # Reply helper
+            "can_reply": bool(email.sender and '@' in email.sender)
         }
 
     except HTTPException:
@@ -326,6 +346,101 @@ async def mark_email_processed(
         )
 
 
+@router.patch("/{email_id}/mark-read")
+async def mark_email_read(
+    email_id: int,
+    is_read: bool = True,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Mark an email as read/unread
+
+    Args:
+        email_id: The email ID
+        is_read: True to mark as read, False to mark as unread (default: True)
+    """
+    try:
+        result = await db.execute(
+            select(Email).where(Email.id == email_id)
+        )
+        email = result.scalar_one_or_none()
+
+        if not email:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Email {email_id} not found"
+            )
+
+        email.is_read = is_read
+
+        await db.commit()
+        await db.refresh(email)
+
+        logger.info("email_marked_read", email_id=email_id, is_read=is_read)
+
+        return {
+            "message": f"Email marked as {'read' if is_read else 'unread'}",
+            "email_id": email_id,
+            "is_read": is_read
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error("mark_email_read_failed", email_id=email_id, error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to mark email as read: {str(e)}"
+        )
+
+
+@router.patch("/batch/mark-read")
+async def mark_emails_batch_read(
+    email_ids: List[int],
+    is_read: bool = True,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Mark multiple emails as read/unread in batch
+
+    Args:
+        email_ids: List of email IDs to update
+        is_read: True to mark as read, False to mark as unread (default: True)
+    """
+    try:
+        from sqlalchemy import update
+
+        stmt = (
+            update(Email)
+            .where(Email.id.in_(email_ids))
+            .values(is_read=is_read)
+        )
+        result = await db.execute(stmt)
+        await db.commit()
+
+        updated_count = result.rowcount
+
+        logger.info("emails_batch_marked_read",
+                   count=updated_count,
+                   is_read=is_read,
+                   email_ids=email_ids[:10])  # Log first 10 IDs only
+
+        return {
+            "message": f"{updated_count} emails marked as {'read' if is_read else 'unread'}",
+            "updated_count": updated_count,
+            "is_read": is_read
+        }
+
+    except Exception as e:
+        await db.rollback()
+        logger.error("batch_mark_read_failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to mark emails as read: {str(e)}"
+        )
+
+
 @router.delete("/{email_id}")
 async def delete_email(
     email_id: int,
@@ -362,6 +477,180 @@ async def delete_email(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete email: {str(e)}"
+        )
+
+
+# ============================================================================
+# ROUTES MAILDIGEST PRO - Phase 4
+# ============================================================================
+
+class ReplyToEmailRequest(BaseModel):
+    """Request to prepare a reply to an email"""
+    instructions: str  # User instructions for the reply (e.g., "Confirmer le RDV pour demain 8h")
+    tone: Optional[str] = "professional"  # professional, friendly, formal
+
+
+@router.post("/{email_id}/prepare-reply")
+async def prepare_reply_to_email(
+    email_id: int,
+    request: ReplyToEmailRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Prepare a reply to an email using EmailAgent
+
+    This endpoint:
+    1. Fetches the original email
+    2. Uses EmailAgent to generate an appropriate reply
+    3. Returns the draft for user review before sending
+
+    The actual sending is done via a separate endpoint or chat flow.
+    """
+    try:
+        from app.services.agents.email_agent import EmailAgent
+
+        # Fetch original email
+        result = await db.execute(
+            select(Email).where(Email.id == email_id)
+        )
+        email = result.scalar_one_or_none()
+
+        if not email:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Email {email_id} not found"
+            )
+
+        if not email.sender or '@' not in email.sender:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot reply: no valid sender email address"
+            )
+
+        logger.info("preparing_email_reply",
+                   email_id=email_id,
+                   original_sender=email.sender,
+                   instructions=request.instructions[:100])
+
+        # Build context for EmailAgent
+        context = {
+            "original_email": {
+                "subject": email.subject,
+                "body": email.body,
+                "sender": email.sender,
+                "received_at": email.received_at.isoformat() if email.received_at else None
+            },
+            "reply_to": email.sender,
+            "tone": request.tone
+        }
+
+        # Generate reply using EmailAgent
+        email_agent = EmailAgent()
+        reply_result = await email_agent.generate_email(
+            user_request=f"Répondre à cet email: {request.instructions}",
+            conversation_history=[],
+            workflow_context=context,
+            db=db
+        )
+
+        if not reply_result.get('success'):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate reply: {reply_result.get('message', 'Unknown error')}"
+            )
+
+        reply_data = reply_result.get('data', {})
+
+        return {
+            "success": True,
+            "original_email_id": email_id,
+            "reply_to": email.sender,
+            "reply_subject": reply_data.get('subject', f"Re: {email.subject}"),
+            "reply_body": reply_data.get('body', ''),
+            "tone": request.tone,
+            "ready_to_send": True,
+            "message": "Reply draft generated. Review and confirm to send."
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("prepare_reply_failed", email_id=email_id, error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to prepare reply: {str(e)}"
+        )
+
+
+@router.post("/{email_id}/enrich")
+async def enrich_email_summary(
+    email_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Enrich an email with LLM-generated summary and suggested action
+
+    Updates the email record in database with:
+    - summary: 1-2 sentence summary
+    - suggested_action: What the syndic should do
+    - attachment_summary: Human-readable attachment list
+    """
+    try:
+        from app.services.email_summarizer import get_email_summarizer
+
+        # Fetch email
+        result = await db.execute(
+            select(Email).where(Email.id == email_id)
+        )
+        email = result.scalar_one_or_none()
+
+        if not email:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Email {email_id} not found"
+            )
+
+        # Enrich using summarizer
+        summarizer = get_email_summarizer()
+        enrichment = await summarizer.enrich_email(
+            subject=email.subject or 'Sans objet',
+            body=email.body or '',
+            sender=email.sender or 'Inconnu',
+            attachments=email.attachments or [],
+            urgency=email.urgency.value if email.urgency else 'routine'
+        )
+
+        # Update email record
+        email.summary = enrichment.summary
+        email.suggested_action = enrichment.suggested_action
+        email.has_attachments = enrichment.has_attachments
+        email.attachment_summary = enrichment.attachment_summary
+
+        await db.commit()
+        await db.refresh(email)
+
+        logger.info("email_enriched",
+                   email_id=email_id,
+                   summary_length=len(enrichment.summary),
+                   has_attachments=enrichment.has_attachments)
+
+        return {
+            "success": True,
+            "email_id": email_id,
+            "summary": enrichment.summary,
+            "suggested_action": enrichment.suggested_action,
+            "has_attachments": enrichment.has_attachments,
+            "attachment_summary": enrichment.attachment_summary
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error("email_enrichment_failed", email_id=email_id, error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to enrich email: {str(e)}"
         )
 
 

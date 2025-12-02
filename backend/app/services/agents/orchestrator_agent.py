@@ -2313,13 +2313,29 @@ Réponse courte et directe (2-3 phrases maximum):"""
         )
 
     async def _handle_generate_digest(self, user_input: str, db: AsyncSession, thought_stream=None) -> AgentResponse:
-        """Handle email digest generation and queries - reads from database"""
+        """
+        Handle email digest generation and queries - Enhanced MailDigest Pro
+
+        Features:
+        - LLM-generated summaries for each email
+        - Attachment indicators
+        - Suggested actions
+        - Full email viewing capability
+        - Direct reply integration
+        """
         try:
-            # Import digest service
-            from app.api.endpoints.digest import generate_digest, DigestGenerateRequest
+            # Import services
+            from app.api.endpoints.digest import generate_digest, DigestGenerateRequest, sync_gmail, SyncGmailRequest
+            from app.services.email_summarizer import get_email_summarizer, format_relative_time, detect_category_badge
 
             # Check if user wants specific details
             user_input_lower = user_input.lower()
+
+            # Check if user wants to sync/refresh emails
+            wants_sync = any(keyword in user_input_lower for keyword in [
+                "synchroniser", "sync", "rafraîchir", "rafraichir", "actualiser",
+                "nouveaux email", "nouveaux mail", "check", "vérifier"
+            ])
 
             # Keywords for digest interactions
             show_urgent = any(keyword in user_input_lower for keyword in [
@@ -2333,14 +2349,47 @@ Réponse courte et directe (2-3 phrases maximum):"""
             ])
             show_content = any(keyword in user_input_lower for keyword in [
                 "contenu", "content", "détail", "detail", "lire", "voir", "affiche",
-                "montre", "donne", "corps", "body", "texte", "message"
+                "montre", "donne", "corps", "body", "texte", "message", "complet"
             ])
 
-            logger.info("generating_digest_from_db",
+            logger.info("generating_digest_pro",
+                        wants_sync=wants_sync,
                         show_urgent=show_urgent,
                         show_important=show_important,
                         show_routine=show_routine,
                         show_content=show_content)
+
+            # If user wants to sync, do it first
+            if wants_sync:
+                if thought_stream:
+                    await thought_stream.add_thought(
+                        ThoughtType.ANALYZING,
+                        title="Synchronisation Gmail",
+                        content="Récupération des nouveaux emails depuis Gmail...",
+                        agent="digest_agent",
+                        progress=0.2
+                    )
+
+                try:
+                    sync_request = SyncGmailRequest(since_hours=24, max_emails=100)
+                    sync_result = await sync_gmail(sync_request)
+
+                    if sync_result.get("status") == "success":
+                        emails_synced = sync_result.get("emails_synced", 0)
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.ANALYZING,
+                                title="Synchronisation terminée",
+                                content=f"{emails_synced} nouveaux email(s) récupérés",
+                                agent="digest_agent",
+                                progress=0.4
+                            )
+                    else:
+                        logger.warning("gmail_sync_failed", result=sync_result)
+                        # Continue anyway, show existing emails
+                except Exception as sync_error:
+                    logger.warning("gmail_sync_error", error=str(sync_error))
+                    # Continue anyway with existing data
 
             request = DigestGenerateRequest(since_hours=24, max_emails=100)
             digest_result = await generate_digest(request=request, db=db)
@@ -2351,9 +2400,10 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 important_emails = digest_result.get('important', {}).get('emails', [])
                 routine_emails = digest_result.get('routine', {}).get('emails', [])
 
+                total_emails = len(urgent_emails) + len(important_emails) + len(routine_emails)
+
                 # Emit thought for classification
                 if thought_stream:
-                    total_emails = len(urgent_emails) + len(important_emails) + len(routine_emails)
                     await thought_stream.add_thought(
                         ThoughtType.DIGEST_CLASSIFYING,
                         title=f"Classification de {total_emails} email(s)",
@@ -2364,74 +2414,128 @@ Réponse courte et directe (2-3 phrases maximum):"""
                             "important_count": len(important_emails),
                             "routine_count": len(routine_emails)
                         },
-                        progress=0.7
+                        progress=0.5
                     )
+
+                # Enrich emails with summaries (for digest view, not full content view)
+                # Use cached summaries from DB when available, only regenerate missing ones
+                if not show_content:
+                    summarizer = get_email_summarizer()
+
+                    # Check which emails need enrichment (missing summary)
+                    urgent_missing = [e for e in urgent_emails if not e.get('summary')]
+                    important_missing = [e for e in important_emails if not e.get('summary')]
+
+                    if urgent_missing or important_missing:
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.ANALYZING,
+                                title="Analyse des emails",
+                                content=f"Génération des résumés pour {len(urgent_missing) + len(important_missing)} email(s) non cachés...",
+                                agent="email_summarizer",
+                                progress=0.7
+                            )
+
+                        # Only enrich emails without cached summaries
+                        if urgent_missing:
+                            enriched_urgent = await summarizer.enrich_emails_batch(urgent_missing)
+                            # Merge enriched data back
+                            enriched_map = {e['message_id']: e for e in enriched_urgent}
+                            for email in urgent_emails:
+                                if email['message_id'] in enriched_map:
+                                    email.update(enriched_map[email['message_id']])
+
+                        if important_missing:
+                            enriched_important = await summarizer.enrich_emails_batch(important_missing)
+                            enriched_map = {e['message_id']: e for e in enriched_important}
+                            for email in important_emails:
+                                if email['message_id'] in enriched_map:
+                                    email.update(enriched_map[email['message_id']])
+                    else:
+                        logger.info("using_cached_summaries", urgent=len(urgent_emails), important=len(important_emails))
 
                 urgent_count = len(urgent_emails)
                 important_count = len(important_emails)
                 routine_count = len(routine_emails)
                 total = digest_result.get('total_emails', 0)
 
-                # Handle specific queries
-                if show_urgent and (show_content or "contenu" in user_input_lower or "détail" in user_input_lower):
-                    # Show detailed urgent emails
-                    return self._format_detailed_emails(urgent_emails, "🔴 Emails Urgents", "digest_agent")
+                # Handle specific queries for full content
+                if show_urgent and show_content:
+                    return self._format_detailed_emails(urgent_emails, "Emails Urgents", "digest_agent")
+                elif show_important and show_content:
+                    return self._format_detailed_emails(important_emails, "Emails Importants", "digest_agent")
+                elif show_routine and show_content:
+                    return self._format_detailed_emails(routine_emails, "Emails Routiniers", "digest_agent")
 
-                elif show_important and (show_content or "quels" in user_input_lower or "liste" in user_input_lower):
-                    # Show detailed important emails
-                    return self._format_detailed_emails(important_emails, "🟡 Emails Importants", "digest_agent")
+                # Default: Enhanced digest view with summaries
+                message_parts = [
+                    f"**Digest Email** - {total} emails des dernières 24h\n\n"
+                ]
 
-                elif show_routine and (show_content or "quels" in user_input_lower or "liste" in user_input_lower):
-                    # Show detailed routine emails
-                    return self._format_detailed_emails(routine_emails, "🟢 Emails Routiniers", "digest_agent")
+                # Stats bar
+                message_parts.append(f"**Urgents:** {urgent_count} | **Importants:** {important_count} | **Routine:** {routine_count}\n")
 
-                else:
-                    # Default: show summary with previews
-                    message_parts = [
-                        f"📧 **Digest des emails généré** ({total} emails analysés)\n",
-                        f"\n🔴 **Urgents**: {urgent_count}",
-                        f"\n🟡 **Importants**: {important_count}",
-                        f"\n🟢 **Routiniers**: {routine_count}\n"
-                    ]
+                # Urgent section with enriched info
+                if urgent_emails:
+                    message_parts.append("\n---\n### Urgents\n")
+                    for i, email in enumerate(urgent_emails, 1):
+                        message_parts.append(self._format_email_digest_item(email, i))
 
-                    # Add ALL urgent emails (not just first 3)
-                    if urgent_emails:
-                        message_parts.append("\n**Emails urgents:**")
-                        for i, email in enumerate(urgent_emails, 1):
-                            subject = email.get('subject', 'Sans objet')
-                            sender = email.get('sender', 'Inconnu')
-                            message_parts.append(f"\n{i}. {subject} (de {sender})")
+                # Important section with enriched info
+                if important_emails:
+                    message_parts.append("\n---\n### Importants\n")
+                    for i, email in enumerate(important_emails[:5], 1):
+                        message_parts.append(self._format_email_digest_item(email, i))
+                    if len(important_emails) > 5:
+                        message_parts.append(f"\n*...et {len(important_emails) - 5} autre(s)*\n")
 
-                    # Add preview of important emails
-                    if important_emails:
-                        message_parts.append("\n\n**Emails importants (aperçu):**")
-                        for i, email in enumerate(important_emails[:3], 1):
-                            subject = email.get('subject', 'Sans objet')
-                            sender = email.get('sender', 'Inconnu')
-                            message_parts.append(f"\n{i}. {subject} (de {sender})")
-                        if len(important_emails) > 3:
-                            message_parts.append(f"\n... et {len(important_emails) - 3} autre(s)")
+                # Routine summary (just count, no details)
+                if routine_emails:
+                    message_parts.append(f"\n---\n### Routine\n{routine_count} email(s) de routine non affichés.\n")
 
-                    return AgentResponse(
-                        success=True,
-                        message="".join(message_parts),
-                        data={
-                            "urgent_count": urgent_count,
-                            "important_count": important_count,
-                            "routine_count": routine_count,
-                            "digest": digest_result
-                        },
-                        agents_used=["digest_agent"],
-                        suggestions=[
-                            "Voir le contenu des emails urgents",
-                            "Quels sont les emails importants ?",
-                            "Afficher les emails routiniers"
-                        ]
-                    )
+                # Store digest context for follow-up queries
+                digest_context = {
+                    "urgent_emails": urgent_emails,
+                    "important_emails": important_emails,
+                    "routine_emails": routine_emails,
+                    "total": total
+                }
+
+                # Build contextual suggestions based on digest content
+                suggestions = []
+
+                if urgent_count > 0:
+                    first_urgent = urgent_emails[0]
+                    first_subject = first_urgent.get('subject', '')[:40]
+                    suggestions.append(f"Lire l'email urgent: {first_subject}")
+                    suggestions.append("Préparer une réponse à l'email urgent")
+
+                if important_count > 0:
+                    suggestions.append("Voir les emails importants en détail")
+
+                # Always offer refresh option
+                suggestions.append("Synchroniser ma boîte mail")
+
+                # Limit to 4 suggestions max
+                suggestions = suggestions[:4]
+
+                return AgentResponse(
+                    success=True,
+                    message="".join(message_parts),
+                    data={
+                        "urgent_count": urgent_count,
+                        "important_count": important_count,
+                        "routine_count": routine_count,
+                        "digest": digest_result,
+                        "digest_context": digest_context
+                    },
+                    agents_used=["digest_agent", "email_summarizer"],
+                    suggestions=suggestions
+                )
             else:
                 return AgentResponse(
                     success=True,
-                    message="Aucun nouveau email trouvé dans les dernières 24 heures.",
+                    message="Aucun email trouvé dans les dernières 24 heures.",
                     agents_used=["digest_agent"]
                 )
 
@@ -2443,13 +2547,70 @@ Réponse courte et directe (2-3 phrases maximum):"""
                 agents_used=["digest_agent"]
             )
 
+    def _format_email_digest_item(self, email: Dict[str, Any], index: int) -> str:
+        """
+        Format a single email for the enriched digest view
+
+        Returns markdown formatted email item with:
+        - Category badge + Subject
+        - Sender + relative time
+        - Attachment indicator
+        - Summary
+        - Suggested action
+        """
+        from app.services.email_summarizer import format_relative_time, detect_category_badge
+
+        subject = email.get('subject', 'Sans objet')
+        sender = email.get('sender', 'Inconnu')
+        summary = email.get('summary', '')
+        action = email.get('suggested_action', '')
+        has_attachments = email.get('has_attachments', False)
+        attachment_summary = email.get('attachment_summary', '')
+        received_at = email.get('received_at')
+        body = email.get('body', '')
+        email_id = email.get('id', email.get('message_id', ''))
+
+        # Detect category badge
+        badge = detect_category_badge(subject, body)
+
+        # Format relative time
+        relative_time = format_relative_time(received_at)
+
+        # Build formatted item with badge
+        if badge:
+            lines = [f"\n**{index}. {badge} {subject}**\n"]
+        else:
+            lines = [f"\n**{index}. {subject}**\n"]
+
+        # Sender + time + attachments on same line
+        sender_line = f"De: {sender}"
+        if relative_time:
+            sender_line += f" · {relative_time}"
+        if has_attachments and attachment_summary:
+            sender_line += f" · Pj: {attachment_summary}"
+
+        lines.append(sender_line + "\n")
+
+        if summary:
+            lines.append(f"> {summary}\n")
+
+        if action:
+            lines.append(f"*Action: {action}*\n")
+
+        return "".join(lines)
+
     def _format_detailed_emails(self, emails: List[Dict[str, Any]], title: str, agent_name: str) -> AgentResponse:
         """
-        Format emails with full details
+        Format emails with full details - Enhanced MailDigest Pro
+
+        Shows complete email content with:
+        - Full body (truncated at 1000 chars)
+        - Attachments list
+        - Reply suggestions
 
         Args:
             emails: List of email dictionaries
-            title: Section title (e.g., "🔴 Emails Urgents")
+            title: Section title (e.g., "Emails Urgents")
             agent_name: Name of the agent for tracking
 
         Returns:
@@ -2458,37 +2619,62 @@ Réponse courte et directe (2-3 phrases maximum):"""
         if not emails:
             return AgentResponse(
                 success=True,
-                message=f"{title}\n\nAucun email dans cette catégorie.",
+                message=f"### {title}\n\nAucun email dans cette catégorie.",
                 agents_used=[agent_name]
             )
 
-        message_parts = [f"## {title}\n\n**Total: {len(emails)} emails**\n"]
+        message_parts = [f"### {title}\n\n**Total: {len(emails)} email(s)**\n"]
 
         for i, email in enumerate(emails, 1):
             subject = email.get('subject', 'Sans objet')
             sender = email.get('sender', 'Inconnu')
             body = email.get('body', 'Pas de contenu disponible')
             received_at = email.get('received_at', 'Date inconnue')
+            attachments = email.get('attachments', [])
+            email_id = email.get('id', email.get('message_id', ''))
 
             # Truncate body if too long
-            body_preview = body[:500] + "..." if len(body) > 500 else body
+            body_preview = body[:1000] + "..." if len(body) > 1000 else body
 
             message_parts.append(f"\n---\n")
-            message_parts.append(f"\n### {i}. {subject}")
-            message_parts.append(f"\n**De:** {sender}")
-            message_parts.append(f"\n**Reçu:** {received_at}")
-            message_parts.append(f"\n\n**Message:**\n{body_preview}\n")
+            message_parts.append(f"\n**{i}. {subject}**\n")
+            message_parts.append(f"De: {sender}\n")
+            message_parts.append(f"Recu: {received_at}\n")
+
+            # Show attachments if any
+            if attachments:
+                att_list = []
+                for att in attachments:
+                    filename = att.get('filename', 'fichier')
+                    size = att.get('size', 0)
+                    size_str = f" ({size // 1024}KB)" if size > 1024 else ""
+                    att_list.append(f"{filename}{size_str}")
+                message_parts.append(f"Pieces jointes: {', '.join(att_list)}\n")
+
+            message_parts.append(f"\n{body_preview}\n")
+
+        # Generate dynamic suggestions based on first email
+        first_email = emails[0] if emails else {}
+        first_sender = first_email.get('sender', '')
+        first_subject = first_email.get('subject', '')
+
+        suggestions = [
+            f"Repondre a {first_sender.split('@')[0] if '@' in first_sender else first_sender}",
+            "Investiguer ce probleme",
+            "Voir le digest complet"
+        ]
 
         return AgentResponse(
             success=True,
             message="".join(message_parts),
-            data={"emails": emails, "count": len(emails)},
+            data={
+                "emails": emails,
+                "count": len(emails),
+                "first_email_id": first_email.get('id'),
+                "first_email_sender": first_sender
+            },
             agents_used=[agent_name],
-            suggestions=[
-                "Répondre à ces emails",
-                "Marquer comme traités",
-                "Voir le digest complet"
-            ]
+            suggestions=suggestions
         )
 
     async def _handle_trigger_workflow(

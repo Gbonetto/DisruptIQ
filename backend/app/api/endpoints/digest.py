@@ -19,6 +19,7 @@ from app.schemas.email import DigestResponse
 from app.core.database import get_db
 from app.models.email import Email, EmailUrgency
 from app.core.dependencies import get_email_processor
+from app.services.email_summarizer import get_email_summarizer
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -28,6 +29,7 @@ class DigestGenerateRequest(BaseModel):
     """Request to generate digest"""
     since_hours: Optional[int] = 24
     max_emails: Optional[int] = 100  # Increased from 10 to retrieve all recent emails
+    unread_only: Optional[bool] = True  # Filter to show only unread emails by default
 
 
 class ProcessEmailsRequest(BaseModel):
@@ -289,13 +291,18 @@ async def generate_digest(
         # Query database for emails from last N hours
         time_threshold = datetime.now() - timedelta(hours=request.since_hours)
 
-        logger.info("fetching_digest_from_db", since_hours=request.since_hours)
-        result = await db.execute(
-            select(Email)
-            .where(Email.received_at >= time_threshold)
-            .order_by(Email.received_at.desc())
-            .limit(request.max_emails)
-        )
+        logger.info("fetching_digest_from_db", since_hours=request.since_hours, unread_only=request.unread_only)
+
+        # Build query with optional unread filter
+        query = select(Email).where(Email.received_at >= time_threshold)
+
+        if request.unread_only:
+            # Filter for unread emails only (is_read is False or NULL)
+            query = query.where((Email.is_read == False) | (Email.is_read.is_(None)))
+
+        query = query.order_by(Email.received_at.desc()).limit(request.max_emails)
+
+        result = await db.execute(query)
         db_emails = result.scalars().all()
 
         if not db_emails:
@@ -324,7 +331,12 @@ async def generate_digest(
                 "urgency": email.urgency.value,
                 "category": email.category,
                 "received_at": email.received_at.isoformat() if email.received_at else None,
-                "attachments": email.attachments or []
+                "attachments": email.attachments or [],
+                # MailDigest Pro enrichment fields (cached from sync)
+                "summary": email.summary,
+                "suggested_action": email.suggested_action,
+                "has_attachments": email.has_attachments if email.has_attachments is not None else len(email.attachments or []) > 0,
+                "attachment_summary": email.attachment_summary
             }
 
             if email.urgency == EmailUrgency.URGENT:
@@ -567,36 +579,68 @@ async def process_emails(
         existing_message_ids = set(row[0] for row in existing_result.fetchall())
         logger.debug("existing_emails_fetched", count=len(existing_message_ids))
 
-        # Collect new emails for bulk insert
-        new_emails = []
+        # Collect new emails for enrichment and bulk insert
+        emails_to_enrich = []
         for urgency_level in ['urgent', 'important', 'routine']:
             for email_data in classified[urgency_level]:
                 # Skip if already exists (using set lookup - O(1))
                 if email_data['message_id'] in existing_message_ids:
                     logger.debug("email_already_exists", message_id=email_data['message_id'])
                     continue
+                emails_to_enrich.append(email_data)
 
-                # Parse received_at if it's a string (ISO format from external service)
-                received_at = email_data.get('received_at')
-                if isinstance(received_at, str):
-                    from dateutil import parser as date_parser
-                    received_at = date_parser.isoparse(received_at)
+        # Enrich new emails with summaries (only urgent and important for performance)
+        if emails_to_enrich:
+            logger.info("enriching_new_emails", count=len(emails_to_enrich))
+            summarizer = get_email_summarizer()
 
-                # Create new email record
-                db_email = Email(
-                    message_id=email_data['message_id'],
-                    thread_id=email_data.get('thread_id'),
-                    sender=email_data['sender'],
-                    subject=email_data['subject'],
-                    body=email_data.get('body', ''),
-                    urgency=EmailUrgency(email_data['urgency']),
-                    attachments=email_data.get('attachments', []),
-                    received_at=received_at,
-                    processed=True,
-                    included_in_digest=True,
-                    processed_at=datetime.now()
-                )
-                new_emails.append(db_email)
+            # Only enrich urgent and important emails (skip routine for performance)
+            urgent_important = [e for e in emails_to_enrich if e.get('urgency') in ['urgent', 'important']]
+            if urgent_important:
+                try:
+                    enriched = await summarizer.enrich_emails_batch(urgent_important, batch_size=5)
+                    # Map enriched data back to original emails
+                    enriched_map = {e['message_id']: e for e in enriched}
+                    for email in emails_to_enrich:
+                        if email['message_id'] in enriched_map:
+                            enriched_email = enriched_map[email['message_id']]
+                            email['summary'] = enriched_email.get('summary', '')
+                            email['suggested_action'] = enriched_email.get('suggested_action', '')
+                            email['has_attachments'] = enriched_email.get('has_attachments', False)
+                            email['attachment_summary'] = enriched_email.get('attachment_summary', '')
+                except Exception as e:
+                    logger.warning("email_enrichment_failed_during_sync", error=str(e))
+                    # Continue without enrichment
+
+        # Create email records with enrichment data
+        new_emails = []
+        for email_data in emails_to_enrich:
+            # Parse received_at if it's a string (ISO format from external service)
+            received_at = email_data.get('received_at')
+            if isinstance(received_at, str):
+                from dateutil import parser as date_parser
+                received_at = date_parser.isoparse(received_at)
+
+            # Create new email record with enrichment fields
+            db_email = Email(
+                message_id=email_data['message_id'],
+                thread_id=email_data.get('thread_id'),
+                sender=email_data['sender'],
+                subject=email_data['subject'],
+                body=email_data.get('body', ''),
+                urgency=EmailUrgency(email_data['urgency']),
+                attachments=email_data.get('attachments', []),
+                received_at=received_at,
+                processed=True,
+                included_in_digest=True,
+                processed_at=datetime.now(),
+                # MailDigest Pro enrichment fields
+                summary=email_data.get('summary'),
+                suggested_action=email_data.get('suggested_action'),
+                has_attachments=email_data.get('has_attachments', len(email_data.get('attachments', [])) > 0),
+                attachment_summary=email_data.get('attachment_summary')
+            )
+            new_emails.append(db_email)
 
         # Bulk insert all new emails (OPTIMIZATION: single transaction)
         if new_emails:

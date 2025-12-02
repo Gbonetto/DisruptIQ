@@ -419,6 +419,23 @@ class IntentClassifierV5:
             "classe-les par": 0.90,
             "trie les emails": 0.90,
             "trie-les par urgence": 0.92,
+            # Sync/refresh requests
+            "synchroniser ma boîte": 0.95,
+            "synchroniser ma boite": 0.95,
+            "synchroniser mes emails": 0.95,
+            "synchroniser mes mails": 0.95,
+            "sync gmail": 0.95,
+            "sync mail": 0.95,
+            "rafraîchir mes emails": 0.95,
+            "rafraîchir mes mails": 0.95,
+            "rafraichir mes emails": 0.95,
+            "actualiser mes emails": 0.95,
+            "actualiser mes mails": 0.95,
+            "nouveaux emails": 0.90,
+            "nouveaux mails": 0.90,
+            "check mes emails": 0.90,
+            "vérifier mes emails": 0.90,
+            "vérifier mes mails": 0.90,
         }
 
         for keyword, confidence in digest_keywords.items():
