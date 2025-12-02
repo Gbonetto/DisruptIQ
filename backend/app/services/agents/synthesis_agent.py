@@ -963,41 +963,61 @@ Réponds de manière concise et professionnelle (max 150 mots)."""
         if conversation_context:
             context_section = f"\n## Contexte conversationnel\n{conversation_context}\n"
 
-        # Build prompt
+        # Build prompt with explicit SQL priority
+        has_sql_data = bool(sql_docs) and any("DONNÉES TROUVÉES" in str(d.get("content", "")) or "résultat" in str(d.get("content", "")).lower() for d in sql_docs)
+
+        sql_priority_instruction = ""
+        if has_sql_data:
+            sql_priority_instruction = """
+## ⚠️ INSTRUCTION CRITIQUE - DONNÉES SQL DISPONIBLES
+Les sources SQL ci-dessus contiennent des DONNÉES FACTUELLES de la base de données.
+Ces données sont VÉRIFIÉES et EXACTES. Tu DOIS les utiliser comme base de ta réponse.
+Si SQL dit "5 résultats trouvés", ta réponse DOIT mentionner ces 5 résultats.
+NE PAS dire "pas d'information" si des données SQL existent.
+"""
+
         prompt = f"""Tu es un assistant expert en copropriété. Tu réponds de manière précise et structurée en citant TOUJOURS tes sources.
 
 # SOURCES DISPONIBLES
 {all_sources_text}
+{sql_priority_instruction}
 {context_section}
 
 # RÈGLES DE SYNTHÈSE
 
-1. **Priorité des sources** (en cas de conflit) :
+1. **PRIORITÉ ABSOLUE AUX DONNÉES SQL** :
+   - Si une source (SQL) existe et contient des données, TU DOIS les utiliser
+   - Les données SQL proviennent directement de la base de données
+   - C'est la source la plus fiable et la plus récente
+   - NE JAMAIS ignorer les données SQL
+
+2. **Priorité des sources** (en cas de conflit) :
    - (SQL) > (DOC) > (LOI) > (WEB)
-   - Les données SQL sont des faits vérifiés
-   - Les documents sont des sources primaires
+   - Les données SQL sont des faits vérifiés - TOUJOURS les utiliser
+   - Les documents sont des sources secondaires
    - Les lois donnent le cadre juridique
    - Le web est informatif mais à vérifier
 
-2. **Citations obligatoires** :
+3. **Citations obligatoires** :
    - Chaque information doit être citée [N]
    - Format : "Il y a 12 copropriétaires[1]."
    - Si conflit : mentionner les deux sources
 
-3. **Structure de réponse** :
-   - Réponse directe et synthétique
+4. **Structure de réponse** :
+   - Réponse directe basée sur les données disponibles
+   - Si SQL contient des noms/emails, les lister clairement
    - Markdown sobre (**, listes à puces)
    - Pas de section "Sources" (ajoutée automatiquement)
 
-4. **Limitations** :
-   - Si une source manque : signale-le
-   - Si pas d'info : dis-le clairement
+5. **Limitations** :
+   - Si AUCUNE source ne contient d'info : dis-le clairement
+   - Si SQL contient des données : les utiliser OBLIGATOIREMENT
    - N'invente JAMAIS
 
 # QUESTION
 {query}
 
 # RÉPONSE
-Réponds en français, de manière professionnelle et structurée."""
+Réponds en français. Si des données SQL existent, UTILISE-LES dans ta réponse."""
 
         return prompt

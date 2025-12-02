@@ -3471,6 +3471,41 @@ Réponds uniquement avec le contenu, sans préambule."""
         try:
             logger.info("world_class_router_execution_started", query=user_input[:50])
 
+            # ================================================================
+            # CONTEXTUAL REFERENCE RESOLUTION (Phase E2E Fix)
+            # Resolve pronouns like "leur", "son", "elle" using conversation history
+            # ================================================================
+            resolved_input = user_input
+            if conversation_history:
+                from app.services.agents.reference_resolver import get_reference_resolver
+                try:
+                    reference_resolver = get_reference_resolver()
+                    resolution_result = await reference_resolver.resolve(
+                        query=user_input,
+                        conversation_history=conversation_history,
+                        context_store_data=context
+                    )
+
+                    if resolution_result.changes_made:
+                        resolved_input = resolution_result.resolved_query
+                        logger.info("contextual_reference_resolved",
+                                   original=user_input[:50],
+                                   resolved=resolved_input[:50],
+                                   changes=resolution_result.changes_made)
+
+                        # Add thought about resolution
+                        if thought_stream:
+                            await thought_stream.add_thought(
+                                ThoughtType.ANALYZING,
+                                title="Résolution contextuelle",
+                                content=f"J'ai compris que vous faites référence à: {', '.join(resolution_result.changes_made)}",
+                                agent="reference_resolver",
+                                progress=0.05
+                            )
+                except Exception as e:
+                    logger.warning("reference_resolution_failed", error=str(e))
+                    # Continue with original input if resolution fails
+
             # Thought: Starting intelligent routing
             if thought_stream:
                 await thought_stream.add_thought(
@@ -3483,8 +3518,9 @@ Réponds uniquement avec le contenu, sans préambule."""
 
             # 1. Route and retrieve using World-Class Router
             # Pass thought_stream for progress emissions (Option C streaming)
+            # Use resolved_input which includes contextual reference resolution
             router_result = await self.world_class_router.route_and_retrieve(
-                query=user_input,
+                query=resolved_input,
                 db=db,
                 context=context,
                 top_k=5,

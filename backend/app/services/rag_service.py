@@ -28,6 +28,8 @@ import uuid
 from app.core.config import settings
 from app.services.llm_service import LLMService
 from app.services.query_processor import QueryProcessor
+from app.services.query_analyzer import get_query_analyzer, QueryAnalysis
+from app.services.multi_query_retrieval import get_multi_query_service
 
 logger = structlog.get_logger()
 
@@ -41,9 +43,16 @@ class RAGService:
         self.llm_service = LLMService()
         self._initialized = False
 
-        # Embedding cache (in-memory, max 1000 entries)
+        # Embedding cache (in-memory, configurable size)
         self._embedding_cache: Dict[str, List[float]] = {}
-        self._cache_max_size = 1000
+        self._cache_max_size = getattr(settings, 'EMBEDDING_CACHE_SIZE', 5000)
+
+        # Semaphore for concurrent embedding API calls
+        concurrency = getattr(settings, 'EMBEDDING_CONCURRENCY', 3)
+        self._embedding_semaphore = asyncio.Semaphore(concurrency)
+        logger.info("rag_service_concurrency_configured",
+                   cache_size=self._cache_max_size,
+                   embedding_concurrency=concurrency)
 
         # Reranker (lazy-loaded)
         self._reranker = None
@@ -53,6 +62,15 @@ class RAGService:
 
         # Query expansion (lazy-loaded)
         self._query_expansion = None
+
+        # Query Analyzer (lazy-loaded)
+        self._query_analyzer = None
+
+        # Multi-Query Retrieval (lazy-loaded)
+        self._multi_query = None
+
+        # RAG Results Cache (lazy-loaded)
+        self._rag_cache = None
 
     async def _run_sync(self, func, *args, **kwargs):
         """
@@ -135,8 +153,9 @@ class RAGService:
             logger.debug("embedding_cache_hit", key=cache_key[:8])
             return self._embedding_cache[cache_key]
 
-        # Generate embedding
-        embeddings = await self.llm_service.get_embeddings([text])
+        # Generate embedding (with concurrency control)
+        async with self._embedding_semaphore:
+            embeddings = await self.llm_service.get_embeddings([text])
 
         if not embeddings:
             raise ValueError("Failed to generate embedding")
@@ -277,8 +296,9 @@ class RAGService:
                     logger.warning("metadata_enrichment_unavailable", message="Proceeding with basic metadata")
                     enrich_metadata = False
 
-            # Generate embeddings for all chunks (batch call)
-            embeddings = await self.llm_service.get_embeddings(chunks)
+            # Generate embeddings for all chunks (batch call with concurrency control)
+            async with self._embedding_semaphore:
+                embeddings = await self.llm_service.get_embeddings(chunks)
 
             if len(embeddings) != len(chunks):
                 raise ValueError("Embedding count mismatch")
@@ -399,6 +419,141 @@ class RAGService:
             self._query_expansion = QueryExpansionService()
         return self._query_expansion
 
+    def _get_query_analyzer(self):
+        """Lazy-load query analyzer service"""
+        if self._query_analyzer is None:
+            self._query_analyzer = get_query_analyzer()
+        return self._query_analyzer
+
+    def _get_multi_query_service(self):
+        """Lazy-load multi-query retrieval service"""
+        if self._multi_query is None:
+            self._multi_query = get_multi_query_service()
+        return self._multi_query
+
+    def _get_rag_cache(self):
+        """Lazy-load RAG cache service"""
+        if self._rag_cache is None:
+            from app.services.rag_cache_service import get_rag_cache
+            self._rag_cache = get_rag_cache()
+        return self._rag_cache
+
+    async def _expand_to_document_chunks(
+        self,
+        results: List[Dict[str, Any]],
+        score_threshold: float = 0.8,
+        max_expansion_docs: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        CHUNK EXPANSION: Récupère tous les chunks d'un document si un chunk est très pertinent.
+
+        Problème résolu: Quand un document a plusieurs chunks (ex: contrat avec tarifs séparés),
+        seul le chunk le plus pertinent est retourné, mais les infos critiques (prix, dates)
+        peuvent être dans d'autres chunks du même document.
+
+        Solution: Si un chunk a un score >= threshold, on récupère TOUS les chunks du document.
+
+        Args:
+            results: Liste des résultats après reranking
+            score_threshold: Score minimum pour déclencher l'expansion (0.8 = 80%)
+            max_expansion_docs: Nombre max de documents à étendre
+
+        Returns:
+            Liste étendue avec tous les chunks des documents hautement pertinents
+        """
+        if not results:
+            return results
+
+        # Identifier les documents avec chunks très pertinents
+        high_score_doc_ids = set()
+        for r in results:
+            score = r.get('reranked_score') or r.get('score', 0)
+            doc_id = r.get('document_id')
+
+            if score >= score_threshold and doc_id:
+                high_score_doc_ids.add(doc_id)
+
+        if not high_score_doc_ids:
+            return results
+
+        # Limiter l'expansion
+        high_score_doc_ids = set(list(high_score_doc_ids)[:max_expansion_docs])
+
+        logger.info("chunk_expansion_triggered",
+                   doc_ids=list(high_score_doc_ids),
+                   threshold=score_threshold)
+
+        # Récupérer tous les chunks des documents hautement pertinents depuis Qdrant
+        expanded_chunks = []
+        existing_chunk_ids = {r.get('id') for r in results}
+
+        for doc_id in high_score_doc_ids:
+            try:
+                # Scroll tous les chunks de ce document
+                doc_chunks = await self._run_sync(
+                    self.client.scroll,
+                    collection_name=self.collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="document_id",
+                                match=MatchValue(value=doc_id)
+                            )
+                        ]
+                    ),
+                    limit=50  # Max chunks par document
+                )
+
+                # doc_chunks est un tuple (points, next_offset)
+                points = doc_chunks[0] if doc_chunks else []
+
+                for point in points:
+                    # Skip les chunks déjà dans les résultats
+                    if point.id in existing_chunk_ids:
+                        continue
+
+                    # Ajouter le chunk avec un score légèrement réduit
+                    # pour le placer après les chunks originaux du même document
+                    expanded_chunks.append({
+                        "id": point.id,
+                        "content": point.payload.get("text", ""),
+                        "text": point.payload.get("text", ""),
+                        "chunk": point.payload.get("text", ""),
+                        "document_id": doc_id,
+                        "score": 0.75,  # Score fixe pour chunks adjacents
+                        "reranked_score": 0.75,
+                        "metadata": {
+                            k: v for k, v in point.payload.items()
+                            if k not in ["text", "document_id"]
+                        },
+                        "source": "chunk_expansion",
+                        "expanded_from_doc": doc_id
+                    })
+
+            except Exception as e:
+                logger.warning("chunk_expansion_failed_for_doc",
+                             doc_id=doc_id, error=str(e))
+
+        if expanded_chunks:
+            logger.info("chunks_expanded",
+                       original_count=len(results),
+                       expanded_count=len(expanded_chunks),
+                       total=len(results) + len(expanded_chunks))
+
+            # Combiner: résultats originaux + chunks étendus
+            # Trier par document_id pour garder les chunks d'un même document ensemble
+            combined = results + expanded_chunks
+
+            # Re-trier: d'abord par score, puis par document_id pour grouper
+            combined.sort(key=lambda x: (
+                -(x.get('reranked_score') or x.get('score', 0)),
+                x.get('document_id', 0)
+            ))
+
+            return combined
+
+        return results
+
     def _deduplicate_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Deduplicate chunks by text content with SMART AGGREGATION
@@ -486,7 +641,9 @@ class RAGService:
         use_query_expansion: bool = False,
         use_query_planning: bool = False,
         use_verification: bool = False,
-        use_reflection: bool = False
+        use_reflection: bool = False,
+        use_multi_query: bool = True,  # NEW: Multi-query retrieval for better recall
+        use_query_analyzer: bool = True  # NEW: Query analysis for smart routing
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant documents
@@ -526,6 +683,126 @@ class RAGService:
         if limit < 1 or limit > 100:
             raise ValueError("Limit must be between 1 and 100")
 
+        # =========================================================
+        # WORLD-CLASS RAG: Cache Check (avoid redundant searches)
+        # =========================================================
+        try:
+            cache = self._get_rag_cache()
+            cached_results = cache.get(query, limit, document_ids)
+            if cached_results is not None:
+                logger.info("rag_search_cache_hit", query=query[:40], results=len(cached_results))
+                return cached_results
+        except Exception as cache_err:
+            logger.warning("rag_cache_get_error", error=str(cache_err))
+
+        # =========================================================
+        # WORLD-CLASS RAG: Query Analysis + Multi-Query Retrieval
+        # =========================================================
+
+        # Step 1: Analyze the query to determine flags
+        query_analysis: Optional[QueryAnalysis] = None
+        if use_query_analyzer:
+            try:
+                analyzer = self._get_query_analyzer()
+                query_analysis = analyzer.analyze(query)
+                logger.info("query_analysis_complete",
+                           query=query[:50],
+                           is_amount=query_analysis.is_amount_query,
+                           is_table=query_analysis.is_table_query,
+                           is_legal=query_analysis.is_legal_query,
+                           needs_hybrid=query_analysis.needs_hybrid,
+                           complexity=query_analysis.complexity.value)
+            except Exception as e:
+                logger.warning("query_analyzer_failed", error=str(e))
+
+        # Step 2: Multi-Query Retrieval (if enabled and analysis suggests it's useful)
+        # Generate reformulations and search with all of them
+        if use_multi_query and query_analysis and query_analysis.needs_multi_query:
+            try:
+                multi_query_svc = self._get_multi_query_service()
+                reformulations_result = multi_query_svc.generate_reformulations(
+                    query=query,
+                    is_amount_query=query_analysis.is_amount_query,
+                    is_table_query=query_analysis.is_table_query,
+                    is_legal_query=query_analysis.is_legal_query
+                )
+
+                if reformulations_result.reformulations:
+                    logger.info("multi_query_activated",
+                               original=query[:40],
+                               reformulations=len(reformulations_result.reformulations),
+                               strategy=reformulations_result.strategy_used)
+
+                    # =========================================================
+                    # PARALLEL MULTI-QUERY: Execute all searches in parallel
+                    # =========================================================
+                    from app.services.parallel_search_service import get_parallel_search_service
+
+                    parallel_svc = get_parallel_search_service()
+
+                    # Create search function for parallel execution
+                    async def sub_search(sub_query: str) -> List[Dict[str, Any]]:
+                        return await self.search(
+                            query=sub_query,
+                            limit=limit,
+                            filter_conditions=filter_conditions,
+                            document_ids=document_ids,
+                            use_reranker=use_reranker,
+                            use_hybrid=use_hybrid,
+                            use_query_expansion=False,
+                            use_query_planning=False,
+                            use_verification=False,
+                            use_reflection=False,
+                            use_multi_query=False,  # CRITICAL: Disable to avoid recursion
+                            use_query_analyzer=False  # Already analyzed
+                        )
+
+                    # Execute in parallel with fallback
+                    parallel_result = await parallel_svc.search_parallel(
+                        queries=reformulations_result.all_queries,
+                        search_func=sub_search
+                    )
+
+                    all_chunks = parallel_result.all_chunks
+
+                    logger.info("parallel_multi_query_result",
+                               used_parallel=parallel_result.used_parallel,
+                               queries_failed=parallel_result.queries_failed,
+                               latency_ms=parallel_result.total_latency_ms)
+
+                    # Deduplicate and aggregate with frequency boosting
+                    merged_chunks = self._deduplicate_chunks(all_chunks)
+
+                    # Final reranking on merged results
+                    if use_reranker and merged_chunks:
+                        reranker = await self._get_reranker()
+                        merged_chunks = await reranker.rerank(
+                            query=query,  # Use ORIGINAL query for final reranking
+                            results=merged_chunks,
+                            top_k=limit
+                        )
+                    else:
+                        merged_chunks = sorted(
+                            merged_chunks,
+                            key=lambda x: x.get('reranked_score') or x.get('score', 0),
+                            reverse=True
+                        )[:limit]
+
+                    logger.info("multi_query_completed",
+                               queries_executed=len(reformulations_result.all_queries),
+                               total_chunks=len(all_chunks),
+                               deduplicated=len(merged_chunks))
+
+                    return merged_chunks
+
+            except Exception as e:
+                logger.warning("multi_query_failed_fallback", error=str(e))
+                # Continue with normal search on error
+
+        # =========================================================
+        # END WORLD-CLASS RAG INTEGRATION
+        # =========================================================
+
         # AGENTIC RAG: Query Planning (if enabled)
         # Decomposes complex queries into sub-queries for better retrieval
         if use_query_planning:
@@ -558,7 +835,9 @@ class RAGService:
                             use_reranker=use_reranker,
                             use_hybrid=use_hybrid,
                             use_query_expansion=False,  # Disable expansion for sub-queries
-                            use_query_planning=False  # CRITICAL: Disable to avoid recursion
+                            use_query_planning=False,  # CRITICAL: Disable to avoid recursion
+                            use_multi_query=False,  # Disable multi-query in sub-queries
+                            use_query_analyzer=False  # Already analyzed at top level
                         )
 
                         all_chunks.extend(sub_chunks)
@@ -736,12 +1015,19 @@ class RAGService:
             if conditions:
                 search_filter = Filter(must=conditions)
 
-            # Determine search limit (fetch more if using reranker)
-            # INTERGALACTIC MODE: Fetch 6x for maximum precision (increased from 3x)
-            # OPTIMIZATION: Increase to 8x if searching long documents
-            # This helps find specific info buried in 50k+ char documents
-            multiplier = 8 if use_reranker else 6  # Increased for long docs
-            search_limit = limit * multiplier
+            # =========================================================
+            # WORLD-CLASS RAG: Retrieval → Rerank Pipeline
+            # Architecture: Fetch 30 → Rerank → Return 8-10
+            # =========================================================
+            # Retrieve more chunks for better recall, then rerank for precision
+            # This balances recall (find relevant docs) vs precision (rank them well)
+            RETRIEVAL_POOL_SIZE = 30  # Fixed pool size for reranking
+            RERANKER_OUTPUT_SIZE = max(10, limit * 2)  # Output 10 or 2x limit
+
+            if use_reranker:
+                search_limit = RETRIEVAL_POOL_SIZE  # Fixed 30 chunks for reranking
+            else:
+                search_limit = limit * 4  # Without reranker, fetch 4x limit
 
             # Search (async wrapper)
             results = await self._run_sync(
@@ -786,13 +1072,16 @@ class RAGService:
                     # Continue with vector-only results
 
             # Apply re-ranking if enabled (with multi-level fallback)
+            # WORLD-CLASS: Rerank more chunks (10) to allow chunk expansion to work better
+            reranker_output_k = max(10, limit * 2)  # Return 10 or 2x limit from reranker
+
             if use_reranker and formatted_results:
                 try:
                     reranker = await self._get_reranker()
                     reranked_results = await reranker.rerank(
                         query=query,
                         results=formatted_results,
-                        top_k=limit
+                        top_k=reranker_output_k  # Get more for chunk expansion
                     )
 
                     # Validate reranked results are not empty
@@ -827,6 +1116,19 @@ class RAGService:
                             # FALLBACK LEVEL 3: Return top results without threshold
                             logger.warning("fallback_level_3_vector_only_no_threshold")
                             formatted_results = formatted_results[:limit]
+
+            # CHUNK EXPANSION: Récupère tous les chunks d'un document hautement pertinent
+            # Cela résout le problème où les prix/dates sont dans des chunks adjacents
+            if formatted_results:
+                try:
+                    formatted_results = await self._expand_to_document_chunks(
+                        results=formatted_results,
+                        score_threshold=0.8,  # 80% de confiance
+                        max_expansion_docs=3  # Max 3 documents à étendre
+                    )
+                except Exception as e:
+                    logger.warning("chunk_expansion_error", error=str(e))
+                    # Continue with original results on error
 
             # FINAL VALIDATION: Ensure results have valid text
             if formatted_results:
@@ -881,7 +1183,9 @@ class RAGService:
                                 use_hybrid=use_hybrid,
                                 use_query_expansion=False,
                                 use_query_planning=False,  # Disable planning in verification
-                                use_verification=False  # CRITICAL: Disable to avoid infinite recursion
+                                use_verification=False,  # CRITICAL: Disable to avoid infinite recursion
+                                use_multi_query=False,  # Disable multi-query
+                                use_query_analyzer=False
                             )
 
                         # Verify and refine
@@ -935,7 +1239,9 @@ class RAGService:
                                 use_query_expansion=False,
                                 use_query_planning=False,  # Disable all agents in recursive calls
                                 use_verification=False,
-                                use_reflection=False  # CRITICAL: Prevent infinite recursion
+                                use_reflection=False,  # CRITICAL: Prevent infinite recursion
+                                use_multi_query=False,
+                                use_query_analyzer=False
                             )
 
                         # Reflect and attempt to improve
@@ -992,6 +1298,16 @@ class RAGService:
                     filter_used=search_filter is not None,
                     document_ids_filter=document_ids
                 )
+
+            # =========================================================
+            # WORLD-CLASS RAG: Cache Set (store results for future)
+            # =========================================================
+            if formatted_results:
+                try:
+                    cache = self._get_rag_cache()
+                    cache.set(query, limit, formatted_results, document_ids)
+                except Exception as cache_err:
+                    logger.warning("rag_cache_set_error", error=str(cache_err))
 
             return formatted_results
 
@@ -1056,7 +1372,9 @@ class RAGService:
                     use_query_expansion=False,  # Disable for speed
                     use_query_planning=False,   # Disable for speed
                     use_verification=False,     # Disable for speed
-                    use_reflection=False        # Disable for speed
+                    use_reflection=False,       # Disable for speed
+                    use_multi_query=True,       # Keep for better recall
+                    use_query_analyzer=True     # Keep for smart routing
                 ),
                 timeout=timeout_seconds
             )

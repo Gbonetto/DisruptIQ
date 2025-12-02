@@ -75,10 +75,15 @@ class ReferenceResolver:
         "celui-ci": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL, EntityType.DOCUMENT],
         "celui-là": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL],
 
-        # Pluriels
+        # Pluriels et possessifs (CRITIQUE pour "donne moi leur mail")
         "ils": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL],
         "elles": [EntityType.COPROPRIETE, EntityType.COPROPRIETAIRE],
         "eux": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL],
+        "leur": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL],  # "donne moi leur mail"
+        "leurs": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL],  # "leurs adresses"
+        "ses": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL],  # "ses coordonnées"
+        "son": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL],  # "son email"
+        "sa": [EntityType.COPROPRIETAIRE, EntityType.PROFESSIONNEL],  # "sa téléphone"
 
         # Références explicites
         "ce prestataire": [EntityType.PROFESSIONNEL],
@@ -91,6 +96,9 @@ class ReferenceResolver:
         "cet immeuble": [EntityType.COPROPRIETE],
         "ce copropriétaire": [EntityType.COPROPRIETAIRE],
         "cette personne": [EntityType.COPROPRIETAIRE],
+        "ces personnes": [EntityType.COPROPRIETAIRE],
+        "ces copropriétaires": [EntityType.COPROPRIETAIRE],
+        "ces professionnels": [EntityType.PROFESSIONNEL],
         "ce document": [EntityType.DOCUMENT],
         "cette facture": [EntityType.DOCUMENT],
         "ce devis": [EntityType.DOCUMENT],

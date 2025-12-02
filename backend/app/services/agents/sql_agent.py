@@ -101,7 +101,14 @@ TABLES DISPONIBLES:
    - processed: Boolean
 """
 
-    async def process(self, user_input: str, db: AsyncSession, thought_stream=None) -> Dict[str, Any]:
+    async def process(
+        self,
+        user_input: str,
+        db: AsyncSession,
+        thought_stream=None,
+        conversation_history: list = None,
+        last_sql_context: dict = None
+    ) -> Dict[str, Any]:
         """
         Process natural language query and execute SQL
 
@@ -109,6 +116,8 @@ TABLES DISPONIBLES:
             user_input: User's question in natural language
             db: Database session
             thought_stream: Optional ThoughtStream for CoT display
+            conversation_history: Recent conversation for context resolution
+            last_sql_context: Previous SQL results for pronoun resolution (e.g., "leur", "ses")
 
         Returns:
             Dict with success, message, data, sql_query
@@ -117,8 +126,15 @@ TABLES DISPONIBLES:
         from app.services.agents.thought_stream import ThoughtType
 
         try:
+            # Step 0: Resolve contextual references ("leur mail", "ses coordonnées")
+            enriched_input = await self._resolve_contextual_references(
+                user_input,
+                conversation_history,
+                last_sql_context
+            )
+
             # Step 1: Generate SQL query
-            sql_query = await self._generate_sql(user_input)
+            sql_query = await self._generate_sql(enriched_input)
 
             if not sql_query:
                 return {
@@ -264,18 +280,28 @@ RÈGLES IMPORTANTES:
    - Exemple = : WHERE unaccent(LOWER(co.nom)) = unaccent(LOWER('Résidence des Jardins'))
    - Exemple IN : WHERE unaccent(LOWER(category)) IN (unaccent(LOWER('plombier')), unaccent(LOWER('chauffagiste')))
    - Cela permet de chercher sans tenir compte des accents (résidence = residence, José = Jose)
-3. Pour chercher une PERSONNE: regarde d'abord dans 'professionnels' (name), puis 'coproprietaires' (nom, prenom)
-   - Si pas trouvé dans professionnels, cherche dans coproprietaires
+3. ⚠️ CRITIQUE - RECHERCHE DE PERSONNE PAR NOM:
+   - TOUJOURS utiliser UNION ALL pour chercher dans TOUTES les tables de personnes
+   - Chercher dans 'professionnels' (colonne name) ET 'coproprietaires' (colonnes nom, prenom)
+   - Format OBLIGATOIRE pour "qui est X" ou "email de X":
+     SELECT 'professionnel' as source_type, id, name, company_name, email, phone, category, city
+     FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%nom%'))
+     UNION ALL
+     SELECT 'coproprietaire' as source_type, id, CONCAT(prenom, ' ', nom) as name, NULL as company_name, email, telephone as phone, 'copropriétaire' as category, NULL as city
+     FROM coproprietaires WHERE unaccent(LOWER(nom)) LIKE unaccent(LOWER('%nom%')) OR unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%nom%'))
    - Gère les titres: "M. Dupont", "Mme Dupont" → retire "M.", "Mme", "Mr" avant de chercher
-4. Pour chercher un MÉTIER/CATÉGORIE: utilise table 'professionnels' colonne 'category'
-5. Pour comparer des DATES/ANNÉES:
+4. ⚠️ CRITIQUE - RECHERCHE PAR NOM D'ENTREPRISE:
+   - Pour chercher une ENTREPRISE, chercher dans 'professionnels' colonnes 'name' ET 'company_name'
+   - Exemple: "email d'électricité plus" → WHERE unaccent(LOWER(company_name)) LIKE unaccent(LOWER('%electricite plus%')) OR unaccent(LOWER(name)) LIKE unaccent(LOWER('%electricite plus%'))
+5. Pour chercher un MÉTIER/CATÉGORIE: utilise table 'professionnels' colonne 'category'
+6. Pour comparer des DATES/ANNÉES:
    - "avant 2000" → WHERE annee_construction < 2000
    - "après 1990" → WHERE annee_construction > 1990
    - "en 2000" → WHERE annee_construction = 2000
-6. Utilise des JOINs appropriés si nécessaire
-7. Dans les SUBQUERIES aussi: utilise toujours unaccent(LOWER()) pour les comparaisons de texte
-8. Limite les résultats à 100 rows (LIMIT 100), SAUF si demandé explicitement "tous"
-9. Retourne UNIQUEMENT le SQL, sans explication, sans markdown
+7. Utilise des JOINs appropriés si nécessaire
+8. Dans les SUBQUERIES aussi: utilise toujours unaccent(LOWER()) pour les comparaisons de texte
+9. Limite les résultats à 100 rows (LIMIT 100), SAUF si demandé explicitement "tous"
+10. Retourne UNIQUEMENT le SQL, sans explication, sans markdown
 
 ⚠️ INFORMATIONS NON DISPONIBLES EN BASE DE DONNÉES:
 Les informations suivantes NE SONT PAS stockées dans la base et ne peuvent PAS être interrogées avec SQL:
@@ -288,24 +314,38 @@ Si la question porte sur ces sujets, retourne une requête SQL vide ou indique q
 
 EXEMPLES CONCRETS:
 
-PROFESSIONNELS (name en un seul champ):
+⚠️ RECHERCHE DE PERSONNE (TOUJOURS utiliser UNION ALL pour chercher dans toutes les tables):
+Q: "qui est fafa moussu ?"
+A: SELECT 'professionnel' as source_type, id, name, company_name, email, phone, category, city FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%fafa%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) UNION ALL SELECT 'coproprietaire' as source_type, id, CONCAT(prenom, ' ', nom) as name, NULL as company_name, email, telephone as phone, 'copropriétaire' as category, NULL as city FROM coproprietaires WHERE (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%fafa%')) OR unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%fafa%'))) AND (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%moussu%')) OR unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%moussu%'))) LIMIT 100
+
 Q: "qui est nadege moussu ?"
-A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%nadege%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) LIMIT 100
+A: SELECT 'professionnel' as source_type, id, name, company_name, email, phone, category, city FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%nadege%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) UNION ALL SELECT 'coproprietaire' as source_type, id, CONCAT(prenom, ' ', nom) as name, NULL as company_name, email, telephone as phone, 'copropriétaire' as category, NULL as city FROM coproprietaires WHERE (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%nadege%')) OR unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%nadege%'))) AND (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%moussu%')) OR unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%moussu%'))) LIMIT 100
 
-Q: "qui est Laurent Moussu ?"
-A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%laurent%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) LIMIT 100
+Q: "quel est le mail de fafa moussu ?"
+A: SELECT 'professionnel' as source_type, name, email, phone FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%fafa%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) UNION ALL SELECT 'coproprietaire' as source_type, CONCAT(prenom, ' ', nom) as name, email, telephone as phone FROM coproprietaires WHERE (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%fafa%')) OR unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%fafa%'))) AND (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%moussu%')) OR unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%moussu%'))) LIMIT 100
 
-Q: "qui est M. Moussu ?"
-A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%moussu%')) LIMIT 100
+Q: "coordonnées de Jean Dupont"
+A: SELECT 'professionnel' as source_type, name, company_name, email, phone, address, city FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%jean%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%dupont%')) UNION ALL SELECT 'coproprietaire' as source_type, CONCAT(prenom, ' ', nom) as name, NULL as company_name, email, telephone as phone, NULL as address, NULL as city FROM coproprietaires WHERE (unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%jean%')) AND unaccent(LOWER(nom)) LIKE unaccent(LOWER('%dupont%'))) OR (unaccent(LOWER(nom)) LIKE unaccent(LOWER('%jean%')) AND unaccent(LOWER(prenom)) LIKE unaccent(LOWER('%dupont%'))) LIMIT 100
 
-Q: "qui est Gregori Bonetto ?"
-A: SELECT * FROM professionnels WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%gregori%')) AND unaccent(LOWER(name)) LIKE unaccent(LOWER('%bonetto%')) LIMIT 100
+⚠️ RECHERCHE PAR NOM D'ENTREPRISE (chercher dans name ET company_name):
+Q: "donne moi le mail d'electricite plus"
+A: SELECT name, company_name, email, phone FROM professionnels WHERE unaccent(LOWER(company_name)) LIKE unaccent(LOWER('%electricite plus%')) OR unaccent(LOWER(name)) LIKE unaccent(LOWER('%electricite plus%')) LIMIT 100
 
+Q: "contact de Plomberie Express"
+A: SELECT name, company_name, email, phone, address, city FROM professionnels WHERE unaccent(LOWER(company_name)) LIKE unaccent(LOWER('%plomberie express%')) OR unaccent(LOWER(name)) LIKE unaccent(LOWER('%plomberie express%')) LIMIT 100
+
+Q: "email de jardins sud"
+A: SELECT name, company_name, email, phone FROM professionnels WHERE unaccent(LOWER(company_name)) LIKE unaccent(LOWER('%jardins sud%')) OR unaccent(LOWER(name)) LIKE unaccent(LOWER('%jardins sud%')) LIMIT 100
+
+PROFESSIONNELS PAR CATÉGORIE/MÉTIER:
 Q: "connaissons nous des consultants ?"
 A: SELECT * FROM professionnels WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%consultant%')) LIMIT 100
 
 Q: "liste des plombiers"
-A: SELECT name, email, phone, city FROM professionnels WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%plombier%')) LIMIT 100
+A: SELECT name, company_name, email, phone, city FROM professionnels WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%plombier%')) LIMIT 100
+
+Q: "donne moi le mail d'un jardinier"
+A: SELECT name, company_name, email, phone FROM professionnels WHERE unaccent(LOWER(category)) LIKE unaccent(LOWER('%jardinier%')) LIMIT 100
 
 COPROPRIETAIRES (nom et prenom séparés - TRÈS IMPORTANT):
 Q: "Qui est Dupont Marie ?"
@@ -852,6 +892,8 @@ Les tantièmes sont calculés selon la formule:
         "who_is_person": {
             "patterns": [
                 r"qui\s+est\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
+                r"c'est\s+qui\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
+                r"connais[- ]tu\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
                 r"contact\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
                 r"email\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
                 # Patterns coordonnées
@@ -859,15 +901,20 @@ Les tantièmes sont calculés selon la formule:
                 r"(?:quelles?\s+)?(?:sont\s+)?les?\s+coordonn[ée]es\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
                 r"coordonn[ée]es\s+(?:de|du)\s+([A-ZÀ-Ÿa-zà-ÿ]+(?:\s+[A-ZÀ-Ÿa-zà-ÿ]+)*)",
             ],
-            "sql": """SELECT * FROM professionnels
+            "sql": """SELECT 'professionnel' as type_personne, name as nom_complet, company_name as entreprise_ou_copro,
+                             email, phone as telephone, category as role_ou_statut, city as ville
+                      FROM professionnels
                       WHERE unaccent(LOWER(name)) LIKE unaccent(LOWER('%{entity}%'))
+                         OR unaccent(LOWER(company_name)) LIKE unaccent(LOWER('%{entity}%'))
                       UNION ALL
-                      SELECT c.*, NULL as company_name, NULL as category,
-                             NULL as siret, NULL as description, NULL as address,
-                             NULL as city, NULL as postal_code, NULL as rating,
-                             NULL as is_indexed, NULL as statut
+                      SELECT 'copropriétaire' as type_personne, CONCAT(c.prenom, ' ', c.nom) as nom_complet,
+                             co.nom as entreprise_ou_copro, c.email, c.telephone,
+                             COALESCE(c.statut_special, c.statut) as role_ou_statut, co.ville
                       FROM coproprietaires c
-                      WHERE unaccent(LOWER(CONCAT(prenom, ' ', nom))) LIKE unaccent(LOWER('%{entity}%'))
+                      JOIN coproprietes co ON c.copropriete_id = co.id
+                      WHERE unaccent(LOWER(CONCAT(c.prenom, ' ', c.nom))) LIKE unaccent(LOWER('%{entity}%'))
+                         OR unaccent(LOWER(c.nom)) LIKE unaccent(LOWER('%{entity}%'))
+                         OR unaccent(LOWER(c.prenom)) LIKE unaccent(LOWER('%{entity}%'))
                       LIMIT {limit}""",
             "extract_group": 1
         },
@@ -908,6 +955,48 @@ Les tantièmes sont calculés selon la formule:
             ],
             "sql": """SELECT COUNT(*) as count FROM coproprietes""",
             "extract_group": 0
+        },
+        # Présidents de copropriété
+        "list_presidents": {
+            "patterns": [
+                r"(?:qui\s+sont|liste|quels?\s+sont)\s+(?:les?\s+)?pr[ée]sidents?",
+                r"pr[ée]sidents?\s+(?:de\s+)?(?:copropri[ée]t[ée]|conseil)",
+            ],
+            "sql": """SELECT c.prenom, c.nom, c.email, c.telephone, co.nom as copropriete
+                      FROM coproprietaires c
+                      JOIN coproprietes co ON c.copropriete_id = co.id
+                      WHERE c.statut_special = 'président' OR c.statut_special = 'president'
+                      ORDER BY co.nom
+                      LIMIT {limit}""",
+            "extract_group": 0
+        },
+        # Locataires
+        "list_locataires": {
+            "patterns": [
+                r"(?:qui\s+sont|liste|quels?\s+sont)\s+(?:les?\s+)?locataires?",
+                r"locataires?\s+(?:de|des)\s+",
+            ],
+            "sql": """SELECT c.prenom, c.nom, c.email, c.telephone, co.nom as copropriete
+                      FROM coproprietaires c
+                      JOIN coproprietes co ON c.copropriete_id = co.id
+                      WHERE c.statut = 'locataire'
+                      ORDER BY co.nom
+                      LIMIT {limit}""",
+            "extract_group": 0
+        },
+        # Professionnels par nombre d'interventions
+        "list_pro_by_jobs": {
+            "patterns": [
+                r"professionnels?\s+(?:avec\s+)?plus\s+de\s+(\d+)\s+interventions?",
+                r"qui\s+(?:a|ont)\s+(?:fait|r[ée]alis[ée])\s+plus\s+de\s+(\d+)\s+interventions?",
+            ],
+            "sql": """SELECT name, company_name, category, email, phone, total_jobs, rating
+                      FROM professionnels
+                      WHERE total_jobs > {entity}
+                      AND statut = 'active'
+                      ORDER BY total_jobs DESC
+                      LIMIT {limit}""",
+            "extract_group": 1
         },
     }
 
@@ -1007,31 +1096,38 @@ Les tantièmes sont calculés selon la formule:
 
                         # Build content from results
                         if results:
-                            # Format results as JSON-like content for synthesis
-                            content_lines = []
+                            # Format results in a clear, LLM-friendly format
                             tables_used = self._extract_table_names(sql)
 
+                            # Build structured content with clear answer
+                            content_lines = []
+                            content_lines.append(f"✅ DONNÉES TROUVÉES: {len(results)} résultat(s)")
+                            content_lines.append("")
+
                             for i, row in enumerate(results[:limit], 1):
-                                # Build readable content
-                                row_parts = []
+                                # Format each row as a clear entity
+                                row_lines = [f"**Résultat {i}:**"]
                                 for key, value in row.items():
                                     if value is not None and str(value).strip():
-                                        row_parts.append(f"{key}: {value}")
-                                if row_parts:
-                                    content_lines.append(f"  {i}. " + " | ".join(row_parts))
+                                        # Make key names more readable
+                                        key_label = key.replace("_", " ").title()
+                                        row_lines.append(f"  - {key_label}: {value}")
+                                content_lines.append("\n".join(row_lines))
+                                content_lines.append("")
 
-                            content = f"Résultats SQL ({len(results)} lignes):\n" + "\n".join(content_lines)
+                            content = "\n".join(content_lines)
 
                             documents.append({
                                 "content": content,
                                 "source": "sql",
-                                "score": 0.85,
+                                "score": 0.95,  # High score for SQL facts
                                 "metadata": {
                                     "template_used": template_name,
                                     "sql_query": sql,
                                     "row_count": len(results),
                                     "tables": tables_used,
-                                    "raw_results": results  # Keep raw data for synthesis
+                                    "raw_results": results,
+                                    "is_factual": True  # Flag for synthesis to prioritize
                                 }
                             })
                         else:
@@ -1058,3 +1154,142 @@ Les tantièmes sont calculés selon la formule:
         except Exception as e:
             logger.error("sql_light_retrieval_failed", error=str(e), query=query[:50])
             return []
+
+    # ========================================================================
+    # CONTEXTUAL REFERENCE RESOLUTION
+    # ========================================================================
+
+    async def _resolve_contextual_references(
+        self,
+        user_input: str,
+        conversation_history: list = None,
+        last_sql_context: dict = None
+    ) -> str:
+        """
+        Resolve contextual references like "leur mail", "ses coordonnées", etc.
+
+        Examples:
+        - "qui habite aux mimosas" → stores context
+        - "donne moi leur mail" → resolves to "donne moi le mail des habitants des mimosas"
+
+        Args:
+            user_input: Current user query
+            conversation_history: Recent conversation messages
+            last_sql_context: Previous SQL query context (tables, entities found)
+
+        Returns:
+            Enriched query with resolved references
+        """
+        import re
+
+        query_lower = user_input.lower()
+
+        # Contextual reference patterns
+        contextual_patterns = [
+            (r'\bleur\b', 'plural possessive'),     # "leur mail", "leur adresse"
+            (r'\bleurs\b', 'plural possessive'),    # "leurs coordonnées"
+            (r'\bses\b', 'singular possessive'),    # "ses coordonnées"
+            (r'\bson\b', 'singular possessive'),    # "son email"
+            (r'\bsa\b', 'singular possessive'),     # "sa téléphone"
+            (r'\bces\b', 'demonstrative plural'),   # "ces copropriétaires"
+        ]
+
+        # Check if query has contextual references
+        has_contextual_ref = any(re.search(pattern, query_lower) for pattern, _ in contextual_patterns)
+
+        if not has_contextual_ref:
+            return user_input  # No resolution needed
+
+        # Try to extract context from conversation history
+        context_entity = None
+        context_filter = None
+
+        if conversation_history:
+            # Look at recent messages (last 5)
+            for msg in reversed(conversation_history[-5:]):
+                content = msg.get("content", "").lower()
+
+                # Extract copropriété mentions
+                copro_patterns = [
+                    r"(?:aux|des|de la|dans les?)\s+(?:copropriété\s+)?(?:les?\s+)?([a-zéèêëàâäîïôöùûüç\-]+(?:\s+[a-zéèêëàâäîïôöùûüç\-]+)*)",
+                    r"(?:résidence|copropriété)\s+(?:les?\s+)?([a-zéèêëàâäîïôöùûüç\-]+)",
+                    r"(?:habite|vit|réside)\s+(?:aux?|dans)\s+(?:les?\s+)?([a-zéèêëàâäîïôöùûüç\-]+)",
+                ]
+
+                for pattern in copro_patterns:
+                    match = re.search(pattern, content)
+                    if match:
+                        context_entity = match.group(1).strip()
+                        context_filter = "copropriete"
+                        logger.info("context_resolved_from_history",
+                                   entity=context_entity,
+                                   filter_type=context_filter)
+                        break
+
+                if context_entity:
+                    break
+
+                # Extract professional category mentions
+                prof_patterns = [
+                    r"(?:les?|nos?|des?)\s+(plombiers?|électriciens?|jardiniers?|chauffagistes?)",
+                    r"(plombiers?|électriciens?|jardiniers?|chauffagistes?)\s+(?:disponibles?|actifs?)",
+                ]
+
+                for pattern in prof_patterns:
+                    match = re.search(pattern, content)
+                    if match:
+                        context_entity = match.group(1).strip()
+                        context_filter = "professionnel_category"
+                        logger.info("context_resolved_from_history",
+                                   entity=context_entity,
+                                   filter_type=context_filter)
+                        break
+
+                if context_entity:
+                    break
+
+        # Also check last_sql_context if available
+        if not context_entity and last_sql_context:
+            if "copropriete" in str(last_sql_context.get("tables", [])):
+                # Extract copropriété name from previous results
+                context_filter = "copropriete"
+                context_entity = last_sql_context.get("entity_name")
+
+        # If we found context, enrich the query
+        if context_entity and context_filter:
+            enriched_query = user_input
+
+            if context_filter == "copropriete":
+                # Replace "leur mail" with "le mail des copropriétaires de X"
+                enriched_query = re.sub(
+                    r'\bleur\s+(mail|email|adresse|coordonnées?|téléphone)',
+                    f'le \\1 des copropriétaires de {context_entity}',
+                    enriched_query,
+                    flags=re.IGNORECASE
+                )
+                enriched_query = re.sub(
+                    r'\bleurs\s+(mails?|emails?|adresses?|coordonnées?|téléphones?)',
+                    f'les \\1 des copropriétaires de {context_entity}',
+                    enriched_query,
+                    flags=re.IGNORECASE
+                )
+
+            elif context_filter == "professionnel_category":
+                # Replace "leur mail" with "le mail des {category}"
+                enriched_query = re.sub(
+                    r'\bleur\s+(mail|email|adresse|coordonnées?|téléphone)',
+                    f'le \\1 des {context_entity}',
+                    enriched_query,
+                    flags=re.IGNORECASE
+                )
+
+            logger.info("query_enriched_with_context",
+                       original=user_input[:50],
+                       enriched=enriched_query[:50],
+                       context_entity=context_entity)
+
+            return enriched_query
+
+        # No context found, return original
+        logger.debug("no_context_found_for_reference", query=user_input[:50])
+        return user_input
