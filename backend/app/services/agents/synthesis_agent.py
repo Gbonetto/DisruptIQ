@@ -140,8 +140,11 @@ class SynthesisAgent:
             # Step 7: Format final response with IEEE citations, CoT, and professional markdown
             formatted_text = self._format_response_with_sources(response_text, sources, enable_cot=True)
 
-            # Step 7: Compute overall confidence
+            # Step 8: Compute overall confidence
             overall_confidence = self._compute_overall_confidence(sources, sentences)
+
+            # Step 9: Validate grounding (detect uncited numbers/dates)
+            grounding_warnings = self._validate_grounding(response_text)
 
             logger.info(
                 "synthesis_completed",
@@ -149,10 +152,11 @@ class SynthesisAgent:
                 num_sources=len(sources),
                 num_sentences=len(sentences),
                 confidence=overall_confidence,
-                has_contradictions=contradictions is not None
+                has_contradictions=contradictions is not None,
+                grounding_issues=len(grounding_warnings)
             )
 
-            return SynthesizedResponse(
+            response = SynthesizedResponse(
                 text=formatted_text,
                 sources=sources,
                 sentences=sentences,
@@ -160,6 +164,12 @@ class SynthesisAgent:
                 contradiction_note=contradictions,
                 overall_confidence=overall_confidence
             )
+
+            # Add grounding warnings if any
+            if grounding_warnings:
+                response.add_warnings(grounding_warnings)
+
+            return response
 
         except Exception as e:
             logger.error("synthesis_failed", error=str(e), exc_info=True)
@@ -255,30 +265,36 @@ CONSIGNES DE RÉPONSE :
    - N'invente JAMAIS d'information non présente dans les sources
    - Reste professionnel, clair, et structuré
    - N'ajoute AUCUNE décoration type "Sources :" ou liens - c'est géré automatiquement
+
+5. **GROUNDING STRICT (montants, dates, clauses)** :
+   - Tout MONTANT doit venir d'une source et être cité : "Le devis est de **1 250 €**[2]"
+   - Toute DATE doit venir d'une source et être citée : "signé le **15/03/2024**[1]"
+   - Toute CLAUSE ou ARTICLE doit être citée : "l'article 25 de la loi de 1965[3]"
+   - Si le montant/date/clause n'est PAS dans les sources : "montant non précisé dans les documents"
+   - INTERDIT : arrondir, estimer, ou inventer des chiffres
+   - Exemple CORRECT : "Le contrat prévoit un tarif de **85 €/heure**[1]"
+   - Exemple INTERDIT : "Le tarif est d'environ 80-90 €" (sans source)
+
+6. **Si information non trouvée** :
+   - Dis clairement : "Cette information n'apparaît pas dans les documents fournis"
+   - Ne pas "deviner" ou "supposer" - mieux vaut être honnête
 """
 
-        # Procedural-specific rules
+        # Procedural-specific rules (for step-by-step requests)
         procedural_rules = """
-7. Structure la réponse en étapes numérotées claires
-8. Utilise des tirets (-) pour les sous-actions
-9. Chaque étape doit être citée
-10. Formate avec markdown (** pour les titres d'étapes)
+**Pour les procédures/étapes :**
+- Structure en étapes numérotées claires
+- Tirets (-) pour les sous-actions
+- Chaque étape citée avec [N]
 """
 
-        # Informational-specific rules
+        # Informational-specific rules (default)
         informational_rules = """
-7. Réponds de manière naturelle et directe
-8. Synthétise les informations de plusieurs sources si pertinent
-9. Pour les tableaux : génère UNIQUEMENT le tableau, sans texte explicatif avant/après
-10. Reste concis, sobre et élégant
-11. **Formatage Markdown obligatoire** :
-    - Utilise **gras** pour les valeurs clés (montants, dates, noms importants)
-    - Structure avec des listes à puces si plusieurs éléments
-    - Pour les résumés de documents, utilise ce format :
-      - **Prestataire :** Nom[N]
-      - **Montant :** X,XX €[N]
-      - **Date :** JJ/MM/AAAA[N]
-    - Ajoute une phrase de conclusion si pertinent
+**Formatage :**
+- Réponse directe et naturelle
+- **Gras** pour valeurs clés (montants, dates)
+- Listes à puces si plusieurs éléments
+- Format structuré : **Prestataire :** Nom[N] | **Montant :** X €[N] | **Date :** JJ/MM/AAAA[N]
 """
 
         # Context section
@@ -680,6 +696,47 @@ Si aucune donnée tabulaire n'est identifiable, réponds : {{"has_table": false}
 
         return overall
 
+    def _validate_grounding(self, text: str) -> List[str]:
+        """
+        Validate grounding: detect numbers/dates without citations.
+
+        Returns list of warnings for monitoring.
+        This helps identify when the LLM may have invented data.
+        """
+        warnings = []
+
+        # Remove content inside citations to avoid false positives
+        # e.g., "1 250 €[1]" should NOT trigger warning
+        text_for_check = re.sub(r'\[[\d,]+\]', '', text)
+
+        # Patterns that should have citations
+        patterns = {
+            "montant": r'\b\d[\d\s]*[.,]?\d*\s*[€$]\b',  # 1 250 €, 80€
+            "pourcentage": r'\b\d+[.,]?\d*\s*%\b',  # 25%, 3.5%
+            "date_complete": r'\b\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}\b',  # 15/03/2024
+            "annee": r'\b(19|20)\d{2}\b',  # 2024, 1965
+            "article_loi": r'\b[aA]rticle\s+\d+',  # Article 25
+        }
+
+        for pattern_name, pattern in patterns.items():
+            matches = re.findall(pattern, text_for_check)
+            if matches:
+                # Check if these appear in uncited context
+                for match in matches[:3]:  # Limit to first 3 to avoid spam
+                    # Look for this value in text without citation nearby
+                    escaped = re.escape(str(match))
+                    # Check if NOT followed by citation within 10 chars
+                    uncited = re.search(escaped + r'(?![^\[]*\])', text)
+                    if uncited:
+                        warnings.append(f"grounding_warning: {pattern_name}='{match}' may be uncited")
+
+        if warnings:
+            logger.warning("grounding_validation_issues",
+                          count=len(warnings),
+                          issues=warnings[:5])
+
+        return warnings
+
     def _generate_empty_response(self, query: str) -> SynthesizedResponse:
         """Generate response when no sources found (legacy sync version)"""
         return SynthesizedResponse(
@@ -1019,6 +1076,13 @@ NE PAS dire "pas d'information" si des données SQL existent.
    - Si AUCUNE source ne contient d'info : dis-le clairement
    - Si SQL contient des données : les utiliser OBLIGATOIREMENT
    - N'invente JAMAIS
+
+7. **GROUNDING STRICT (montants, dates, clauses)** :
+   - Tout MONTANT doit être cité : "**1 250 €**[2]" (pas d'arrondi, pas d'estimation)
+   - Toute DATE doit être citée : "**15/03/2024**[1]"
+   - Toute CLAUSE/ARTICLE doit être citée : "article 25[3]"
+   - Si non trouvé : "montant/date non précisé dans les documents"
+   - INTERDIT : "environ", "approximativement", "autour de" sans source
 
 # QUESTION
 {query}

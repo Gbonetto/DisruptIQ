@@ -99,14 +99,15 @@ class EmergencyChecklistAgent:
         ]
 
         # =================================================================
-        # GROUPE 2: Demandes d'AIDE explicites
+        # GROUPE 2: Demandes d'AIDE explicites (action requise)
+        # Note: "procédure" retiré car trop ambigu ("quelle est la procédure" = question doc)
         # =================================================================
         help_keywords = [
             "que faire", "quoi faire", "que dois-je faire", "comment faire",
             "comment gérer", "comment réagir", "comment procéder",
             "aide", "help", "aidez", "au secours",
-            "procédure", "checklist", "marche à suivre",
-            "étapes à suivre", "conseils", "recommandations"
+            "checklist", "marche à suivre",  # "procédure" retiré
+            "étapes à suivre", "donne-moi les étapes",
         ]
 
         # =================================================================
@@ -123,11 +124,17 @@ class EmergencyChecklistAgent:
 
         # =================================================================
         # GROUPE 4: Questions EXCLUSIVES (ne pas déclencher)
+        # Ces patterns indiquent une question d'information, pas une urgence en cours
         # =================================================================
         question_exclusions = [
+            # Stats/historique
             "combien", "liste", "historique", "statistique",
             "cette année", "ce mois", "dernier", "dernière",
             "recap", "résumé", "bilan",
+            # Questions info/documentation
+            "quelle est la procédure", "que dit le règlement", "que dit le contrat",
+            "où est écrit", "où trouver", "quel article",
+            "dans le règlement", "dans le contrat", "dans les documents",
         ]
 
         # =================================================================
