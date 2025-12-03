@@ -38,8 +38,33 @@ import structlog
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import re
+import json
 
 from app.services.llm_service import LLMService
+
+
+def sanitize_json_string(text: str) -> str:
+    """
+    Sanitize a string for safe JSON parsing.
+    Removes control characters that cause json.loads to fail.
+    """
+    # Remove markdown code blocks
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned)
+        cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+
+    # Remove control characters except \n, \r, \t (which we'll escape)
+    # Control chars are 0x00-0x1F except 0x09 (tab), 0x0A (newline), 0x0D (carriage return)
+    result = []
+    for char in cleaned:
+        code = ord(char)
+        if code < 32 and code not in (9, 10, 13):
+            # Skip invalid control characters
+            continue
+        result.append(char)
+
+    return ''.join(result)
 from app.services.legal_reference_service import get_legal_reference_service
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
 from app.services.agents.world_class_mixin import WorldClassRAGMixin
@@ -280,16 +305,8 @@ Réponds UNIQUEMENT avec le JSON, rien d'autre."""
                 max_tokens=1500
             )
 
-            # Parse JSON
-            import json
-            import re
-
-            # Clean response
-            cleaned = response.strip()
-            if cleaned.startswith("```"):
-                cleaned = re.sub(r'^```(?:json)?\s*\n', '', cleaned)
-                cleaned = re.sub(r'\n```\s*$', '', cleaned)
-
+            # Parse JSON with sanitization
+            cleaned = sanitize_json_string(response)
             facts = json.loads(cleaned)
 
             logger.info("factual_extraction_completed",
@@ -702,15 +719,11 @@ Réponds en JSON:
                 max_tokens=800
             )
 
-            # Parse JSON response
-            import json
+            # Parse JSON response with sanitization
             try:
-                cleaned = response.strip()
-                if cleaned.startswith("```"):
-                    cleaned = re.sub(r'^```(?:json)?\s*\n', '', cleaned)
-                    cleaned = re.sub(r'\n```\s*$', '', cleaned)
+                cleaned = sanitize_json_string(response)
                 return json.loads(cleaned)
-            except:
+            except json.JSONDecodeError:
                 return {"answer": response, "confidence": 0.5}
 
         except Exception as e:

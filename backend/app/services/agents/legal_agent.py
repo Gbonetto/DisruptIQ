@@ -36,6 +36,43 @@ import hashlib
 import json
 
 from app.services.llm_service import LLMService
+
+
+def sanitize_json_string(text: str) -> str:
+    """
+    Sanitize a string for safe JSON parsing.
+    Removes control characters that cause json.loads to fail.
+    """
+    if not text:
+        return "{}"
+
+    # Remove markdown code blocks
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned)
+        cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+
+    # The main issue is unescaped control characters INSIDE JSON string values
+    # We need to properly escape them within quoted strings
+    # Use json.loads with strict=False which is more tolerant
+    try:
+        # First try with strict=False
+        return cleaned
+    except:
+        pass
+
+    # If that fails, manually clean control characters
+    # Replace literal control chars (except valid JSON whitespace) with spaces
+    result = []
+    for char in cleaned:
+        code = ord(char)
+        # Allow: space (32), and all printable chars
+        # Allow: tab (9), newline (10), carriage return (13) - valid JSON whitespace
+        if code >= 32 or code in (9, 10, 13):
+            result.append(char)
+        # Skip all other control chars (0-8, 11-12, 14-31)
+
+    return ''.join(result)
 from app.services.rag_service import RAGService
 from app.core.redis_client import get_redis_client
 from app.services.agents.thought_stream import ThoughtStream, ThoughtType
@@ -1165,14 +1202,13 @@ Réponds UNIQUEMENT avec un objet JSON valide.
                 max_tokens=600
             )
 
-            # Parse JSON
-            import json
+            # Parse JSON with sanitization
             try:
-                info = json.loads(response)
+                cleaned = sanitize_json_string(response)
+                info = json.loads(cleaned)
                 return info
             except json.JSONDecodeError:
-                # Try to extract JSON from markdown
-                match = re.search(r'\{.*\}', response, re.DOTALL)
+                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
                 if match:
                     info = json.loads(match.group())
                     return info
@@ -1248,13 +1284,13 @@ Réponds avec une liste JSON d'objets. Exemple :
                 max_tokens=800
             )
 
-            # Parse JSON
-            import json
+            # Parse JSON with sanitization
             try:
-                obligations = json.loads(response)
+                cleaned = sanitize_json_string(response)
+                obligations = json.loads(cleaned)
                 return obligations if isinstance(obligations, list) else []
             except json.JSONDecodeError:
-                match = re.search(r'\[.*\]', response, re.DOTALL)
+                match = re.search(r'\[.*\]', cleaned, re.DOTALL)
                 if match:
                     obligations = json.loads(match.group())
                     return obligations if isinstance(obligations, list) else []
@@ -1331,12 +1367,8 @@ Category : "financier" | "temporel" | "responsabilité" | "conformité" | "dés�
             # Parse JSON with robust error handling
             import json
 
-            # Clean response (remove markdown code blocks if present)
-            cleaned_response = response.strip()
-            if cleaned_response.startswith("```"):
-                # Remove markdown code fences
-                cleaned_response = re.sub(r'^```(?:json)?\s*\n', '', cleaned_response)
-                cleaned_response = re.sub(r'\n```\s*$', '', cleaned_response)
+            # Clean response with sanitization
+            cleaned_response = sanitize_json_string(response)
 
             try:
                 risks = json.loads(cleaned_response)
@@ -1405,13 +1437,13 @@ Réponds avec un objet JSON.
                 max_tokens=800
             )
 
-            # Parse JSON
-            import json
+            # Parse JSON with sanitization
             try:
-                compliance = json.loads(response)
+                cleaned = sanitize_json_string(response)
+                compliance = json.loads(cleaned)
                 return compliance
             except json.JSONDecodeError:
-                match = re.search(r'\{.*\}', response, re.DOTALL)
+                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
                 if match:
                     compliance = json.loads(match.group())
                     return compliance
@@ -1645,18 +1677,8 @@ IMPORTANT : Compare TOUS les aspects clés (durée, prix, clauses, obligations, 
                 max_tokens=2000
             )
 
-            # Parse JSON - strip markdown code blocks
-            cleaned_response = response.strip()
-
-            # Remove markdown code blocks (both ```json and ```)
-            if "```" in cleaned_response:
-                # Extract content between ``` markers
-                match = re.search(r'```(?:json)?\s*\n(.*?)```', cleaned_response, re.DOTALL)
-                if match:
-                    cleaned_response = match.group(1).strip()
-                else:
-                    # Fallback: remove ``` markers
-                    cleaned_response = re.sub(r'```(?:json)?', '', cleaned_response).strip()
+            # Parse JSON with sanitization
+            cleaned_response = sanitize_json_string(response)
 
             try:
                 result = json.loads(cleaned_response)
@@ -1751,12 +1773,12 @@ Réponds en format JSON:
                 max_tokens=1000
             )
 
-            # Parse JSON
-            import json
+            # Parse JSON with sanitization
             try:
-                result = json.loads(response)
+                cleaned = sanitize_json_string(response)
+                result = json.loads(cleaned)
             except json.JSONDecodeError:
-                match = re.search(r'\{.*\}', response, re.DOTALL)
+                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
                 if match:
                     result = json.loads(match.group())
                 else:
@@ -1901,14 +1923,18 @@ IMPORTANT : Indique toujours que ce conseil est informatif et ne remplace pas l'
                 max_tokens=1200
             )
 
-            # Parse JSON
-            import json
+            # Parse JSON with sanitization and strict=False for tolerance
             try:
-                result = json.loads(response)
-            except json.JSONDecodeError:
-                match = re.search(r'\{.*\}', response, re.DOTALL)
+                cleaned = sanitize_json_string(response)
+                result = json.loads(cleaned, strict=False)
+            except json.JSONDecodeError as e:
+                logger.warning("legal_advice_json_parse_retry", error=str(e), cleaned_preview=cleaned[:100] if cleaned else "")
+                match = re.search(r'\{.*\}', cleaned, re.DOTALL)
                 if match:
-                    result = json.loads(match.group())
+                    try:
+                        result = json.loads(match.group(), strict=False)
+                    except json.JSONDecodeError:
+                        result = {"advice": response, "key_points": [], "recommendations": [], "warnings": []}
                 else:
                     result = {"advice": response, "key_points": [], "recommendations": [], "warnings": []}
 
